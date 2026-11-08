@@ -968,7 +968,11 @@ class DatabaseSaveTests(unittest.TestCase):
                 "SELECT id FROM download_sources ORDER BY id").fetchall()
             conn.execute(
                 "UPDATE download_sources SET last_failed_at = ?, "
-                "failure_class = 'no_unwrapper'", (time.time(),))
+                # Session 107: stamp the current resolver version, as
+                # _record_resolve_failure would — a NULL version is stale
+                # and would be re-probed instead of skipped.
+                "failure_class = 'no_unwrapper', failure_resolver_v = ?",
+                (time.time(), fast_fetch.RESOLVER_VERSION))
         self.assertEqual(len(rows), 2)
         failing = {"ok": False, "kind": None, "mime": None, "size": None,
                    "resumable": False, "renditions": [], "failure": "probe_error"}
@@ -1018,8 +1022,12 @@ class DatabaseSaveTests(unittest.TestCase):
                 "SELECT id FROM download_sources ORDER BY id").fetchall()
             conn.execute(
                 "UPDATE download_sources SET last_failed_at = ?, "
-                "failure_class = 'no_unwrapper' WHERE id = ?",
-                (time.time(), rows[1]["id"]))
+                # Session 107: stamp the current resolver version, as
+                # _record_resolve_failure would — a NULL version is stale
+                # and would be re-probed instead of skipped.
+                "failure_class = 'no_unwrapper', failure_resolver_v = ? "
+                "WHERE id = ?",
+                (time.time(), fast_fetch.RESOLVER_VERSION, rows[1]["id"]))
         self.assertEqual(len(rows), 3)
         failing = {"ok": False, "kind": None, "mime": None, "size": None,
                    "resumable": False, "renditions": [], "failure": "probe_error"}
@@ -1240,6 +1248,165 @@ class DatabaseSaveTests(unittest.TestCase):
                 "WHERE id = ?", (source["id"],)).fetchone()
         self.assertIsNotNone(row["last_failed_at"], row)
         self.assertEqual(row["failure_class"], "unwrap_failed", row)
+
+    def test_stage2_probe_retries_once_on_transport_error(self):
+        """Session 107 (item 2): a transport failure (HTTP 0) is retried
+        once inside _stage2_probe — the network blipped, not the link —
+        and a second-try success is served instead of failing."""
+        transport = {"ok": False, "kind": None, "mime": None, "size": None,
+                     "resumable": False, "renditions": [],
+                     "failure": "transport"}
+        success = {"ok": True, "kind": "file", "mime": "video/mp4",
+                   "size": 1234, "resumable": True, "renditions": [],
+                   "failure": None}
+        # The setUp stub replaces _stage2_probe; stop it so this test
+        # calls the real one, and restart it before tearDown stops it.
+        self.stage2_probe_patch.stop()
+        try:
+            with patch.object(current_hosts, "probe_media",
+                              side_effect=[transport, success]) as probe:
+                verdict = fast_fetch._stage2_probe(
+                    "https://cdn.example/site_a/retry-once.mp4")
+        finally:
+            self.stage2_probe_patch.start()
+        self.assertTrue(verdict.get("ok"), verdict)
+        self.assertEqual(verdict.get("kind"), "file", verdict)
+        self.assertEqual(probe.call_count, 2, probe.call_args_list)
+
+    def test_stage1_probe_retries_once_on_transport_error(self):
+        """Session 107 (item 2): the Stage-1 cached probe retries once on
+        a transport error, and a second-try success is served with the
+        measured mime/size/resumable."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            # A pixeldrain API address: classified "pixeldrain" by
+            # classify_backend AND not a bridge URL (is_bridge_url
+            # exempts /api/file/), so the Stage-1 cached probe runs.
+            "final_url": "https://pixeldrain.com/api/file/stage1-retry.mp4",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        transport = {"ok": False, "kind": None, "mime": None, "size": None,
+                     "resumable": False, "renditions": [],
+                     "failure": "transport"}
+        success = {"ok": True, "kind": "file", "mime": "video/mp4",
+                   "size": 1234, "resumable": True, "renditions": [],
+                   "failure": None}
+        with patch.object(current_hosts, "classify_backend",
+                          return_value="pixeldrain"), \
+             patch.object(current_hosts, "probe_media",
+                          side_effect=[transport, success]) as probe:
+            res = fast_fetch.resolve_live_source(source["id"])
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res["cached"], res)
+        self.assertEqual(probe.call_count, 2, probe.call_args_list)
+
+    def test_transport_error_twice_writes_no_negative_cache_row(self):
+        """Session 107 (item 2): a transport failure on both tries writes
+        NO negative-cache row — the copy must not spend 12h refused for
+        a failure that says nothing about it. A real probe failure
+        (probe_error) still records, as before."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            "final_url": "https://cdn.example/site_a/no-poison.mp4",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+        transport = {"ok": False, "kind": None, "mime": None, "size": None,
+                     "resumable": False, "renditions": [],
+                     "failure": "transport"}
+        probe = Mock(return_value=transport)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(source["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        self.assertEqual(probe.call_count, 1, probe.call_args_list)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at, failure_class, failure_resolver_v "
+                "FROM download_sources WHERE id = ?",
+                (source["id"],)).fetchone()
+        self.assertIsNone(row["last_failed_at"], row)
+        self.assertIsNone(row["failure_class"], row)
+        self.assertIsNone(row["failure_resolver_v"], row)
+
+    def test_stale_resolver_version_row_is_reprobed(self):
+        """Session 107 (item 5): a failure recorded by an older resolver
+        is stale — a new unwrapper may have landed since — so the next
+        press clears it and re-probes the copy once instead of refusing
+        on the old verdict."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            "final_url": "https://cdn.example/site_a/stale-version.mp4",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+            conn.execute(
+                "UPDATE download_sources SET last_failed_at = ?, "
+                "failure_class = 'no_unwrapper', failure_resolver_v = ? "
+                "WHERE id = ?",
+                (time.time(), fast_fetch.RESOLVER_VERSION - 1,
+                 source["id"]))
+        # No probe patch here: the setUp stub passes, so the copy serves.
+        res = fast_fetch.resolve_live_source(source["id"])
+        self.assertTrue(res["success"], res)
+        self.assertTrue(res["cached"], res)
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT last_failed_at, failure_class FROM download_sources "
+                "WHERE id = ?", (source["id"],)).fetchone()
+        self.assertIsNone(row["last_failed_at"], row)
+        self.assertIsNone(row["failure_class"], row)
+
+    def test_current_resolver_version_row_still_refuses(self):
+        """Session 107 (item 5): a failure recorded by the CURRENT
+        resolver still refuses without re-probing — only an older
+        version is stale."""
+        media_data = self.media("site_a", "https://site-a.example/example-film/")
+        media_data["releases"][0]["sources"] = [{
+            "source_name": "Example CDN",
+            "service": "test-service",
+            "resource_id": "site_a-id",
+            "source_url": "https://site_a.example/source",
+            "final_url": "https://cdn.example/site_a/current-version.mp4",
+            "is_temporary": 0,
+        }]
+        fast_fetch.save_scraped_data(media_data)
+        with fast_fetch.get_db() as conn:
+            source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
+            conn.execute(
+                "UPDATE download_sources SET last_failed_at = ?, "
+                "failure_class = 'no_unwrapper', failure_resolver_v = ? "
+                "WHERE id = ?",
+                (time.time(), fast_fetch.RESOLVER_VERSION, source["id"]))
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        probe = Mock(return_value=failing)
+        with patch.object(fast_fetch, "_stage2_probe", probe):
+            res = fast_fetch.resolve_live_source(source["id"])
+        self.assertFalse(res["success"], res)
+        self.assertEqual(res["code"], "no_playable_source", res)
+        self.assertEqual(res["reason"], "stale_probe_failed", res)
+        self.assertEqual(probe.call_count, 0, probe.call_args_list)
 
     def test_failover_tries_direct_copies_first(self):
         """The Stage-2 sibling failover tries direct copies before bridge

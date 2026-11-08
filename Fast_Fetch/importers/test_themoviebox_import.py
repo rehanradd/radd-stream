@@ -273,18 +273,40 @@ class ParsePageTests(unittest.TestCase):
         self.assertEqual(mb._image_list([{"url": "https://x/1.jpg"}, "junk",
                                         {"nope": 1}]), ["https://x/1.jpg"])
 
-    def test_tiers_are_recorded_as_releases_with_no_sources(self):
+    def test_tiers_are_recorded_as_releases_with_detail_url_sources(self):
         # Policy change measured 2026-10-30: the vault reported "0 releases" for
-        # works whose pages list their tiers. A declared tier is a release with
-        # an empty source list — never a link, and never silence.
+        # works whose pages list their tiers. A declared tier is a release.
+        # Session 107: each tier is sourced at the detail page itself — the
+        # URL the Session 104b unwrapper turns into a signed MP4 — never a
+        # fabricated media URL, and never silence.
         record = mb.parse_page(
             nuxt_script(devalue(MATCHBOX_WITH_RESOURCE)), DETAIL_URL)[0]
         self.assertEqual(record["raw_meta"]["available_resolutions"],
                          [1080, 480, 360])
         self.assertEqual([rel["quality"] for rel in record["releases"]],
                          ["360p", "480p", "1080p"])
-        self.assertTrue(all(rel["sources"] == [] for rel in record["releases"]),
-                        "a tier with no published URL must not gain one")
+        for rel in record["releases"]:
+            self.assertEqual(len(rel["sources"]), 1, rel)
+            src = rel["sources"][0]
+            self.assertEqual(src["source_url"], DETAIL_URL, src)
+            self.assertEqual(src["service"], "themoviebox", src)
+            self.assertEqual(src["playback_type"], "url", src)
+
+    def test_series_season_release_carries_se_and_ep_one(self):
+        """Session 107: the play API answers se=1&ep=0 with zero streams
+        (probed live 2026-11-08 on "Sistas") — a series season release
+        must store ?se=<season>&ep=1, or it can never play. Movies take
+        the bare detail URL (see the tiers test above)."""
+        releases = mb._declared_releases(
+            [{"resolution": 1080, "season": 1, "episodes": 8,
+              "source_host": "fzmovies.cms"}],
+            "Sistas", None, detail_url=DETAIL_URL)
+        self.assertEqual(len(releases), 1)
+        self.assertEqual(releases[0]["season"], 1)
+        self.assertEqual(releases[0]["label"], "Sistas S01 1080p")
+        self.assertEqual(len(releases[0]["sources"]), 1)
+        self.assertEqual(releases[0]["sources"][0]["source_url"],
+                         DETAIL_URL + "?se=1&ep=1")
 
     def test_a_page_without_the_nuxt_block_yields_nothing(self):
         self.assertEqual(mb.parse_page("<html><body>no payload</body></html>",
@@ -407,7 +429,10 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual(totals["queued"], 0)
             self.assertEqual(api.call_count, 1, "one failure per type, no retry storm")
 
-    def test_harvest_writes_metadata_only_rows(self):
+    def test_harvest_writes_rows_with_detail_url_sources(self):
+        # Session 107: each declared tier stages one source naming the
+        # detail page — the unwrapper's input — so the row can resolve.
+        # No trailer may reach the sources table.
         with tempfile.TemporaryDirectory() as tmp:
             db = Path(tmp) / "v.db"
             with silenced(), mock.patch.object(
@@ -421,10 +446,14 @@ class DiscoveryTests(unittest.TestCase):
             conn.row_factory = sqlite3.Row
             post = conn.execute("SELECT * FROM posts").fetchone()
             releases = conn.execute("SELECT COUNT(*) FROM releases").fetchone()[0]
-            sources = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+            sources = conn.execute(
+                "SELECT source_url, service, playback_type FROM sources").fetchall()
             conn.close()
             self.assertEqual(releases, 3, "one row per declared rendition")
-            self.assertEqual(sources, 0, "no trailer may reach the sources table")
+            self.assertEqual(len(sources), 3, "one detail-URL source per tier")
+            self.assertTrue(
+                all(s["source_url"] == DETAIL_URL and s["service"] == "themoviebox"
+                    and s["playback_type"] == "url" for s in sources), sources)
             self.assertEqual(post["title"], "Matchbox the Movie")
             self.assertEqual(post["media_type"], "movie")
             self.assertIn("trailer_url", post["raw_meta"])
@@ -530,24 +559,31 @@ class CrawlTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
 
     def test_metadata_only_pages_are_crawled_not_parked(self):
+        # Session 107: the declared tiers now carry the detail URL as
+        # their source, so the row counts as with-media, not
+        # metadata-only — but it is still crawled (scraped=1, no error),
+        # never parked.
         html = nuxt_script(devalue(MATCHBOX_WITH_RESOURCE))
         with silenced(), mock.patch.object(mb, "http_get",
                                           return_value=(200, DETAIL_URL, html)), \
                 mock.patch.object(mb, "memory_ok", return_value=(True, "ok")), \
                 mock.patch.object(mb.time, "sleep", lambda *_: None):
             totals = mb.crawl_pending(db_path=self.db, workers=1, delay=0)
-        self.assertEqual(totals["metadata_only"], 1, totals)
+        self.assertEqual(totals["with_media"], 1, totals)
+        self.assertEqual(totals["metadata_only"], 0, totals)
         self.assertEqual(totals["failed_rows"], 0)
         conn = sqlite3.connect(self.db)
         state = conn.execute("SELECT scraped, error_count FROM sitemap_cache"
                              " WHERE loc = ?", (DETAIL_URL,)).fetchone()
         posts = conn.execute("SELECT title, is_18_plus FROM posts").fetchall()
-        sources = conn.execute("SELECT COUNT(*) FROM sources").fetchone()[0]
+        sources = conn.execute(
+            "SELECT source_url FROM sources").fetchall()
         conn.close()
         self.assertEqual(state[0], 1, "crawled, so a re-run stops refetching it")
         self.assertEqual(state[1], 0)
         self.assertEqual(posts, [("Matchbox the Movie", 0)])
-        self.assertEqual(sources, 0)
+        self.assertEqual(len(sources), 3)
+        self.assertTrue(all(s[0] == DETAIL_URL for s in sources), sources)
 
     def test_a_page_that_names_no_work_is_an_error_and_is_counted(self):
         with silenced(), mock.patch.object(mb, "http_get",

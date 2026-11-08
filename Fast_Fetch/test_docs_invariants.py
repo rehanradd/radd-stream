@@ -588,7 +588,7 @@ class WorkflowSuiteCoverageTests(unittest.TestCase):
         "test_moviecok_import.py", "test_moviesmela_import.py", "test_moviezguru.py",
         "test_mp4moviez_import.py", "test_multimovies_import.py", "test_pagalmovies_import.py",
         "test_rareanimes_import.py", "test_rogmovies_import.py",
-        "test_ssrmovies_import.py", "test_stream_resolvers.py", "test_themoviebox_import.py",
+        "test_ssrmovies_import.py", "test_stream_resolvers.py",
         "test_toonworld4all.py", "test_vegamovies_import.py", "test_world4ufree_import.py",
     })
 

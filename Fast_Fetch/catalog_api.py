@@ -1789,6 +1789,51 @@ def _merge_print(coverage_entry: dict, print_view: dict) -> dict:
     return out
 
 
+def translate_legacy_release_id(conn, release_id):
+    """Legacy `releases.id` -> `cat_releases.id` via cat_id_map (read-only).
+
+    The app persists ledger release ids (v1 detail hands them out), but the
+    v2 play path speaks cat ids. Without this, a legacy id presses whatever
+    cat print happens to hold that number today — legacy 500000 is
+    "Arthur's Whisky" (post 55458) while cat release 500000 is
+    "Last Night in Soho". The projector writes the pair as kind
+    'ledger_release' at each rebuild (catalog_v2._project_pages); this
+    lookup reads the newest rev's row. It falls back to the id as given
+    when there is no row (an unchanged id needs none — identity), when
+    the map table is absent (a pre-rev-4 catalog), or when the target no
+    longer exists (a stale row must not 404 a valid id). It never raises:
+    a translation failure degrades to the old behaviour, it never breaks
+    a play press outright. Map-first has one known collision: a genuine
+    cat id that also exists as a legacy id would be redirected — the app
+    (the only live v2-play caller) sends legacy ids, so map-first is
+    correct for live traffic; a future id-universe parameter is the
+    clean fix if a cat-id caller ever arrives.
+    """
+    try:
+        target = int(release_id)
+    except (TypeError, ValueError):
+        return release_id
+    try:
+        row = conn.execute(
+            "SELECT new_id FROM cat_id_map WHERE kind = 'ledger_release' "
+            "AND old_id = ? ORDER BY rev DESC LIMIT 1",
+            (target,)).fetchone()
+    except Exception:
+        return target
+    if row is None:
+        return target
+    try:
+        new_id = int(row[0])
+    except (TypeError, ValueError):
+        return target
+    try:
+        exists = conn.execute(
+            "SELECT 1 FROM cat_releases WHERE id = ?", (new_id,)).fetchone()
+    except Exception:
+        return target
+    return new_id if exists else target
+
+
 @public_edge
 def release_detail(conn, *, release_id, include_adult=False) -> dict:
     """One print: descriptor, ranked links, coverage."""
@@ -1998,6 +2043,11 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False) -> di
     """
     _require_row_factory(conn)
     _register_udfs(conn)
+    # Session 107: the app sends legacy `releases.id`; the projection
+    # speaks `cat_releases.id`. Translate once here, at the public entry
+    # point — release_detail itself stays cat-native, so internal callers
+    # that already hold a cat id are never redirected.
+    release_id = translate_legacy_release_id(conn, release_id)
     detail = release_detail(conn, release_id=release_id, include_adult=include_adult)
     if not detail.get("ok"):
         return detail

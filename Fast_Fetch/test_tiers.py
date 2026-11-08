@@ -181,6 +181,32 @@ class PublicShapeTests(unittest.TestCase):
             view = viewer.link_view(link(playback_type=playback_type), "http://our.box")
             self.assertEqual(view["kind"], kind, playback_type)
 
+    def test_an_iframe_our_server_can_unwrap_is_resolve_not_external(self):
+        # Session 107, Phase D item 6: an iframe with a server-side unwrapper
+        # (catalog_v2._SERVER_RESOLVABLE_SERVICES) resolves to a real
+        # playlist or file, so the client must resolve it first — and the
+        # copy becomes playable, not external. The service name never
+        # reaches the response; only the kind changes.
+        for service in ("vidrift", "vidbolt", "filmu", "iqsmart", "cineverse",
+                        "streamtape", "stream", "streamwish", "mixdrop", "voe",
+                        "vidhide", "1xplayer", "uploadflix"):
+            view = viewer.link_view(link(playback_type="iframe", service=service),
+                                    "http://our.box")
+            self.assertEqual(view["kind"], "resolve", service)
+            self.assertTrue(view["playable"], service)
+            # The service name itself never reaches the response: no
+            # "service" key, and no provenance needle in the payload.
+            self.assertNotIn("service", view, service)
+
+    def test_an_iframe_with_no_unwrapper_stays_external(self):
+        # vidout's playlist host does not resolve on VM DNS (item 7);
+        # vidsrc has no server-side unwrapper at all.
+        for service in ("vidout", "vidsrc"):
+            view = viewer.link_view(link(playback_type="iframe", service=service),
+                                    "http://our.box")
+            self.assertEqual(view["kind"], "external", service)
+            self.assertFalse(view["playable"], service)
+
     def test_the_word_embed_never_reaches_a_response(self):
         # "embed" is a hoster name in this ledger (`service = 'embed'`), so a
         # sentinel scan treats it as provenance and our own vocabulary must not

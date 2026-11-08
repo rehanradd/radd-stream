@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history** 106 session files (104 dated + 2 undated) cover
+1. **This file is a pointer, not a history** 107 session files (105 dated + 2 undated) cover
    2026-10-23 → 2026-11-08,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -74,13 +74,13 @@
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
 The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete index.
+- [Session 2026-11-08 — Muse [MUSE-SESSION107-DATA-TRUTH]: Phase D data-truth](checkpoints/20261108-muse-session107-data-truth.md)
 - [Session 2026-11-06 — crown `[CROWN-NIGHT-CHAIN]`: five trunk commits, the live-tree gap, what was rejected](checkpoints/20261106-crown-night-chain-five-trunk-commits-one-live-tree-gap.md)
 - [Session 2026-11-06 crown `[Q75-LAND]`: 3 producer chars, red-first 18 tests, the `_sN` merge loss filed](checkpoints/20261106-crown-q75-three-producer-fixes-landed-and-the-s-n-key-loss-filed.md)
 - [Session 2026-11-02 — q9 supervisor lane `[Q9-PLAY-STALE]`: no stale 302 — the JIT honours all five `tiers.UNPLAYABLE_STATES` words](checkpoints/20261102-q9-play-stale-unplayable-words.md)
 - [Session 2026-11-02 — q9 supervisor lane `[Q9-AUDIT-SIGNING-SECRET]`: audit critical 4 — `stream_secret`/`signing_secret` fail closed; the constant dev fallback is retired, first install generates and persists a random key, no secret ever logged](checkpoints/20261102-q9-audit-signing-secret-fail-closed-retires-the-constant-dev-fallback.md)
 - [Session 2026-11-02 — q6 supervisor lane `[Q6-AUDIT-HLS]`: audit critical 1 — a manifest is never a file; protocol recorded from the probe, dash branch added, client checks content-type](checkpoints/20261102-q6-audit-hls-a-manifest-is-never-a-file.md)
 - [Session 2026-11-02 — q8 supervisor lane `[Q8-AUDIT-DEADLINKS]`: audit critical 10 — dead and expired links can no longer win a band or play](checkpoints/20261102-q8-audit-deadlinks-dead-and-expired-links-can-no-longer-win.md)
-- [Session 2026-11-01 — q6 supervisor lane `[Q6-AUDIT-TID]`: audit critical 6 — one TID, one live claim, across every account](checkpoints/20261101-q6-audit-tid-one-tid-one-live-claim-across-every-account.md)
 
 - [Session 2026-10-30 — q3 `[Q3-OPS-READS]`: JOB A — the operator's own reads are bounded, and the boundary is named in code](checkpoints/20261030-q3-lane-launch-readiness-job-a-the-operators-own-rea.md)
 - [Session 2026-10-30 (q3 JOB B) `[Q3-LADDER]`: the pass ladder is data, a refusal writes nothing, and a flagged row publishes no playable handle](checkpoints/20261030-09xx-q3-lane-job-b-the-pass-ladder-is-data-and-a.md) — 191 lines

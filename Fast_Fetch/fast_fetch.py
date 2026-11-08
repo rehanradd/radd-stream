@@ -1284,6 +1284,7 @@ def _init_db(db_path: Path | None = None) -> None:
             last_checked_at TIMESTAMP DEFAULT NULL,
             last_failed_at REAL DEFAULT NULL,
             failure_class TEXT DEFAULT NULL,
+            failure_resolver_v INTEGER DEFAULT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (release_id) REFERENCES releases(id) ON DELETE CASCADE
@@ -1385,6 +1386,12 @@ def _init_db(db_path: Path | None = None) -> None:
             # One of RESOLVE_FAILURE_CLASSES: probe_failed / no_unwrapper
             # / unwrap_failed. NULL beside a NULL last_failed_at.
             cursor.execute("ALTER TABLE download_sources ADD COLUMN failure_class TEXT DEFAULT NULL")
+        if "failure_resolver_v" not in existing_ds_cols:
+            # Session 107: the resolver version that recorded the failure
+            # (see RESOLVER_VERSION). NULL beside a NULL last_failed_at;
+            # NULL beside a failure means "recorded before versioning"
+            # and counts as version 0 at the negative-cache hit site.
+            cursor.execute("ALTER TABLE download_sources ADD COLUMN failure_resolver_v INTEGER DEFAULT NULL")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_source_ind ON posts(source_site, industry)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical_key ON posts(canonical_key)")
@@ -6081,6 +6088,36 @@ NEGATIVE_CACHE_TTL_SECONDS = 12 * 3600
 #: nothing playable.
 RESOLVE_FAILURE_CLASSES = ("probe_failed", "no_unwrapper", "unwrap_failed")
 
+#: Resolver version (Session 107): stamped on every negative-cache record
+#: by `_record_resolve_failure`. A failure recorded by an older resolver is
+#: stale the moment this number moves — a new unwrapper may have landed
+#: since — so the next press re-probes the copy once instead of refusing
+#: on the old verdict. BUMP THIS when a new unwrapper lands, or when an
+#: existing unwrapper's coverage materially changes. NULL beside a NULL
+#: `last_failed_at`; a NULL version beside a failure means "recorded
+#: before versioning", which counts as version 0 (older than any row
+#: this code writes).
+RESOLVER_VERSION = 1
+
+
+def _is_transport_verdict(verdict) -> bool:
+    """True when a probe/unwrapper verdict names a transport failure (HTTP 0).
+
+    Probe verdicts (`current_hosts.classify_probe`) carry failure="transport"
+    when the fetch never got an HTTP answer (status 0); unwrapper verdicts
+    (`host_resolvers`) carry http_status 0 for the same event. Anything else —
+    a real HTTP answer, a dead file, a challenge, a 404 — is evidence about
+    the link, not about the network, and the negative cache still records it.
+    Deliberately NOT "probe_error": that is `_stage2_probe`'s own exception
+    marker and the generic failure fixture in the tests, not a transport
+    signal — treating it as one would stop recording real failures.
+    """
+    if not isinstance(verdict, dict):
+        return False
+    if verdict.get("failure") == "transport":
+        return True
+    return verdict.get("http_status") == 0
+
 #: Host health (Session 103, in-process only): per-service timestamps of
 #: failures this process has recorded, pruned to the last hour. A service
 #: that failed 3+ times recently is demoted to the back of the failover
@@ -6147,6 +6184,11 @@ def _stage2_probe(url: str) -> dict:
         verdict = _probe(url, None, _stage2_hint(url))
         if not verdict.get("ok") and verdict.get("failure") == "blocked":
             verdict = _probe(url, _STAGE2_REFERER_RETRY, _stage2_hint(url))
+        elif not verdict.get("ok") and _is_transport_verdict(verdict):
+            # Session 107: one retry on a transport error (HTTP 0). The
+            # network blipped, not the link — a single re-probe is cheaper
+            # than a 12h negative-cache refusal of a live copy.
+            verdict = _probe(url, None, _stage2_hint(url))
         return verdict
     except Exception:
         return {"ok": False, "kind": None, "mime": None, "size": None,
@@ -6209,8 +6251,9 @@ def _record_resolve_failure(source_id: int, failure_class: str) -> None:
         with get_db() as _conn:
             _conn.execute(
                 "UPDATE download_sources "
-                "SET last_failed_at = ?, failure_class = ? WHERE id = ?",
-                (time.time(), failure_class, source_id))
+                "SET last_failed_at = ?, failure_class = ?, "
+                "failure_resolver_v = ? WHERE id = ?",
+                (time.time(), failure_class, RESOLVER_VERSION, source_id))
             # The in-process health table is fed from here too: the row's
             # service is a PK lookup, so this costs one cheap read on the
             # failure path only, never on a success.
@@ -6236,7 +6279,8 @@ def _clear_resolve_failure(source_id: int) -> None:
         with get_db() as _conn:
             _conn.execute(
                 "UPDATE download_sources "
-                "SET last_failed_at = NULL, failure_class = NULL "
+                "SET last_failed_at = NULL, failure_class = NULL, "
+                "failure_resolver_v = NULL "
                 "WHERE id = ?",
                 (source_id,))
     except Exception:
@@ -6307,6 +6351,11 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # siblings play, so a hit only skips this copy's own work and
     # falls through to the sibling failover below.
     _negative_cache_hit = False
+    # Session 107: the most recent failure verdict this press produced
+    # (cached probe, dispatch, or fresh probe). The fall-through records
+    # only when it is NOT a transport error — a network blip must not
+    # poison the negative cache for 12h.
+    _last_failure_verdict = None
     _failed_at = src.get("last_failed_at")
     if _failed_at is not None:
         try:
@@ -6314,10 +6363,23 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         except (TypeError, ValueError):
             _failed_age = None
         if _failed_age is not None and _failed_age < NEGATIVE_CACHE_TTL_SECONDS:
-            # Fresh record: this copy stays skipped (flagged above);
-            # the sibling failover below still runs, so a copy whose
-            # siblings play keeps playing on repeat presses.
-            _negative_cache_hit = True
+            # Session 107: a failure recorded by an older resolver is stale —
+            # a new unwrapper may have landed since. Clear it and let this
+            # press re-probe the copy once; the new verdict (fresh version)
+            # decides the next press. A NULL version means "recorded before
+            # versioning", i.e. version 0.
+            _failed_v = src.get("failure_resolver_v")
+            try:
+                _failed_v = int(_failed_v) if _failed_v is not None else 0
+            except (TypeError, ValueError):
+                _failed_v = 0
+            if _failed_v < RESOLVER_VERSION:
+                _clear_resolve_failure(src["id"])
+            else:
+                # Fresh record: this copy stays skipped (flagged above);
+                # the sibling failover below still runs, so a copy whose
+                # siblings play keeps playing on repeat presses.
+                _negative_cache_hit = True
         elif _failed_age is not None:
             _clear_resolve_failure(src["id"])
 
@@ -6382,6 +6444,9 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 _hint = ("playlist" if src["final_url"].split("?")[0]
                          .endswith(".m3u8") else "file")
                 _verdict = _ch_probe(src["final_url"], None, _hint)
+                if not _verdict.get("ok") and _is_transport_verdict(_verdict):
+                    # Session 107: one retry on a transport error (HTTP 0).
+                    _verdict = _ch_probe(src["final_url"], None, _hint)
                 if _verdict.get("ok"):
                     _measured = [(c, v) for c, v in (
                         ("mime_type", _verdict.get("mime")),
@@ -6419,7 +6484,9 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 # fall-through must not pay to probe it again (see below).
                 _cached_probe_failed_url = src.get("final_url")
                 needs_refresh = True
-                _record_resolve_failure(src["id"], "probe_failed")
+                _last_failure_verdict = _verdict
+                if not _is_transport_verdict(_verdict):
+                    _record_resolve_failure(src["id"], "probe_failed")
         except Exception:
             pass
 
@@ -6472,7 +6539,9 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         # the fall-through does not probe it a second time.
         _cached_probe_failed_url = src.get("final_url")
         needs_refresh = True
-        _record_resolve_failure(src["id"], "probe_failed")
+        _last_failure_verdict = _cached_verdict
+        if not _is_transport_verdict(_cached_verdict):
+            _record_resolve_failure(src["id"], "probe_failed")
 
     # Needs fresh unwrap
     source_u = src.get("source_url") or src.get("final_url") or ""
@@ -6481,6 +6550,10 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     fresh_url = None
     fresh_temp = src["is_temporary"]
     embed_verdict = None
+    # The last unwrap branch's verdict (None when no branch ran). Read once
+    # after the chain, so the fall-through can tell a transport failure
+    # (HTTP 0 inside the unwrapper) from a real dead link.
+    verdict = None
     stage1_tried = False
     stage1_result = None
     # Whether any legacy unwrap branch below ran for this copy. The
@@ -6831,7 +6904,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = 1
                     embed_verdict = verdict
                     _gate_from_verdict = True
-                else:
+                elif not _is_transport_verdict(verdict):
                     _record_resolve_failure(src["id"], "unwrap_failed")
             elif hr and (service == hr.SERVICE_VIDHIDE
                          or "vidhide" in source_u.lower()
@@ -6852,7 +6925,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = 1
                     embed_verdict = verdict
                     _gate_from_verdict = True
-                else:
+                elif not _is_transport_verdict(verdict):
                     _record_resolve_failure(src["id"], "unwrap_failed")
             elif hr and (service == hr.SERVICE_UPLOADFLIX
                          or "uploadflix" in source_u.lower()
@@ -6937,6 +7010,16 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         except Exception:
             pass
 
+    # Session 107: the dispatch's own verdict is the evidence the
+    # fall-through judges. A branch verdict (an unwrapper's http_status) or
+    # the Stage-1 result (a probe failure) replaces the cached probes'
+    # verdict as the most recent word on this copy. A hubcloud-style
+    # branch never assigns `verdict`, so only a real verdict counts.
+    if _unwrap_branch_taken and verdict is not None:
+        _last_failure_verdict = verdict
+    elif stage1_tried and stage1_result is not None:
+        _last_failure_verdict = stage1_result
+
     # A resolver that answered with another landing page has not resolved
     # anything. Never persist it as the playable address: the callers below treat
     # "no fresh direct URL" honestly instead of sending ExoPlayer HTML.
@@ -6960,6 +7043,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         else:
             fresh_verdict = _stage2_probe(fresh_url)
         if not _stage2_accept(fresh_verdict, want):
+            _last_failure_verdict = fresh_verdict
             fresh_url = None
             fresh_verdict = None
 
@@ -6970,10 +7054,15 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
         # at all means this host has no unwrapper yet. (A cached-probe
         # failure was already recorded above; this overwrites it with
         # the dispatch's own verdict, which is the actionable one.)
-        _record_resolve_failure(
-            src["id"],
-            "unwrap_failed" if (_unwrap_branch_taken or stage1_tried)
-            else "no_unwrapper")
+        # Session 107: when the most recent verdict is a transport error
+        # (HTTP 0 — the network blipped, not the link), record nothing:
+        # the copy must not spend 12h in the negative cache for a failure
+        # that says nothing about it.
+        if not _is_transport_verdict(_last_failure_verdict):
+            _record_resolve_failure(
+                src["id"],
+                "unwrap_failed" if (_unwrap_branch_taken or stage1_tried)
+                else "no_unwrapper")
 
     if fresh_url and fresh_url != source_u:
         # A packer's verdict carries more than a URL. `verify=True` means the
@@ -7199,9 +7288,20 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                                 "SELECT id FROM download_sources WHERE id IN ("
                                 + _placeholders + ") "
                                 "AND last_failed_at IS NOT NULL "
-                                "AND last_failed_at > ?",
+                                "AND last_failed_at > ? "
+                                # Session 107: only a CURRENT-version record
+                                # skips a sibling. A record from an older
+                                # resolver (or one written before versioning,
+                                # NULL) is stale — a new unwrapper may have
+                                # landed — so that sibling is tried again.
+                                # On a database whose migration has not run,
+                                # the column is absent and this raises, which
+                                # the fail-open below turns into "try all".
+                                "AND failure_resolver_v IS NOT NULL "
+                                "AND failure_resolver_v >= ?",
                                 (*_all_siblings,
-                                 now_ts - NEGATIVE_CACHE_TTL_SECONDS)).fetchall()}
+                                 now_ts - NEGATIVE_CACHE_TTL_SECONDS,
+                                 RESOLVER_VERSION)).fetchall()}
                     _live_siblings = [s for s in _all_siblings
                                       if s not in _cached_siblings]
                     if not _live_siblings:

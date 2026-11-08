@@ -672,7 +672,8 @@ def _resource_renditions(root) -> list[dict]:
     null. Dropping the tiers left the vault reporting ``0 releases`` for a work
     whose four renditions the page had just listed, which reads as "this site
     has nothing" instead of "four prints exist and none of their URLs is
-    published". Each tier therefore becomes a release with an empty source list.
+    published". Each tier therefore becomes a release sourced at the detail
+    page (Session 107), which the resolver's MovieBox unwrapper can play.
     """
     out: list[dict] = []
     seen = set()
@@ -711,15 +712,60 @@ def _resource_renditions(root) -> list[dict]:
     return out
 
 
+def _detail_source(detail_url: str) -> dict:
+    """One source naming the detail page itself.
+
+    The page publishes no direct media URL — the tiers are declared, not
+    linked — but the detail URL is everything the resolver needs: the
+    Session 104b MovieBox unwrapper turns it into a signed MP4 at play
+    time (detail API for the subjectId, play API with the /movies/ page
+    as Referer). Storing the detail URL as `source_url` is what lets a
+    staged row become a playable row; storing the mirror URLs instead
+    left the catalog with 0 MovieBox rows that could ever resolve.
+    `playback_type` "url" is merge_catalogs' default: the resolver
+    dispatches on the service/URL markers and never probes the page as
+    a file first (the unwrapper's own gate verdict is the evidence).
+    """
+    name = detail_url.rsplit("/", 1)[-1].split("?", 1)[0] or detail_url
+    return {
+        "source_name": SERVICE,
+        "service": SERVICE,
+        "service_tier": SERVICE_TIER,
+        "resource_id": name,
+        "source_url": detail_url,
+        "final_url": detail_url,
+        "playback_type": "url",
+        "status": "active",
+        "is_temporary": 0,
+        "quality": None,
+        "mime_type": None,
+        "last_checked": None,
+        "raw_meta": {"url": detail_url, "detail_url": True},
+    }
+
+
 def _declared_releases(renditions: list[dict], title: str,
-                       audio: str | None) -> list[dict]:
-    """One release per declared rendition, with no source: the URL is not public."""
+                       audio: str | None, detail_url: str | None = None) -> list[dict]:
+    """One release per declared rendition, sourced at the detail page.
+
+    The URL is not public as a media file — but the detail URL is public,
+    and it is the unwrapper's input. Each release therefore carries one
+    source naming the detail page, so the row can resolve. A series
+    season release carries `?se=<season>&ep=1`: the play API answers
+    `se=1&ep=0` and `se=0&ep=0` with zero streams (probed live
+    2026-11-08 on "Sistas"), while `se=1&ep=1` returns free streams —
+    the bare URL would leave every series print unplayable. Movies take
+    the bare detail URL (the unwrapper's se=0/ep=0 default plays them).
+    """
     releases = []
     for item in renditions:
         quality = f"{item['resolution']}p"
         label = title
         if item["season"] is not None:
             label += f" S{item['season']:02d}"
+        source_url = detail_url
+        if detail_url and item["season"] is not None:
+            source_url = f"{detail_url}?se={item['season']}&ep=1"
         releases.append({
             "label": f"{label} {quality}".strip(),
             "quality": quality,
@@ -732,7 +778,7 @@ def _declared_releases(renditions: list[dict], title: str,
             "bridge_url": None,
             "raw_meta": {"declared": True, "episodes": item["episodes"],
                          "source_host": item["source_host"], "play_url": None},
-            "sources": [],
+            "sources": ([_detail_source(source_url)] if source_url else []),
         })
     return releases
 
@@ -838,8 +884,12 @@ def _enrich_with_declared_media(record: dict, root) -> None:
         # long a season is; keep them on the post, not only inside each release.
         record["raw_meta"]["declared_renditions"] = renditions
     if not record["releases"] and renditions:
+        # Session 107: the detail URL is the source. Without it the row
+        # stages with empty source lists and can never resolve — the live
+        # catalog held 0 MovieBox rows for exactly this reason.
         record["releases"] = _declared_releases(
-            renditions, record["title"], record["languages"])
+            renditions, record["title"], record["languages"],
+            detail_url=record.get("url"))
     mirrors = _mirror_sources(root)
     if mirrors:
         _attach_mirrors(record, mirrors)
@@ -1187,9 +1237,9 @@ def parse_page(html: str, page_url: str) -> list[dict]:
     A normal detail page yields exactly one; a listing payload that happens to
     carry several works yields one per work. Returns an empty list on a page with
     no ``__NUXT_DATA__`` and no titled subject. A record with empty release
-    ``sources`` is a valid outcome and means *no playable URL was published* — the
-    declared renditions are still listed as releases, and it is never a trailer
-    wearing a print.
+    ``sources`` is a valid outcome and means *no URL of any kind was published* —
+    the declared renditions are listed as releases sourced at the detail page
+    (Session 107), and it is never a trailer wearing a print.
     """
     data = extract_nuxt_payload(html)
     if data is None:
@@ -1712,10 +1762,10 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
     This is the ingest that MovieBox can honestly support today: the feed carries
     the full subject (title, year, run time, genre, cover, rating, subtitles,
     dub list, adult flags) and the playable print is nowhere in it. So a harvest
-    produces **metadata-only** rows — no ``sources``, no trailer recorded as if it
-    were the film — plus one release per rendition the subject declares. ``crawl``
-    remains for the detail pages, which add season/episode structure and any
-    print the site later exposes in HTML.
+    produces rows sourced at the detail page — no direct media URL, no trailer
+    recorded as if it were the film — plus one release per rendition the subject
+    declares. ``crawl`` remains for the detail pages, which add season/episode
+    structure and any print the site later exposes in HTML.
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -2186,8 +2236,10 @@ def crawl_pending(limit: int | None = None, db_path: Path | str = DEFAULT_DB_PAT
         # failure: the play URL is resolved client-side. It is written as a
         # metadata row and marked crawled, so a re-run does not keep spending
         # connections on it looking for a stream the page never contains.
-        # "No media" is decided by sources, not releases: declared renditions
-        # carry no URL and are still metadata-only.
+        # "No media" is decided by sources, not releases: a record whose
+        # releases carry no source at all is metadata-only. (Session 107:
+        # declared renditions now carry the detail URL as their source, so
+        # they count as with-media, not metadata-only.)
         if all(not any(rel["sources"] for rel in rec["releases"])
                for rec in records):
             totals["metadata_only"] += 1

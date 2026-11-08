@@ -1160,8 +1160,18 @@ class PlayBundleTests(CatalogApiTestCase):
             "SELECT e.id FROM cat_episodes e JOIN cat_seasons s ON s.id = e.season_id"
             " WHERE e.work_id = ? AND s.number = 2 AND e.number = 3",
             (self.work["Ghost Town Tapes"]["id"],)).fetchone()["id"]
-        bundle = catalog_api.play_bundle(self.conn, release_id=pack["id"],
+        # Session 107: `play_bundle` is legacy-in — it translates the id
+        # through `cat_id_map` first, and a cat id that collides with a
+        # mapped ledger id is redirected by design (the app sends legacy
+        # ids; cat-native callers use `release_detail`). Pass the ledger
+        # release id, not the cat print id, and the bundle must serve the
+        # pack itself.
+        legacy_id = self.conn.execute(
+            "SELECT id FROM releases WHERE release_title = ?",
+            ("Ghost Town Tapes S02 Complete 1080p",)).fetchone()["id"]
+        bundle = catalog_api.play_bundle(self.conn, release_id=legacy_id,
                                          episode_id=episode_id)
+        self.assertEqual(bundle["release_id"], pack["id"])
         self.assertEqual(bundle["coverage"]["offset_seconds"], 4400)
         self.assertEqual(bundle["coverage"]["chapter_title"], "Ep. 3 in the pack")
         self.assertEqual(bundle["coverage"]["source"], "cat_offsets")
@@ -1226,6 +1236,52 @@ class PlayBundleTests(CatalogApiTestCase):
         self.assertEqual(detail["work"]["title"], "Dune")
         self.assertEqual(detail["print"]["release_group"], None,
                          "the projector writes '' -> reported as null, not a guessed group")
+
+
+class LegacyReleaseTranslationTests(CatalogApiTestCase):
+    """Session 107 (item 1): legacy `releases.id` -> `cat_releases.id`."""
+
+    def _write_map_row(self, old_id, new_id, rev=4):
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_id_map (kind, old_id, new_id, rev)"
+            " VALUES ('ledger_release', ?, ?, ?)", (old_id, new_id, rev))
+        self.conn.commit()
+
+    def test_legacy_500000_translates_through_the_map_row(self):
+        """The production case, by number: legacy release 500000 is
+        Arthur's Whisky (post 55458); the rev-4 projector maps it to
+        cat release 598344 (both rows read off the catalog copy
+        2026-11-08). The fixture stands a Dune print in for the Arthur
+        print — the mechanism is what this test pins; the legacy number
+        is the real one."""
+        target = self.print_by_fragment("Dune", "1080p WEB-DL")
+        self._write_map_row(500000, int(target["id"]))
+        self.assertEqual(
+            catalog_api.translate_legacy_release_id(self.conn, 500000),
+            int(target["id"]))
+        bundle = catalog_api.play_bundle(self.conn, release_id=500000)
+        self.assertTrue(bundle["ok"], bundle)
+        self.assertEqual(bundle["release_id"], int(target["id"]))
+        self.assertIn("1080p WEB-DL", bundle["print_label"])
+
+    def test_unmapped_id_falls_back_to_itself(self):
+        self.assertEqual(
+            catalog_api.translate_legacy_release_id(self.conn, 999999), 999999)
+
+    def test_stale_map_target_falls_back_to_the_given_id(self):
+        self._write_map_row(777, 999999)
+        self.assertEqual(
+            catalog_api.translate_legacy_release_id(self.conn, 777), 777)
+
+    def test_non_numeric_id_is_returned_unchanged(self):
+        self.assertEqual(
+            catalog_api.translate_legacy_release_id(self.conn, "not-a-number"),
+            "not-a-number")
+
+    def test_missing_map_table_falls_back_to_the_given_id(self):
+        self.conn.execute("DROP TABLE cat_id_map")
+        self.assertEqual(
+            catalog_api.translate_legacy_release_id(self.conn, 999999), 999999)
 
 
 # ── entitlements ─────────────────────────────────────────────────────────────

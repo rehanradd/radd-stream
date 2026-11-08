@@ -353,10 +353,27 @@ class HandleTests(unittest.TestCase):
     SECRET = "unit-test-secret"
 
     def test_token_round_trip_and_tamper_rejection(self):
+        # Session 107: the old assertion — "the decimal id never appears in
+        # the base64url handle" — is false ~40% of the time by chance (a
+        # random base64url string contains "1" more often than not), so the
+        # test flaked. Opacity is a structural property, not a substring
+        # one: the handle is 28 base64url chars, is not the bare id, is not
+        # all digits (so it never parses as a plain row id), parses back to
+        # the id — including under signed_only, which rejects the plain form
+        # outright — and any tampering kills it.
         for number in (1, 7, 4096, 2 ** 31 - 1):
             token = redact.mint_token(number, self.SECRET)
-            self.assertNotIn(str(number), token, "the handle must not be the id")
+            self.assertEqual(len(token), 28,
+                             "a v2 handle is 21 bytes, base64url without padding")
+            self.assertNotEqual(token, str(number),
+                                "the handle must not be the id")
+            self.assertFalse(token.isdigit(),
+                             "the handle must not parse as a plain row id")
             self.assertEqual(redact.parse_token(token, self.SECRET), number)
+            self.assertEqual(
+                redact.parse_token(token, self.SECRET, signed_only=True),
+                number,
+                "the minted handle must parse where a plain id may not")
         forged = redact.mint_token(42, self.SECRET)
         self.assertIsNone(redact.parse_token(forged[:-2] + "xx", self.SECRET))
         self.assertIsNone(redact.parse_token(forged, "another-secret"))

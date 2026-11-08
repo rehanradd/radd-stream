@@ -284,7 +284,8 @@ jobs:
 
       # MovieBox's rendition rules: the site declares 360/480/720/1080 per season and
       # publishes none of their URLs (measured on one captured detail page), so each
-      # tier is a release with an empty source list and a dead mirror is kept as dead.
+      # tier is a release sourced at the detail page (Session 107 — the detail URL
+      # is the unwrapper's input) and a dead mirror is kept as dead.
       - name: 🧪 test_themoviebox_links.py
         run: python3 -S Fast_Fetch/importers/test_themoviebox_links.py
 
@@ -295,6 +296,13 @@ jobs:
       # keywords kept, and the trailer still never a source. Offline fixture.
       - name: 🧪 test_themoviebox_detail_api.py
         run: python3 -S Fast_Fetch/importers/test_themoviebox_detail_api.py
+
+      # The MovieBox importer end to end (Session 107): declared tiers are
+      # releases sourced at the detail page (series seasons carry
+      # ?se=<season>&ep=1, probed live), harvest/crawl write detail-URL
+      # sources, and the trailer stays evidence, never a source.
+      - name: 🧪 test_themoviebox_import.py
+        run: python3 -S Fast_Fetch/importers/test_themoviebox_import.py
 
       # The admin panel's write gate (6bfbd5c). Timed, because this box measured 65 tests
       # in 266 s and CI's wall time is the open question about running it here at all.

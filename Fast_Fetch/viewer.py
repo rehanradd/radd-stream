@@ -220,6 +220,14 @@ def link_view(row, base_url: str = "") -> dict:
     kind = {"direct": "direct", "url": "resolve", "download": "download",
             "iframe": "external"}.get(str(row["playback_type"] or "").lower(),
                                       "resolve")
+    if kind == "external":
+        # Session 107: an iframe our own server can unwrap is not external —
+        # the resolver turns it into a playlist or file, so the client must
+        # resolve it first. Anything else stays external. The service name
+        # never reaches the response; only the kind changes.
+        service = str(row["service"]) if "service" in row.keys() else ""
+        if service.strip().casefold() in catalog_v2._SERVER_RESOLVABLE_SERVICES:
+            kind = "resolve"
     link["kind"] = kind
     # Audit critical 10: a measured verdict outranks the ingest label. A row the
     # healer or a 404 marked dead/broken/gone/expired is not playable, whatever

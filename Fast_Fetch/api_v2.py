@@ -1493,8 +1493,13 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             return True
 
         if head == "releases" and len(segments) == 2:
-            result = catalog_api.release_detail(conn, release_id=segments[1],
-                                                include_adult=bool(operator))
+            # Session 107: the app sends legacy `releases.id`; translate
+            # to the cat id first (same translation as play_bundle).
+            result = catalog_api.release_detail(
+                conn,
+                release_id=catalog_api.translate_legacy_release_id(
+                    conn, segments[1]),
+                include_adult=bool(operator))
             send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
                         etag_seed=f"release|{segments[1]}", rev=versions,
                         last_modified=stamp, operator=operator,

@@ -115,6 +115,29 @@ _EMBED_SERVICES = {
     "razerstream", "razorcloud", "streambd", "bunnystream", "fslspace", "hubcloud_page",
     "jsmwatch", "streamwish", "filemoon", "voxcdn", "swishstream",
 }
+# Embed services our own server can unwrap (Session 107, Phase D item 6): the
+# stored URL is an embed page, but `resolve_live_source` turns it into a real
+# playlist or file, so the projection must say `resolve_required` — "run the
+# JIT resolver first" — never `webview`, which told the app the copy could not
+# play at all. Membership is earned by a resolver branch, not by a guess:
+# cineverse/vidrift/vidbolt/filmu/iqsmart ride Stage-1 backends (modiplay,
+# vidrift, vidbolt, vidly, streamhg — cineverse rows on the live copy sit on
+# *.modiplay.xyz hosts, 70,050 of them); streamtape/stream/streamwish/mixdrop/
+# voe/vidhide/1xplayer/uploadflix carry a Stage-2 `elif` keyed on the service
+# name (Sessions 103/104b). Two of them never classify as embed — vidhide and
+# uploadflix are not in `_EMBED_SERVICES`, so their URLs fall through to
+# `cloud_page`/`resolve_required` by shape — and their membership here only
+# changes the v1 iframe mapping (`viewer.link_view`). Deliberately absent: vidout (its playlist host
+# vidmmo.com does not resolve on VM DNS — item 7, unprovable from here),
+# vidoza/doodstream/filemoon (host down / TCP reset / stdlib-blocked crypto),
+# and every other embed service, which has no server-side unwrapper — those
+# stay `webview`, honestly unplayable in the app player. `mobilejsr` is a
+# download family (`_DOWNLOAD_ONLY_SERVICES`), not an embed, and stays out.
+_SERVER_RESOLVABLE_SERVICES = frozenset({
+    "cineverse", "vidrift", "vidbolt", "filmu", "iqsmart",
+    "streamtape", "stream", "streamwish", "mixdrop", "voe", "vidhide",
+    "1xplayer", "uploadflix",
+})
 _BRIDGE_SERVICES = {
     "shortink", "shortlink", "linkvertise", "ezylink", "vlink", "shrinkme", "urlshort",
     "gpdl", "hubcloud_bridge", "linkrit", "conlinks", "rokss", "kutt",
@@ -552,7 +575,11 @@ def classify_link(service: str, source_url: str, final_url: str,
         return "dash_manifest", "stream"
     if _looks_like_file(lowered):
         if svc in _EMBED_SERVICES:
-            return "embed", "webview"
+            # A resolvable embed is still a page the player cannot open
+            # directly — the resolver has to run first. A non-resolvable
+            # one stays webview: honestly unplayable in the app player.
+            return ("embed", "resolve_required" if svc in _SERVER_RESOLVABLE_SERVICES
+                    else "webview")
         return ("cdn_direct", "both" if (playback_type or "").lower() == "download" else "stream")
     if path.endswith(_ARCHIVE_MARKERS) or svc in _DOWNLOAD_ONLY_SERVICES:
         return "download_only", "download"
@@ -560,6 +587,8 @@ def classify_link(service: str, source_url: str, final_url: str,
         return "bridge", "none"
     if (svc in _EMBED_SERVICES or "embed" in svc or "embed" in last_seg
             or path.endswith("/e") or "/e/" in path or _EMBED_HOST_RE.search(lowered)):
+        if svc in _SERVER_RESOLVABLE_SERVICES:
+            return "embed", "resolve_required"
         return "embed", "webview"
     if (playback_type or "").lower() == "download":
         return "cloud_page", "download"
@@ -1019,7 +1048,8 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
 
     conn.commit()
     _progress(f"works written: {len(work_ids)} ({time.time() - started:.0f}s)")
-    counters = _project_pages(conn, works, work_ids, release_descriptor, now, adult_keys)
+    counters = _project_pages(conn, works, work_ids, release_descriptor, now, adult_keys,
+                              catalog_rev=catalog_rev)
     _progress(f"pages/prints done: {counters['releases']} prints, {counters['links']} links "
               f"({time.time() - started:.0f}s)")
     _finalize(conn, works, work_ids, now, counters)
@@ -1049,6 +1079,7 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
         "posts": post_count,
         "identity_suspect": counters["suspect"],
         "release_dups": counters["release_dups"],
+        "ledger_release_mapped": counters["ledger_release_mapped"],
         "unattributed_links": counters["unattributed"],
         "catalog_rev": catalog_rev,
         "seconds": round(time.time() - started, 2),
@@ -1091,9 +1122,14 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
 
 
 def _project_pages(conn, works, work_ids, release_descriptor, now,
-                   adult_keys: frozenset[str] | set[str] = frozenset()) -> dict:
+                   adult_keys: frozenset[str] | set[str] = frozenset(),
+                   catalog_rev: int | None = None) -> dict:
     counters = {"releases": 0, "links": 0, "episodes": 0, "seasons": 0, "suspect": 0,
                 "unattributed": 0, "release_dups": 0, "parts": 0,
+                # Session 107: ledger->cat release pairs written to
+                # cat_id_map (kind 'ledger_release') in this pass, so the
+                # play path can translate a legacy `releases.id`.
+                "ledger_release_mapped": 0,
                 # The adult-excluded mirror of `releases`, accumulated in the same pass
                 # so a public aggregate never has to re-derive it with a join. The link
                 # family is NOT mirrored here: those numbers come from
@@ -1243,6 +1279,24 @@ def _project_pages(conn, works, work_ids, release_descriptor, now,
                             " (release_id, episode_id, ordinal) VALUES (?, ?, ?)",
                             (release_id, episode_id, ep_number),
                         )
+
+                # Session 107: the play path translates legacy release ids
+                # through cat_id_map — but the map only ever held cat->cat
+                # renumberings, never ledger->cat. Write the ledger row id
+                # -> cat row id pair here, where both are in hand, so a
+                # caller that persisted a legacy `releases.id` (the app
+                # does) can resolve it once instead of pressing the wrong
+                # film. Changed-only, like _record_id_map: an unchanged id
+                # needs no row, because the translator falls back to the id
+                # as given. Append-only across revs; _reset() never deletes
+                # cat_id_map, and the newest rev wins at lookup time.
+                if catalog_rev is not None and int(rel["id"]) != int(release_id):
+                    conn.execute(
+                        "INSERT OR REPLACE INTO cat_id_map"
+                        " (kind, old_id, new_id, rev) VALUES"
+                        " ('ledger_release', ?, ?, ?)",
+                        (int(rel["id"]), int(release_id), int(catalog_rev)))
+                    counters["ledger_release_mapped"] += 1
 
                 for src in conn.execute(
                     "SELECT * FROM download_sources WHERE release_id = ? ORDER BY id", (rel["id"],)

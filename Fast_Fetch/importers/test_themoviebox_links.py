@@ -87,14 +87,23 @@ def record_for(payload: dict) -> dict:
 
 
 class DeclaredRenditionTests(unittest.TestCase):
-    def test_each_rendition_becomes_one_release_with_no_sources(self):
+    def test_each_rendition_becomes_one_release_sourced_at_the_detail_page(self):
+        # Session 107: each tier is sourced at the detail page — the URL
+        # the Session 104b unwrapper turns into a signed MP4 — never a
+        # fabricated media URL. A series season release carries
+        # ?se=<season>&ep=1 (the play API answers ep=0 with zero streams).
         record = record_for(SERIES)
         pairs = [(rel["season"], rel["quality"]) for rel in record["releases"]]
         self.assertEqual(len(pairs), 20, "5 captured seasons × 4 captured tiers")
         self.assertEqual(pairs[:2], [(1, "360p"), (1, "480p")])
         self.assertEqual(pairs[-1], (5, "1080p"))
-        self.assertTrue(all(rel["sources"] == [] for rel in record["releases"]),
-                        "a tier whose URL is not published gets no source row")
+        for rel in record["releases"]:
+            self.assertEqual(len(rel["sources"]), 1, rel)
+            src = rel["sources"][0]
+            self.assertEqual(src["source_url"],
+                             f"{DETAIL_URL}?se={rel['season']}&ep=1", src)
+            self.assertEqual(src["service"], "themoviebox", src)
+            self.assertEqual(src["playback_type"], "url", src)
 
     def test_release_carries_the_declared_episode_count_and_host(self):
         first = record_for(SERIES)["releases"][0]
@@ -117,17 +126,24 @@ class MirrorTests(unittest.TestCase):
         payload = dict(SERIES, dl=[{"url": MIRROR_URL, "status": "dead"}])
         sources = [src for rel in record_for(payload)["releases"]
                    for src in rel["sources"]]
-        self.assertEqual([(s["source_url"], s["status"]) for s in sources],
+        mirrors = [s for s in sources if s["source_url"] == MIRROR_URL]
+        self.assertEqual([(s["source_url"], s["status"]) for s in mirrors],
                          [(MIRROR_URL, "dead")])
-        self.assertEqual(sources[0]["playback_type"], mb.PLAYBACK_DOWNLOAD)
+        self.assertEqual(mirrors[0]["playback_type"], mb.PLAYBACK_DOWNLOAD)
+        # The other 20 sources are the declared tiers' detail-URL sources.
+        detail = [s for s in sources if s["source_url"] != MIRROR_URL]
+        self.assertEqual(len(detail), 20)
+        self.assertTrue(all(s["playback_type"] == "url" for s in detail))
 
     def test_a_live_mirror_is_stored_active_and_bound_to_its_quality(self):
         payload = dict(SERIES, dl=[{"url": MIRROR_URL, "available": True}])
         record = record_for(payload)
-        bound = [rel for rel in record["releases"] if rel["sources"]]
+        bound = [rel for rel in record["releases"]
+                 if any(s["source_url"] == MIRROR_URL for s in rel["sources"])]
         self.assertEqual(len(bound), 1, "one mirror, one release")
         self.assertEqual(bound[0]["quality"], "1080p")
-        self.assertEqual([s["status"] for s in bound[0]["sources"]], ["active"])
+        self.assertEqual([s["status"] for s in bound[0]["sources"]
+                          if s["source_url"] == MIRROR_URL], ["active"])
 
 
 class GapVisibilityTests(unittest.TestCase):

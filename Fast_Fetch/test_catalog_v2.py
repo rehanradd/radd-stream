@@ -20,6 +20,7 @@ from pathlib import Path
 
 os.environ.setdefault("RADD_SKIP_LIVE_ENRICH", "1")
 
+import catalog_api
 import catalog_v2
 import fast_fetch
 import link_health
@@ -423,6 +424,57 @@ class LinkTruthTests(ProjectionTestCase):
         self.assertEqual(links[0]["kind"], "embed")
         self.assertEqual(links[0]["playability"], "webview")
 
+    def test_resolvable_embed_is_resolve_required_not_webview(self):
+        # Session 107, Phase D item 6: these services carry a server-side
+        # unwrapper (Stage-1 backend or Stage-2 branch), so the stored embed
+        # page resolves to a real playlist or file — the app must be told to
+        # resolve it, not that it cannot play at all.
+        cases = [
+            ("vidrift", "https://embed.vidrift.net/embed/movie/1"),
+            ("vidbolt", "https://vidbolt.xyz/embed/movie/1"),
+            ("filmu", "https://embed.filmu.in/e/abc123"),
+            ("iqsmart", "https://streams.iqsmartgames.com/embed/abc"),
+            ("cineverse", "https://rozgarlelo.modiplay.xyz/embed/abc"),
+            ("streamtape", "https://streamtape.com/e/abc123"),
+            ("mixdrop", "https://mixdrop.co/e/abc123"),
+            ("voe", "https://voe.sx/e/abc123"),
+            ("1xplayer", "https://1xplayer.top/embed/abc"),
+            ("stream", "https://watch-online.mom/e/abc123"),
+            ("streamwish", "https://streamwish.com/e/abc123"),
+        ]
+        for service, url in cases:
+            links = self.one_work_with([self.src(service, url)])
+            self.assertEqual(links[0]["kind"], "embed", service)
+            self.assertEqual(links[0]["playability"], "resolve_required", service)
+
+    def test_vidhide_url_is_already_resolve_required_by_shape(self):
+        # vidhide and uploadflix were never embed-kind services
+        # (`_EMBED_SERVICES` lists neither), so their URL shape — not the
+        # resolvable set — decides: a cloud page the resolver must run
+        # first. Their set membership only changes the v1 iframe mapping
+        # (`viewer.link_view`).
+        for service, url in (("vidhide", "https://vidhide.com/embed/abc123"),
+                             ("uploadflix", "https://uploadflix.com/abc123")):
+            links = self.one_work_with([self.src(service, url)])
+            self.assertEqual(links[0]["kind"], "cloud_page", service)
+            self.assertEqual(links[0]["playability"], "resolve_required", service)
+
+    def test_file_like_url_of_a_resolvable_embed_still_needs_the_resolver(self):
+        # The file-looking branch must not promise the player a URL the
+        # embed page only pretends to be.
+        links = self.one_work_with([self.src("streamtape",
+                                             "https://streamtape.com/v/abc123/video.mp4")])
+        self.assertEqual(links[0]["kind"], "embed")
+        self.assertEqual(links[0]["playability"], "resolve_required")
+
+    def test_unresolvable_embed_stays_webview(self):
+        # vidout's playlist host vidmmo.com does not resolve on VM DNS
+        # (item 7) — no server-side unwrapper can be proven for it, so it
+        # stays honestly unplayable in the app player.
+        links = self.one_work_with([self.src("vidout", "https://vidmmo.com/embed/abc123")])
+        self.assertEqual(links[0]["kind"], "embed")
+        self.assertEqual(links[0]["playability"], "webview")
+
     def test_bridge_redirect_is_not_promised_to_the_player(self):
         links = self.one_work_with([self.src("hubcloud", "https://gpdl.hubcloud.ist/?id=abc")])
         self.assertEqual(links[0]["kind"], "bridge")
@@ -601,6 +653,93 @@ class RollupAndSafetyTests(ProjectionTestCase):
         self.assertEqual(len(rels), 1)
         self.assertEqual(summary["release_dups"], 1)
         self.assertEqual(rels[0]["link_count"], 2)
+
+    def test_projector_writes_ledger_release_map_for_renumbered_prints(self):
+        """Session 107 (item 1): the projector writes kind='ledger_release'
+        rows (legacy `releases.id` -> `cat_releases.id`) for every print
+        whose cat id differs from its ledger id, so the play path can
+        translate a legacy id instead of pressing the wrong film. The
+        two identical Mirror Film prints collapse onto one cat print, so
+        the second ledger id must map to the first print's cat id."""
+        self.add_post("site-a", "https://a.test/mirror-film/", clean_title="Mirror Film",
+                      year=2020, releases=[
+                          {"release_title": "Mirror Film 720p", "quality": "720p",
+                           "sources": [LinkTruthTests.src(
+                               LinkTruthTests, "a", "https://video-downloads.googleusercontent.com/A")]},
+                          {"release_title": "Mirror Film 720p", "quality": "720p",
+                           "sources": [LinkTruthTests.src(
+                               LinkTruthTests, "b", "https://video-downloads.googleusercontent.com/B")]},
+                      ])
+        summary = self.project()
+        self.assertEqual(summary["release_dups"], 1)
+        ledger = self.conn.execute("SELECT id FROM releases ORDER BY id").fetchall()
+        self.assertEqual(len(ledger), 2)
+        cat = self.releases(self.works("Mirror Film", 2020)[0]["id"])
+        self.assertEqual(len(cat), 1)
+        rows = self.conn.execute(
+            "SELECT old_id, new_id, rev FROM cat_id_map "
+            "WHERE kind = 'ledger_release'").fetchall()
+        by_old = {int(r["old_id"]): int(r["new_id"]) for r in rows}
+        # The second ledger release was renumbered onto the first print.
+        self.assertEqual(by_old[int(ledger[1]["id"])], int(cat[0]["id"]))
+        self.assertEqual(rows[0]["rev"], summary["catalog_rev"])
+        # The unchanged first release needs no row: the translator falls
+        # back to the id as given, which is the same print.
+        self.assertNotIn(int(ledger[0]["id"]), by_old)
+        self.assertEqual(summary["ledger_release_mapped"], 1)
+
+    def test_legacy_release_id_plays_the_right_film_not_the_number(self):
+        """Session 107 (item 1): the wrong-film bug, end to end. Two
+        identical Alpha prints collapse onto one cat print, so every
+        later ledger id sits one below its cat id — legacy 3 is Alpha
+        720p while cat print 3 is Beta 1080p. Pressing legacy 3 raw
+        plays Beta; through the translator + play_bundle it plays
+        Alpha 720p."""
+        self.add_post("site-a", "https://a.test/alpha-film/", clean_title="Alpha Film",
+                      year=2024, releases=[
+                          {"release_title": "Alpha Film 1080p", "quality": "1080p",
+                           "sources": [LinkTruthTests.src(
+                               LinkTruthTests, "a", "https://video-downloads.googleusercontent.com/A1")]},
+                          {"release_title": "Alpha Film 1080p", "quality": "1080p",
+                           "sources": [LinkTruthTests.src(
+                               LinkTruthTests, "b", "https://video-downloads.googleusercontent.com/A2")]},
+                          {"release_title": "Alpha Film 720p", "quality": "720p",
+                           "sources": [LinkTruthTests.src(
+                               LinkTruthTests, "c", "https://video-downloads.googleusercontent.com/A3")]},
+                      ])
+        self.add_post("site-b", "https://b.test/beta-film/", clean_title="Beta Film",
+                      year=2024, releases=[
+                          {"release_title": "Beta Film 1080p", "quality": "1080p",
+                           "sources": [LinkTruthTests.src(
+                               LinkTruthTests, "d", "https://video-downloads.googleusercontent.com/B1")]},
+                      ])
+        summary = self.project()
+        self.assertEqual(summary["release_dups"], 1)
+        self.assertEqual(summary["ledger_release_mapped"], 3)
+        ledger_ids = [int(r["id"]) for r in self.conn.execute(
+            "SELECT id FROM releases ORDER BY id").fetchall()]
+        self.assertEqual(len(ledger_ids), 4)
+        legacy_720 = ledger_ids[2]
+        alpha_work = int(self.works("Alpha Film", 2024)[0]["id"])
+        beta_work = int(self.works("Beta Film", 2024)[0]["id"])
+        alpha_720 = [r for r in self.releases(alpha_work)
+                     if "720p" in (r["label"] or "")][0]
+        beta_1080 = self.releases(beta_work)[0]
+        # The renumbering really happened: legacy 3 is not cat print 3.
+        self.assertNotEqual(legacy_720, int(alpha_720["id"]))
+        self.assertEqual(int(beta_1080["id"]), legacy_720)
+        # Without translation, cat print 3 is Beta — the wrong film.
+        raw = catalog_api.release_detail(self.conn, release_id=legacy_720)
+        self.assertEqual(raw["work"]["title"], "Beta Film")
+        # With translation, legacy 3 resolves to the Alpha 720p print.
+        self.assertEqual(
+            catalog_api.translate_legacy_release_id(self.conn, legacy_720),
+            int(alpha_720["id"]))
+        bundle = catalog_api.play_bundle(self.conn, release_id=legacy_720)
+        self.assertTrue(bundle["ok"], bundle)
+        self.assertEqual(bundle["work_id"], alpha_work)
+        self.assertEqual(bundle["release_id"], int(alpha_720["id"]))
+        self.assertIn("720p", bundle["print_label"])
 
     def test_adult_work_is_flagged_for_display_filtering(self):
         self.add_post("site-a", "https://a.test/adult-film/", clean_title="Adult Film",

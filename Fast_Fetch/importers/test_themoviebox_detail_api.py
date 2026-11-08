@@ -146,13 +146,20 @@ class DetailApiRecordTests(unittest.TestCase):
 
 
 class DeclaredTierTests(unittest.TestCase):
-    def test_every_declared_tier_is_a_release_with_no_source(self):
+    def test_every_declared_tier_is_a_release_sourced_at_the_detail_page(self):
+        # Session 107: each tier is sourced at the detail page — the URL
+        # the Session 104b unwrapper turns into a signed MP4 — with
+        # ?se=<season>&ep=1 for series (the play API answers ep=0 with
+        # zero streams, probed live 2026-11-08).
         record = record_for()
         pairs = [(rel["season"], rel["quality"]) for rel in record["releases"]]
         self.assertEqual(len(pairs), 20, "5 captured seasons × 4 captured tiers")
         self.assertEqual(pairs[0], (1, "360p"))
         self.assertEqual(pairs[-1], (5, "1080p"))
-        self.assertTrue(all(rel["sources"] == [] for rel in record["releases"]))
+        for rel in record["releases"]:
+            self.assertEqual(len(rel["sources"]), 1, rel)
+            self.assertEqual(rel["sources"][0]["source_url"],
+                             f"{DETAIL_URL}?se={rel['season']}&ep=1", rel)
         self.assertTrue(all(rel["raw_meta"]["declared"] for rel in record["releases"]))
 
     def test_per_season_episode_counts_are_kept_on_the_post(self):
@@ -229,18 +236,22 @@ class TrailerTests(unittest.TestCase):
         urls = [src["source_url"] for rel in record["releases"]
                 for src in rel["sources"]]
         self.assertNotIn(TRAILER_URL, urls)
-        self.assertEqual(urls, [])
+        # Session 107: the 20 sources are the tiers' detail-URL sources,
+        # never the trailer.
+        self.assertEqual(len(urls), 20)
+        self.assertTrue(all(u.startswith(DETAIL_URL) for u in urls), urls)
 
 
 class StagingTests(unittest.TestCase):
-    def test_export_writes_the_rows_with_zero_sources(self):
+    def test_export_writes_the_rows_with_detail_url_sources(self):
+        # Session 107: one detail-URL source per declared tier.
         record = record_for()
         conn = sqlite3.connect(":memory:")
         try:
             totals = mb.export_staging(conn=conn, posts=[record])
             self.assertEqual(totals["posts_written"], 1)
             self.assertEqual(totals["releases_written"], 20)
-            self.assertEqual(totals["sources_written"], 0)
+            self.assertEqual(totals["sources_written"], 20)
 
             row = conn.execute(
                 "SELECT backdrop_url, director, cast_names, seasons, languages"
@@ -321,7 +332,8 @@ class CrawlSurfaceTests(unittest.TestCase):
             self.assertIn("subjectId=", calls[0])
             self.assertEqual(totals["api_pages"], 1)
             self.assertEqual(totals["releases"], 20)
-            self.assertEqual(totals["sources"], 0)
+            self.assertEqual(totals["sources"], 20,
+                             "one detail-URL source per declared tier")
             with closing(sqlite3.connect(db)) as conn:
                 row = conn.execute(
                     "SELECT seasons, backdrop_url, director FROM posts").fetchone()
