@@ -511,6 +511,15 @@ jobs:
       - name: 🧪 test_adult_fold_guard.py
         run: python3 -S Fast_Fetch/test_adult_fold_guard.py
 
+      # Domain tracker (Session 106): the resolve_site discovery chain, the
+      # §5 content verification (wp-json content-kind check, sitemap thin-
+      # doorway rejection, hijack/parked/CF handling), registry v2, and the
+      # one-line get_active_base_url wiring in all 19 importers. Offline —
+      # the network is a stub fetcher; the live 19-site proof runs from the
+      # Oracle VM and is recorded in the Session 106 checkpoint.
+      - name: 🧪 test_domain_resolver.py
+        run: python3 -S Fast_Fetch/test_domain_resolver.py
+
       # Docs drift is a code property, not a prose one. Root `AGENTS.md` cited `viewer.py` line
       # numbers and four of them pointed at unrelated code on trunk `37ae67b` (measured 2026-11-05)
       # while every suite stayed green, because `WorkflowSuiteCoverageTests`' RUN regex matches

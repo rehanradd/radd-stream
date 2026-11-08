@@ -54,9 +54,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://bolly4u.lol"
-WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
+SITE_NAME = "bolly4u"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/bolly4u.db")
     if Path("/home/ubuntu/radd-stream-data").exists()
@@ -126,8 +127,10 @@ def is_adult_content(text: str) -> bool:
 class Bolly4uClient:
     """HTTP Client with session cookies, rate limiting, and hidden API unwrapping."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(0.0, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -574,6 +577,9 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
     Uses per_page=100 bulk ingestion (40+ titles/sec).
     """
     init_staging_db(db_path)
+    # Session 106: the API base comes from the client's registry-resolved
+    # base_url, not the module-level WP_API_URL constant.
+    wp_api_url = f"{client.base_url}/wp-json/wp/v2/posts"
     print(f"[*] Starting Bolly4u API sync (per_page=100) -> {db_path}...", flush=True)
 
     page = 1
@@ -604,7 +610,7 @@ def sync_api_catalog(client: Bolly4uClient, db_path: Path, max_pages: int | None
             print(f"[*] Reached page limit ({max_pages}).", flush=True)
             break
 
-        url = f"{WP_API_URL}?per_page=100&page={page}"
+        url = f"{wp_api_url}?per_page=100&page={page}"
         code, posts, headers = client.get_json(url, timeout=15)
 
         if code != 200 or not posts or not isinstance(posts, list):
@@ -945,7 +951,14 @@ def main():
 
     if args.sync_api:
         client = Bolly4uClient(request_interval=args.delay)
-        sync_api_catalog(client, args.db_path, max_pages=args.max_pages)
+        count = sync_api_catalog(client, args.db_path, max_pages=args.max_pages)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] Bolly4u: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                client = Bolly4uClient(base_url=new_base, request_interval=args.delay)
+                sync_api_catalog(client, args.db_path, max_pages=args.max_pages)
         return
 
     run_crawler(args.db_path, workers=args.workers, delay=args.delay, limit=args.limit)

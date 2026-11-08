@@ -91,13 +91,13 @@ def _tls_context(*targets):
 
 ## ── Dynamic Domain Mapping & Configuration ─────────────────────────────────────
 DEFAULT_DOMAINS = {
-    "vegamovies": "https://vegamovies.gallery",
-    "vegamovies_sitemap": "https://vegamovies.gallery/sitemap.xml",
-    "sitemap": "https://vegamovies.gallery/sitemap.xml",
+    "vegamovies": "https://vegamovies.lease",
+    "vegamovies_sitemap": "https://vegamovies.lease/sitemap.xml",
+    "sitemap": "https://vegamovies.lease/sitemap.xml",
     "rogmovies": "https://rogmovies.one",
     "rogmovies_sitemap": "https://rogmovies.one/sitemap.xml",
-    "ssrmovies": "https://ssrmovies.gripe",
-    "ssrmovies_sitemap": "https://ssrmovies.gripe/post-sitemap.xml",
+    "ssrmovies": "https://new1.ssrmovies.page",
+    "ssrmovies_sitemap": "https://new1.ssrmovies.page/post-sitemap.xml",
     "7starhd": "https://7starhd.rich",
     "7starhd_sitemap": "https://7starhd.rich/post-sitemap.xml",
     "katmoviehd": "https://new.katmoviehd.top",
@@ -296,7 +296,7 @@ def normalize_url(url: str) -> str:
     """
     Normalizes a URL to point to current live domains if it uses an older/alternate domain.
     E.g. https://rogmovies.wtf/... -> https://rogmovies.one/...
-    https://ssrmovies.games/... -> https://ssrmovies.gripe/...
+    https://ssrmovies.games/... -> https://new1.ssrmovies.page/...
     https://katmovieshd.net/... -> https://katmoviehd.fans/...
     """
     if not url or not url.startswith("http"):
@@ -313,14 +313,14 @@ def normalize_url(url: str) -> str:
 
     # Check Vegamovies
     if "vegamovies" in host and not host.endswith("-apk.com"):
-        active_vega = DOMAINS.get("vegamovies", "https://vegamovies.gallery")
+        active_vega = DOMAINS.get("vegamovies", "https://vegamovies.lease")
         active_host = urllib.parse.urlparse(active_vega).netloc.lower()
         if host != active_host:
             return urllib.parse.urlunparse((p.scheme or "https", active_host, p.path, p.params, p.query, p.fragment))
 
     # Check SSRMovies (games -> gripe)
     if "ssrmovies" in host:
-        active_ssr = DOMAINS.get("ssrmovies", "https://ssrmovies.gripe")
+        active_ssr = DOMAINS.get("ssrmovies", "https://new1.ssrmovies.page")
         active_host = urllib.parse.urlparse(active_ssr).netloc.lower()
         if host != active_host:
             return urllib.parse.urlunparse((p.scheme or "https", active_host, p.path, p.params, p.query, p.fragment))
@@ -362,7 +362,7 @@ def normalize_url(url: str) -> str:
 
     # Check HDHub4u
     if "hdhub4u" in host:
-        active_hub = DOMAINS.get("hdhub4u", "https://new7.hdhub4u.cl")
+        active_hub = DOMAINS.get("hdhub4u", "https://new12.hdhub4u.cl")
         active_host = urllib.parse.urlparse(active_hub).netloc.lower()
         if host != active_host:
             return urllib.parse.urlunparse((p.scheme or "https", active_host, p.path, p.params, p.query, p.fragment))
@@ -1547,7 +1547,7 @@ def sync_sitemaps(site: str = "all", max_sub_sitemaps: int | None = None, includ
     # 1. Standard XML sitemap sites (Vegamovies, RogMovies)
     xml_sites = []
     if site in ("vegamovies", "all"):
-        xml_sites.append(("vegamovies", DOMAINS.get("vegamovies_sitemap", "https://vegamovies.gallery/sitemap.xml")))
+        xml_sites.append(("vegamovies", DOMAINS.get("vegamovies_sitemap", "https://vegamovies.lease/sitemap.xml")))
     if site in ("rogmovies", "all"):
         xml_sites.append(("rogmovies", DOMAINS.get("rogmovies_sitemap", "https://rogmovies.one/sitemap.xml")))
 
@@ -1622,7 +1622,7 @@ def sync_sitemaps(site: str = "all", max_sub_sitemaps: int | None = None, includ
         if verbose:
             print(f"\n[i] Fetching post feed for SSRMOVIES: {DOMAINS.get('ssrmovies')}/wp-json/wp/v2/posts")
         try:
-            ssr_api_url = f"{DOMAINS.get('ssrmovies', 'https://ssrmovies.gripe')}/wp-json/wp/v2/posts?per_page=100"
+            ssr_api_url = f"{DOMAINS.get('ssrmovies', 'https://new1.ssrmovies.page')}/wp-json/wp/v2/posts?per_page=100"
             c, _, resp_body = http_get(ssr_api_url)
             if c == 200:
                 posts_data = json.loads(resp_body)
@@ -1987,7 +1987,7 @@ def fetch_categories_hdhub4u(verbose: bool = False) -> list[str]:
     Discovers category archive paths for HDHub4u from homepage or returns verified defaults.
     Filters out adult/restricted categories.
     """
-    base_u = DOMAINS.get("hdhub4u", "https://new7.hdhub4u.cl")
+    base_u = DOMAINS.get("hdhub4u", "https://new12.hdhub4u.cl")
     code, _, html = http_get(base_u, timeout=10)
     if code == 200 and html:
         raw_cats = set(re.findall(r'href=["\'](?:https?://[^/]+)?/category/([a-zA-Z0-9\-_]+(?:/[a-zA-Z0-9\-_]+)?)/?["\']', html))
@@ -2007,7 +2007,7 @@ def fetch_category_urls_hdhub4u(category: str, max_pages: int = 3, verbose: bool
     Crawls paginated category archives on HDHub4u (e.g. /category/bollywood-movies/page/2/).
     Returns list of (loc, lastmod, slug, 'hdhub4u').
     """
-    base_u = DOMAINS.get("hdhub4u", "https://new7.hdhub4u.cl").rstrip("/")
+    base_u = DOMAINS.get("hdhub4u", "https://new12.hdhub4u.cl").rstrip("/")
     records = []
     seen_locs = set()
 
@@ -2062,7 +2062,7 @@ def fetch_categories_ssrmovies(verbose: bool = False) -> list[dict]:
     Discovers category list and post counts from SSRMovies WordPress REST API.
     Filters out adult/restricted categories.
     """
-    base_u = DOMAINS.get("ssrmovies", "https://ssrmovies.gripe").rstrip("/")
+    base_u = DOMAINS.get("ssrmovies", "https://new1.ssrmovies.page").rstrip("/")
     api_url = f"{base_u}/wp-json/wp/v2/categories?per_page=100"
     code, _, resp_body = http_get(api_url, timeout=10)
     if code == 200 and resp_body:
@@ -2093,7 +2093,7 @@ def fetch_category_urls_ssrmovies(category: str | int, max_pages: int = 3, verbo
     Crawls paginated category archives on SSRMovies using WP REST API with HTML fallback.
     Returns list of (loc, lastmod, slug, 'ssrmovies').
     """
-    base_u = DOMAINS.get("ssrmovies", "https://ssrmovies.gripe").rstrip("/")
+    base_u = DOMAINS.get("ssrmovies", "https://new1.ssrmovies.page").rstrip("/")
     records = []
     seen_locs = set()
 
@@ -8131,7 +8131,7 @@ def main():
             ping_domains(verbose=True)
         elif args.action == "harvest":
             print("\n[i] Harvesting live sister domains from network headers...")
-            h1 = harvest_sister_domains(http_get(DOMAINS.get("vegamovies", "https://vegamovies.gallery"))[2])
+            h1 = harvest_sister_domains(http_get(DOMAINS.get("vegamovies", "https://vegamovies.lease"))[2])
             h2 = harvest_sister_domains(http_get(DOMAINS.get("rogmovies", "https://rogmovies.one"))[2])
             all_h = {**h1, **h2}
             if all_h:

@@ -55,9 +55,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://10xflix.asia"
-WP_API_URL = f"{DEFAULT_BASE_URL}/wp-json/wp/v2/posts"
+SITE_NAME = "10xflix"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/10xflix.db")
     if Path("/home/ubuntu/radd-stream-data").exists()
@@ -92,8 +93,10 @@ MIN_REQUEST_DELAY = 0.3
 class TenXFlixClient:
     """HTTP Client with rate limiting and retry handling for 10xflix."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(0.0, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -681,8 +684,11 @@ def sync_wp_api_to_db(db_path: Path, max_pages: int | None = None, per_page: int
     """Syncs the entire 10xflix catalog via WP REST API (/wp/v2/posts) into sitemap_cache."""
     init_staging_db(db_path)
     client = TenXFlixClient()
+    # Session 106: the API base comes from the client's registry-resolved
+    # base_url, not the module-level WP_API_URL constant.
+    wp_api_url = f"{client.base_url}/wp-json/wp/v2/posts"
 
-    print(f"[*] Starting 10xflix WP REST API sync from {WP_API_URL}...", flush=True)
+    print(f"[*] Starting 10xflix WP REST API sync from {wp_api_url}...", flush=True)
     page = 1
     total_new = 0
     total_existing = 0
@@ -704,7 +710,7 @@ def sync_wp_api_to_db(db_path: Path, max_pages: int | None = None, per_page: int
     print(f"[*] Pre-loaded {len(existing_slugs):,} existing slugs and {len(existing_locs):,} existing locs from {db_path.name}.", flush=True)
 
     while not STOP_REQUESTED:
-        query_url = f"{WP_API_URL}?per_page={per_page}&page={page}&_embed=1"
+        query_url = f"{wp_api_url}?per_page={per_page}&page={page}&_embed=1"
         t0 = time.time()
         code, posts, headers = client.get_json(query_url, timeout=15)
         dt = time.time() - t0
@@ -1017,7 +1023,13 @@ def main():
         return
 
     if args.sync_api:
-        sync_wp_api_to_db(args.db_path, max_pages=args.max_pages)
+        count = sync_wp_api_to_db(args.db_path, max_pages=args.max_pages)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] 10xflix: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_wp_api_to_db(args.db_path, max_pages=args.max_pages)
         return
 
     run_crawler(

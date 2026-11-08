@@ -57,8 +57,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://new.katmoviehd.top"
+SITE_NAME = "katmoviehd"
 KMHD_API_BASE = "https://api.dandndn.one/api/v1"
 KMHD_JWT_TOKEN = (
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
@@ -1527,8 +1529,10 @@ def extract_post_data_katmoviehd_detailed(
     poster_url = cached_item.get("thumbnail_image") if cached_item else None
     genres_list = cached_item.get("categories", []) if cached_item else []
 
-    # Fetch post detail chunk
-    detail_url = f"{DEFAULT_BASE_URL}/{slug}/__data.json"
+    # Fetch post detail chunk. Session 106: derive the origin from the post
+    # URL itself, not the pinned DEFAULT_BASE_URL — the host rotates.
+    _split = urllib.parse.urlsplit(post_url)
+    detail_url = f"{_split.scheme}://{_split.netloc}/{slug}/__data.json"
     code, resp_headers, resp_text = client.get_text(detail_url, timeout=timeout)
     if code != 200:
         return None, cause_from_http_code(code, resp_text)
@@ -1837,8 +1841,11 @@ def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int
     """Syncs the entire KatMovieHD catalog via SvelteKit __data.json pagination into sitemap_cache."""
     init_staging_db(db_path)
     client = KatMovieHDClient(request_interval=0.2)
+    # Session 106: the catalog origin comes from the registry, not the
+    # pinned DEFAULT_BASE_URL constant.
+    base_url = get_active_base_url(SITE_NAME, DEFAULT_BASE_URL).rstrip("/")
 
-    print(f"[*] Starting KatMovieHD catalog sync from {DEFAULT_BASE_URL}/__data.json...", flush=True)
+    print(f"[*] Starting KatMovieHD catalog sync from {base_url}/__data.json...", flush=True)
     page = 1
     total_synced = 0
     empty_pages_streak = 0
@@ -1848,7 +1855,7 @@ def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int
             print(f"[*] Reached requested max_pages limit ({max_pages}). Stopping sync.", flush=True)
             break
 
-        query_url = f"{DEFAULT_BASE_URL}/__data.json?page={page}"
+        query_url = f"{base_url}/__data.json?page={page}"
         t0 = time.time()
         code, _, resp_text = client.get_text(query_url, timeout=15)
         dt = time.time() - t0
@@ -1882,7 +1889,7 @@ def sync_sveltekit_api_to_db(db_path: Path, max_pages: int | None = None) -> int
             slug = it.get("slug")
             if not slug:
                 continue
-            permalink = f"{DEFAULT_BASE_URL}/{slug}"
+            permalink = f"{base_url}/{slug}"
             lastmod = it.get("created")
             raw_json_str = json.dumps(it)
             records.append((permalink, lastmod, slug, 0, "katmoviehd", raw_json_str))
@@ -2223,7 +2230,13 @@ def main():
         return
 
     if args.sync_api:
-        sync_sveltekit_api_to_db(args.db_path, max_pages=args.max_pages)
+        count = sync_sveltekit_api_to_db(args.db_path, max_pages=args.max_pages)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] KatMovieHD: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_sveltekit_api_to_db(args.db_path, max_pages=args.max_pages)
         return
 
     run_crawler(

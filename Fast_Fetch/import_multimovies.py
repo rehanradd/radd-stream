@@ -18,9 +18,11 @@ from pathlib import Path
 from urllib.robotparser import RobotFileParser
 
 import fast_fetch
+from domain_resolver import get_active_base_url, resolve_site
 
 
 DEFAULT_BASE_URL = "https://m1.multimovies.courses"
+SITE_NAME = "multimovies"
 MAX_RESPONSE_BYTES = 20 * 1024 * 1024
 RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
 ADULT_PATTERNS = (
@@ -729,9 +731,21 @@ def _process_series(
 
 
 def run_import(args: argparse.Namespace) -> int:
-    client = SiteClient(args.base_url, args.request_interval)
+    # Session 106: the origin comes from the registry unless the operator
+    # passed --base-url explicitly.
+    base_url = args.base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)
+    client = SiteClient(base_url, args.request_interval)
     client.load_robots()
     title_urls, episode_urls, episodes_by_root = discover_sitemaps(client)
+    if not title_urls and not episode_urls:
+        # Empty discovery: the cached domain may have moved — run the chain
+        # once and retry discovery on the verified base, and only then.
+        new_base = resolve_site(SITE_NAME)
+        if new_base and new_base.rstrip("/") != base_url.rstrip("/"):
+            print(f"[!] MultiMovies: sitemap discovery found 0 titles and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+            client = SiteClient(new_base, args.request_interval)
+            client.load_robots()
+            title_urls, episode_urls, episodes_by_root = discover_sitemaps(client)
 
     roots = _unique(title_urls + list(episodes_by_root))
     if args.only_root:
@@ -841,7 +855,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Import MultiMovies title pages, episode servers, and download mirrors."
     )
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Current MultiMovies origin.")
+    parser.add_argument("--base-url", default=None, help="Current MultiMovies origin (default: registry live domain).")
     parser.add_argument(
         "--request-interval",
         type=float,

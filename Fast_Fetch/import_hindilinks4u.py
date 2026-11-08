@@ -38,7 +38,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 from config import staging_db_path
-from domain_resolver import get_active_base_url
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://www.hindilinks4u.zip"
 SITE_NAME = "hindilinks4u"
@@ -148,8 +148,10 @@ def get_ssl_context() -> ssl.SSLContext:
 class Hindilinks4uClient:
     """Rate-limited HTTP client with retries for the Hindilinks4u WordPress site."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(MIN_REQUEST_DELAY, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -1032,6 +1034,65 @@ def print_status(db_path: Path):
             print(f"  {name:26s} {cnt:6,}")
 
 
+def sync_sitemap_to_db(db_path: Path, base_url: str, max_items: int | None = None) -> int:
+    """Syncs Hindilinks4u post URLs via sitemap_index.xml into sitemap_cache.
+
+    Session 106: this function did not exist — main()'s --sync-sitemap
+    branch called it and died with NameError, so the queue could never be
+    filled from the CLI. Returns the number of URLs queued (0 when the
+    sitemap index could not be fetched — the empty-sync signal the domain
+    chain keys on).
+    """
+    init_staging_db(db_path)
+    client = Hindilinks4uClient(base_url=base_url)
+    base = base_url.rstrip("/")
+
+    index_url = f"{base}/sitemap_index.xml"
+    print(f"[*] Fetching Hindilinks4u sitemap index from {index_url}...", flush=True)
+    code, _, xml_text = client.get_text(index_url, timeout=20)
+    urls: list[str] = []
+    if code == 200 and xml_text:
+        subs = re.findall(r"""<loc>(https?://[^<\s]+)</loc>""", xml_text)
+        subs = [u for u in subs if u.endswith(".xml")]
+        if not subs:
+            urls = [u for u in re.findall(r"""<loc>(https?://[^<\s]+)</loc>""", xml_text)
+                    if not u.endswith(".xml")]
+        for sub in subs:
+            code2, _, sub_xml = client.get_text(sub, timeout=20)
+            if code2 == 200 and sub_xml:
+                urls += [u for u in re.findall(r"""<loc>(https?://[^<\s]+)</loc>""", sub_xml)
+                         if not u.endswith(".xml")]
+    if not urls:
+        # Fallback: a flat sitemap.xml with post locs directly.
+        code, _, xml_text = client.get_text(f"{base}/sitemap.xml", timeout=20)
+        if code == 200 and xml_text:
+            urls = [u for u in re.findall(r"""<loc>(https?://[^<\s]+)</loc>""", xml_text)
+                    if not u.endswith(".xml")]
+    if not urls:
+        print(f"[!] Failed to fetch sitemap index (HTTP {code})", flush=True)
+        return 0
+
+    if max_items:
+        urls = urls[:max_items]
+    records = []
+    for u in urls:
+        slug = u.rstrip("/").split("/")[-1]
+        records.append((u, None, slug, 0, "hindilinks4u", None))
+    if records:
+        with sqlite3.connect(str(db_path)) as conn:
+            conn.executemany(
+                """
+                INSERT INTO sitemap_cache (loc, lastmod, slug, scraped, site, raw_json)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(loc) DO NOTHING;
+                """,
+                records,
+            )
+            conn.commit()
+    print(f"[✓] Sitemap sync complete: {len(records):,} URLs queued in sitemap_cache.", flush=True)
+    return len(records)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Hindilinks4u staging scraper (hindilinks4u.zip)")
     parser.add_argument("--sync-sitemap", action="store_true", help="Sync post URLs from sitemaps")
@@ -1050,7 +1111,13 @@ def main():
         print_status(db_path)
         return
     if args.sync_sitemap:
-        sync_sitemap_to_db(db_path, base_url, args.max_items)
+        count = sync_sitemap_to_db(db_path, base_url, args.max_items)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] Hindilinks4u: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_sitemap_to_db(db_path, new_base, args.max_items)
         return
     run_crawler(db_path, base_url, workers=args.workers, delay=args.delay, limit=args.limit)
 

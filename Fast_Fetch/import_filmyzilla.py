@@ -45,6 +45,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 # Add Fast_Fetch to sys.path
 BASE_DIR = Path(__file__).parent.resolve()
@@ -52,6 +53,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 DEFAULT_BASE_URL = "https://www.filmyzilla80.com"
+SITE_NAME = "filmyzilla"
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/filmyzilla.db") if Path("/home/ubuntu/radd-stream-data").exists() else BASE_DIR / "filmyzilla.db"
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -100,8 +102,10 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 class FilmyZillaClient:
     """HTTP Client with rate limiting and redirect resolution for FilmyZilla."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(0.0, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -382,7 +386,9 @@ def parse_filmyzilla_movie_page(html_text: str, page_url: str) -> dict | None:
             if p_src.startswith("//"):
                 poster_url = "https:" + p_src
             elif p_src.startswith("/"):
-                poster_url = DEFAULT_BASE_URL + p_src
+                # Session 106: resolve relative URLs against the page itself,
+                # not the pinned DEFAULT_BASE_URL — the host rotates.
+                poster_url = urllib.parse.urljoin(page_url, p_src)
             elif p_src.startswith("http"):
                 poster_url = p_src
             if poster_url:
@@ -465,7 +471,8 @@ def parse_filmyzilla_movie_page(html_text: str, page_url: str) -> dict | None:
         seen_ids.add(server_id)
 
         if full_href.startswith("/"):
-            server_url = f"{DEFAULT_BASE_URL}{full_href}"
+            # Session 106: resolve against the page itself (see poster_url).
+            server_url = urllib.parse.urljoin(page_url, full_href)
         else:
             server_url = full_href
 
@@ -764,9 +771,11 @@ def save_post_to_staging_db(db_path: Path, post_data: dict) -> bool:
     return True
 
 
-def sync_sitemap_to_db(db_path: Path, base_url: str = DEFAULT_BASE_URL, max_items: int | None = None) -> int:
+def sync_sitemap_to_db(db_path: Path, base_url: str | None = None, max_items: int | None = None) -> int:
     """Syncs the entire FilmyZilla movie catalog via /sitemap.xml into sitemap_cache."""
     init_staging_db(db_path)
+    # Session 106: the base comes from the registry unless given explicitly.
+    base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
     client = FilmyZillaClient(base_url=base_url)
 
     sitemap_url = f"{base_url}/sitemap.xml"
@@ -947,7 +956,13 @@ def main():
         return
 
     if args.sync_sitemap:
-        sync_sitemap_to_db(args.db_path, max_items=args.max_items)
+        count = sync_sitemap_to_db(args.db_path, max_items=args.max_items)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] FilmyZilla: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_sitemap_to_db(args.db_path, base_url=new_base, max_items=args.max_items)
 
     if not args.sync_sitemap or args.limit:
         run_crawler(

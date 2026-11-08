@@ -27,8 +27,10 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 BASE_URL = "https://www.desicinemas.pk"
+SITE_NAME = "desicinemas"
 SITEMAP_INDEX_URL = f"{BASE_URL}/sitemap_index.xml"
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/desicinemas.db")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -839,13 +841,22 @@ def scrape_post_item(item: tuple, client: DesiCinemasClient, unwrap_bridges: boo
 
 
 # --- Sitemap Ingestion ---
-def sync_sitemaps(client: DesiCinemasClient, db_path: Path, max_sitemaps: int | None = None):
-    """Discovers and caches movie, series, and episode URLs from DesiCinemas XML sitemaps."""
-    print(f"[*] Fetching sitemap index -> {SITEMAP_INDEX_URL}...")
-    status, _, index_xml, _ = client.get_text(SITEMAP_INDEX_URL, timeout=15.0)
+def sync_sitemaps(client: DesiCinemasClient, db_path: Path, max_sitemaps: int | None = None,
+                  base_url: str | None = None) -> int:
+    """Discovers and caches movie, series, and episode URLs from DesiCinemas XML sitemaps.
+
+    Returns the number of URLs queued (0 when the sitemap index could not be
+    fetched — the empty-sync signal the domain chain keys on).
+    """
+    # Session 106: the sitemap index comes from the registry's live domain,
+    # not the pinned BASE_URL constant.
+    base = (base_url or get_active_base_url(SITE_NAME, BASE_URL)).rstrip("/")
+    index_url = f"{base}/sitemap_index.xml"
+    print(f"[*] Fetching sitemap index -> {index_url}...")
+    status, _, index_xml, _ = client.get_text(index_url, timeout=15.0)
     if status != 200 or not index_xml:
         print(f"[!] Failed to fetch sitemap index (HTTP {status})", flush=True)
-        return
+        return 0
 
     sub_sitemaps = re.findall(r"<loc>(https://[^<]+-sitemap\d*\.xml)</loc>", index_xml)
     # Filter for movies, series, episodes
@@ -865,7 +876,7 @@ def sync_sitemaps(client: DesiCinemasClient, db_path: Path, max_sitemaps: int | 
     with sqlite3.connect(str(db_path)) as conn:
         for sitemap_url in target_sitemaps:
             print(f"  -> Ingesting {sitemap_url}...", flush=True)
-            s_status, _, s_xml, _ = client.get_text(sitemap_url, referer=SITEMAP_INDEX_URL, timeout=15.0)
+            s_status, _, s_xml, _ = client.get_text(sitemap_url, referer=index_url, timeout=15.0)
             if s_status != 200 or not s_xml:
                 continue
 
@@ -889,6 +900,7 @@ def sync_sitemaps(client: DesiCinemasClient, db_path: Path, max_sitemaps: int | 
         conn.commit()
 
     print(f"[✓] Sitemap sync complete: {total_added:,} URLs queued in sitemap_cache.", flush=True)
+    return total_added
 
 
 # --- Crawler Execution Loop ---
@@ -972,7 +984,14 @@ def main():
     client = DesiCinemasClient(request_interval=args.delay)
 
     if args.sync_sitemaps:
-        sync_sitemaps(client, args.db_path, max_sitemaps=args.max_sitemaps)
+        count = sync_sitemaps(client, args.db_path, max_sitemaps=args.max_sitemaps)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] DesiCinemas: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_sitemaps(client, args.db_path, max_sitemaps=args.max_sitemaps,
+                              base_url=new_base)
 
     run_crawler(
         args.db_path,

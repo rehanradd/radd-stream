@@ -51,8 +51,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://7starhd.surgery"
+SITE_NAME = "7starhd"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/7starhd.db")
     if Path("/home/ubuntu/radd-stream-data").exists()
@@ -87,8 +89,10 @@ MIN_REQUEST_DELAY = 0.3
 class SevenStarHDClient:
     """HTTP Client with rate limiting and retry handling for 7StarHD / 10xflix & MobileJSR."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(0.0, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -615,7 +619,7 @@ def requeue_failed_urls(db_path: Path, site_name: str = "7starhd") -> int:
 
 
 def run_7starhd_scraper(
-    base_url: str = DEFAULT_BASE_URL,
+    base_url: str | None = None,
     db_path: Path = DEFAULT_DB_PATH,
     limit: int | None = None,
     workers: int = 5,
@@ -627,6 +631,10 @@ def run_7starhd_scraper(
     """
     Multi-threaded crawler orchestrator for 7StarHD / 10xflix into dedicated staging SQLite DB.
     """
+    # Session 106: the base comes from the registry for the requested site
+    # unless the caller passed one explicitly.
+    base_url = (base_url or get_active_base_url(
+        site_name, DEFAULT_BASE_URL)).rstrip("/")
     if not 1 <= workers <= MAX_SAFE_WORKERS:
         raise ValueError(f"workers must be between 1 and {MAX_SAFE_WORKERS}")
     if delay < MIN_REQUEST_DELAY:
@@ -767,7 +775,7 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=None, help="Limit number of posts to scrape")
     parser.add_argument("--workers", type=int, default=5, help="Number of concurrent scraper workers")
     parser.add_argument("--delay", type=float, default=0.3, help="Request rate-limit delay in seconds")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Base domain for site")
+    parser.add_argument("--base-url", default=None, help="Base domain for site (default: registry live domain)")
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH), help="Path to staging SQLite database")
     parser.add_argument("--site", default="7starhd", choices=["7starhd", "10xflix"], help="Target site name")
     parser.add_argument("--status", action="store_true", help="Print staging database stats and exit")
@@ -779,13 +787,15 @@ def parse_args():
 def main():
     args = parse_args()
     db_path = Path(args.db_path).resolve()
-    base_url = args.base_url
+    # Session 106: the base comes from the registry for the requested site
+    # (the old special case pinned the dead 10xflix.bond domain).
+    site_key = "10xflix" if args.site == "10xflix" else "7starhd"
+    base_url = args.base_url or get_active_base_url(
+        site_key, DEFAULT_BASE_URL if site_key == "7starhd" else "https://10xflix.asia")
 
-    # Auto-adjust default domain if site is 10xflix
-    if args.site == "10xflix" and base_url == DEFAULT_BASE_URL:
-        base_url = "https://10xflix.bond"
-        if args.db_path == str(DEFAULT_DB_PATH):
-            db_path = BASE_DIR / "10xflix.db"
+    # Auto-adjust default DB path if site is 10xflix
+    if args.site == "10xflix" and args.db_path == str(DEFAULT_DB_PATH):
+        db_path = BASE_DIR / "10xflix.db"
 
     client = SevenStarHDClient(base_url=base_url, request_interval=args.delay)
 
@@ -794,7 +804,14 @@ def main():
         return
 
     if args.sync_api:
-        sync_api_to_db(client, db_path, max_pages=args.max_pages, site_name=args.site, start_page=args.start_page)
+        count = sync_api_to_db(client, db_path, max_pages=args.max_pages, site_name=args.site, start_page=args.start_page)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(site_key)
+            if new_base:
+                print(f"[!] {args.site}: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                client = SevenStarHDClient(base_url=new_base, request_interval=args.delay)
+                sync_api_to_db(client, db_path, max_pages=args.max_pages, site_name=args.site, start_page=args.start_page)
         return
 
     run_7starhd_scraper(

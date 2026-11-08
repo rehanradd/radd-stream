@@ -46,8 +46,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://vegamovies.lease"
+SITE_NAME = "vegamovies"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/vegamovies.db")
     if Path("/home/ubuntu/radd-stream-data").exists()
@@ -82,8 +84,10 @@ MIN_REQUEST_DELAY = 0.3
 class VegamoviesClient:
     """HTTP Client with rate limiting and retry handling for Vegamovies & Nexdrive."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(0.0, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -655,7 +659,7 @@ def get_status_summary(db_path: Path):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Vegamovies Staging Importer")
-    parser.add_argument("--base-url", default=DEFAULT_BASE_URL, help="Base origin URL")
+    parser.add_argument("--base-url", default=None, help="Base origin URL (default: registry live domain)")
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH), help="Target SQLite staging database")
     parser.add_argument("--sync-sitemap", action="store_true", help="Download and sync sitemap XML to database")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of titles to scrape")
@@ -674,14 +678,24 @@ def main():
         get_status_summary(db_path)
         return
 
-    client = VegamoviesClient(args.base_url, request_interval=args.delay)
+    # Session 106: an explicit --base-url wins; otherwise the registry's
+    # live domain (the client's None default resolves it the same way).
+    base_url = args.base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)
+    client = VegamoviesClient(base_url, request_interval=args.delay)
 
     if args.sync_sitemap:
-        sync_sitemap_to_db(client, db_path)
+        count = sync_sitemap_to_db(client, db_path)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] VegaMovies: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                client = VegamoviesClient(new_base, request_interval=args.delay)
+                sync_sitemap_to_db(client, db_path)
         return
 
     run_vegamovies_scraper(
-        base_url=args.base_url,
+        base_url=base_url,
         db_path=db_path,
         limit=args.limit,
         workers=args.workers,

@@ -32,11 +32,18 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 # --- Constants ---
 DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/9xmovies.db")
 BASE_URL = "https://9xmovie.camera"
-WP_API_URL = "https://9xmovie.bayern/wp-json/wp/v2/posts"
+SITE_NAME = "9xmovies"
+
+
+def _wp_api_url() -> str:
+    """WP REST API base, from the registry (Session 106). The old constant
+    pinned the dead 9xmovie.bayern domain."""
+    return get_active_base_url(SITE_NAME, BASE_URL).rstrip("/") + "/wp-json/wp/v2/posts"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
 STOP_REQUESTED = False
@@ -914,7 +921,7 @@ def sync_api_catalog(
             print(f"[*] Reached page limit ({max_pages}).", flush=True)
             break
 
-        url = f"{WP_API_URL}?per_page=100&page={page}"
+        url = f"{_wp_api_url()}?per_page=100&page={page}"
         code, posts, headers = client.get_json(url, timeout=15.0)
 
         if code != 200 or not posts or not isinstance(posts, list):
@@ -1192,7 +1199,13 @@ def main():
         return
 
     if args.sync_api:
-        sync_api_catalog(client, args.db_path, max_pages=args.max_pages)
+        count = sync_api_catalog(client, args.db_path, max_pages=args.max_pages)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] 9xmovies: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_api_catalog(client, args.db_path, max_pages=args.max_pages)
 
     run_crawler(
         args.db_path,

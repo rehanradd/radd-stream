@@ -1,64 +1,172 @@
 {
-  "version": "1.0",
-  "updated_at": "2026-11-08T02:37:07Z",
+  "version": "2.0",
+  "updated_at": "2026-11-08T09:57:00Z",
   "sites": {
     "10xflix": {
       "active_base_url": "https://10xflix.asia",
+      "last_verified": "2026-11-08T09:46:20Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
         "https://10xflix.asia",
         "https://10xflix.bond"
       ],
+      "slug_variants": [
+        "10xflix"
+      ],
+      "tld_history": [
+        "asia",
+        "hair",
+        "bond",
+        "help"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://10xflix.hair",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://10xflix.asia",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:46:20Z",
+      "api_endpoint": "/wp-json/wp/v2/posts"
     },
     "7starhd": {
       "active_base_url": "https://7starhd.surgery",
+      "last_verified": "2026-11-08T09:46:20Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
         "https://7starhd.surgery",
         "https://7starhd.dentist"
       ],
+      "slug_variants": [
+        "7starhd"
+      ],
+      "tld_history": [
+        "surgery",
+        "dentist",
+        "rich",
+        "talk"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://7starhd.dentist",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://7starhd.surgery",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:46:20Z",
+      "api_endpoint": "/wp-json/wp/v2/posts"
     },
     "9xmovies": {
       "active_base_url": "https://9xmovie.camera",
+      "last_verified": "2026-11-08T09:46:22Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
         "https://9xmovie.camera",
         "https://9xmovie.bayern"
       ],
+      "slug_variants": [
+        "9xmovie",
+        "9xmovies"
+      ],
+      "tld_history": [
+        "camera",
+        "bayern",
+        "click",
+        "photo"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://9xmovie.bayern",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://9xmovie.camera",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:46:22Z",
+      "api_endpoint": "/wp-json/wp/v2/posts"
     },
     "bolly4u": {
-      "active_base_url": "https://bolly4u.lol",
+      "active_base_url": "https://bolly4u.lgbt",
+      "last_verified": "2026-11-08T09:46:24Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
+        "https://bolly4u.lgbt",
         "https://bolly4u.lol",
         "https://bolly4uv.com"
       ],
+      "slug_variants": [
+        "bolly4u",
+        "bolly4uv"
+      ],
+      "tld_history": [
+        "lol",
+        "com",
+        "org",
+        "click"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://bolly4uv.com",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://bolly4u.lol",
+          "seen_from": "2026-11-08"
+        },
+        {
+          "domain": "https://bolly4u.lol",
+          "seen_until": "2026-11-08T09:46:24Z"
+        },
+        {
+          "domain": "https://bolly4u.lgbt",
+          "seen_from": "2026-11-08T09:46:24Z"
+        }
+      ],
+      "last_checked": "2026-11-08T09:46:24Z",
+      "api_endpoint": "/wp-json/wp/v2/posts"
     },
     "desicinemas": {
       "active_base_url": "https://www.desicinemas.pk",
+      "last_verified": "2026-11-08T09:46:28Z",
+      "verified_by": "sitemap",
       "known_mirrors": [
         "https://www.desicinemas.pk"
       ],
+      "slug_variants": [
+        "desicinemas"
+      ],
+      "tld_history": [
+        "pk",
+        "tv",
+        "chat"
+      ],
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap_index.xml",
       "status": "active",
-      "notes": "desicinemas.tv hijacked (koi5000sultan.com), desicinemas.chat dead \u2014 both dropped 2026-11-08.",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [],
+      "last_checked": "2026-11-08T09:46:28Z",
+      "sitemap_endpoint": "/sitemap_index.xml",
+      "notes": "desicinemas.tv hijacked (koi5000sultan.com), desicinemas.chat dead — both dropped 2026-11-08."
     },
     "filmyzilla": {
       "active_base_url": "https://www.filmyzilla80.com",
+      "last_verified": "2026-11-08T09:46:29Z",
+      "verified_by": "sitemap",
       "known_mirrors": [
         "https://www.filmyzilla80.com",
         "https://filmyzilla80.com",
@@ -67,155 +175,447 @@
         "https://www.filmyzilla75.com",
         "https://www.filmyzilla74.com"
       ],
+      "slug_variants": [
+        "filmyzilla",
+        "thefilmyzilla"
+      ],
+      "tld_history": [
+        "in",
+        "com"
+      ],
+      "numeric_pattern": {
+        "stem": "filmyzilla",
+        "tld": "com",
+        "range": [
+          70,
+          95
+        ]
+      },
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap.xml",
       "status": "active",
-      "notes": "filmyzilla75/74 301 to filmyzilla80; thefilmyzilla.in redirects to HQ (filmyzillahq.in, second live shape).",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://thefilmyzilla.in",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://www.filmyzilla80.com",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:46:29Z",
+      "sitemap_endpoint": "/sitemap.xml",
+      "notes": "filmyzilla75/74 301 to filmyzilla80; thefilmyzilla.in redirects to HQ (filmyzillahq.in, second live shape)."
     },
     "hdhub4u": {
       "active_base_url": "https://new12.hdhub4u.cl",
+      "last_verified": "2026-11-08T09:46:30Z",
+      "verified_by": "sitemap",
       "known_mirrors": [
         "https://new12.hdhub4u.cl",
         "https://new11.hdhub4u.cl",
         "https://hdhub4us.co.in"
       ],
+      "github_keys": {
+        "saurabh": "hdhub4u",
+        "phisher": "hdhub4u"
+      },
+      "slug_variants": [
+        "hdhub4u"
+      ],
+      "tld_history": [
+        "cl",
+        "fans",
+        "free",
+        "frl",
+        "ltd",
+        "xyz",
+        "link",
+        "cc",
+        "in"
+      ],
+      "numeric_pattern": {
+        "prefix": "new",
+        "host": "hdhub4u.cl",
+        "range": [
+          1,
+          20
+        ]
+      },
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap.xml",
       "status": "active",
-      "notes": "hdhub4u.fans is a landing page, new3/new2.hdhub4u.free dead \u2014 dropped. hdhub4us.co.in is a live variant (user-found 2026-11-08).",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://new8.hdhub4u.cl",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://new12.hdhub4u.cl",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:46:30Z",
+      "sitemap_endpoint": "/sitemap.xml",
+      "notes": "hdhub4u.fans is a landing page, new3/new2.hdhub4u.free dead — dropped. hdhub4us.co.in is a live variant (user-found 2026-11-08)."
     },
     "hdtvb": {
       "active_base_url": "https://hdutv.com",
+      "last_verified": "",
+      "verified_by": "",
       "known_mirrors": [
         "https://hdutv.com",
         "https://hdtvb.net"
       ],
+      "slug_variants": [
+        "hdtvb",
+        "hdutv"
+      ],
+      "tld_history": [
+        "net",
+        "com"
+      ],
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap.xml",
-      "status": "active"
+      "status": "retired",
+      "rotation_history": [],
+      "last_checked": "2026-11-08T09:55:08Z",
+      "sitemap_endpoint": "/sitemap.xml"
     },
     "katmoviehd": {
-      "active_base_url": "https://new.katmoviehd.top",
+      "active_base_url": "https://katmoviehd.mom",
+      "last_verified": "2026-11-08T09:47:23Z",
+      "verified_by": "homepage",
       "known_mirrors": [
+        "https://katmoviehd.mom",
         "https://new.katmoviehd.top",
         "https://katmovieshd.net",
         "https://katmoviehd.top"
       ],
+      "slug_variants": [
+        "katmoviehd",
+        "katmovieshd"
+      ],
+      "tld_history": [
+        "top",
+        "net",
+        "fans"
+      ],
       "api_type": "sveltekit",
-      "api_endpoint": "/__data.json",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://new.katmoviehd.top",
+          "seen_until": "2026-11-08T09:47:23Z"
+        },
+        {
+          "domain": "https://katmoviehd.mom",
+          "seen_from": "2026-11-08T09:47:23Z"
+        }
+      ],
+      "last_checked": "2026-11-08T09:47:23Z",
+      "api_endpoint": "/__data.json"
     },
     "moviezguru": {
       "active_base_url": "https://moviezguru.technology",
+      "last_verified": "2026-11-08T09:47:24Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
         "https://moviezguru.technology",
         "https://moviezguru.guru"
       ],
+      "slug_variants": [
+        "moviezguru"
+      ],
+      "tld_history": [
+        "technology",
+        "guru"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "notes": "moviezguru.guru redirects to .technology.",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://moviezguru.guru",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://moviezguru.technology",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:47:24Z",
+      "api_endpoint": "/wp-json/wp/v2/posts",
+      "notes": "moviezguru.guru redirects to .technology."
     },
     "multimovies": {
       "active_base_url": "https://m1.multimovies.courses",
+      "last_verified": "2026-11-08T09:47:24Z",
+      "verified_by": "sitemap",
       "known_mirrors": [
         "https://m1.multimovies.courses",
         "https://multimovies.garden"
       ],
+      "github_keys": {
+        "saurabh": "multimovies",
+        "phisher": "multimovies"
+      },
+      "slug_variants": [
+        "multimovies"
+      ],
+      "tld_history": [
+        "courses",
+        "garden"
+      ],
+      "prefixes": [
+        "",
+        "m1"
+      ],
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap.xml",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [],
+      "last_checked": "2026-11-08T09:47:24Z",
+      "sitemap_endpoint": "/sitemap.xml"
     },
     "rareanimes": {
       "active_base_url": "https://www.rareanimes.fans",
+      "last_verified": "2026-11-08T09:47:26Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
         "https://www.rareanimes.fans",
         "https://www.rareanimes.mov"
       ],
+      "slug_variants": [
+        "rareanimes"
+      ],
+      "tld_history": [
+        "fans",
+        "mov"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://www.rareanimes.mov",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://www.rareanimes.fans",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:47:26Z",
+      "api_endpoint": "/wp-json/wp/v2/posts"
     },
     "rogmovies": {
       "active_base_url": "https://rogmovies.asia",
+      "last_verified": "2026-11-08T09:47:27Z",
+      "verified_by": "sitemap",
       "known_mirrors": [
         "https://rogmovies.asia"
       ],
+      "github_keys": {
+        "saurabh": "rogmovies",
+        "phisher": "rogmovies"
+      },
+      "slug_variants": [
+        "rogmovies"
+      ],
+      "tld_history": [
+        "one",
+        "quest",
+        "im",
+        "asia",
+        "wtf",
+        "vip",
+        "club"
+      ],
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap.xml",
       "status": "active",
-      "notes": "rogmovies.one/.quest are a vegamovies doorway now, not rogmovies \u2014 dropped. Live base found by the user 2026-11-08.",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://rogmovies.one",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://rogmovies.asia",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:47:27Z",
+      "sitemap_endpoint": "/sitemap.xml",
+      "notes": "rogmovies.one/.quest are a vegamovies doorway now, not rogmovies — dropped. Live base found by the user 2026-11-08."
     },
     "ssrmovies": {
       "active_base_url": "https://new1.ssrmovies.page",
+      "last_verified": "2026-11-08T09:47:27Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
         "https://new1.ssrmovies.page",
         "https://ssrmovies.surf",
         "https://ssrmovies.quest",
         "https://ssrmovies.gripe"
       ],
+      "slug_variants": [
+        "ssrmovies"
+      ],
+      "tld_history": [
+        "page",
+        "surf",
+        "quest",
+        "gripe"
+      ],
+      "prefixes": [
+        "",
+        "new1"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://ssrmovies.surf",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://new1.ssrmovies.page",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:47:27Z",
+      "api_endpoint": "/wp-json/wp/v2/posts"
     },
     "vegamovies": {
       "active_base_url": "https://vegamovies.lease",
+      "last_verified": "2026-11-08T09:47:30Z",
+      "verified_by": "sitemap",
       "known_mirrors": [
         "https://vegamovies.lease",
         "https://new1.vegamovies.lease",
         "https://1vegamovies.shop"
       ],
+      "bookmark_domain": "https://vglist.nl",
+      "telegram_channel": "vega_officials",
+      "github_keys": {
+        "saurabh": "vegamovies",
+        "phisher": "vegamovies"
+      },
+      "slug_variants": [
+        "vegamovies"
+      ],
+      "tld_history": [
+        "lease",
+        "gallery",
+        "shop",
+        "market",
+        "nl"
+      ],
+      "prefixes": [
+        "",
+        "1",
+        "new1"
+      ],
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap.xml",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://new1.vegamovies.lease",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://vegamovies.lease",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:47:30Z",
+      "sitemap_endpoint": "/sitemap.xml"
     },
     "world4ufree": {
       "active_base_url": "https://world4ufree.gay",
+      "last_verified": "2026-11-08T09:47:31Z",
+      "verified_by": "wp-json",
       "known_mirrors": [
         "https://world4ufree.gay",
         "https://world4ufree.tours"
       ],
+      "slug_variants": [
+        "world4ufree"
+      ],
+      "tld_history": [
+        "gay",
+        "tours",
+        "garden"
+      ],
       "api_type": "wp_rest_api",
-      "api_endpoint": "/wp-json/wp/v2/posts",
       "status": "active",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [
+        {
+          "domain": "https://world4ufree.tours",
+          "seen_until": "2026-10-21"
+        },
+        {
+          "domain": "https://world4ufree.gay",
+          "seen_from": "2026-11-08"
+        }
+      ],
+      "last_checked": "2026-11-08T09:47:31Z",
+      "api_endpoint": "/wp-json/wp/v2/posts"
     },
     "hindilinks4u": {
       "active_base_url": "https://www.hindilinks4u.zip",
+      "last_verified": "2026-11-08T09:46:58Z",
+      "verified_by": "homepage",
       "known_mirrors": [
         "https://www.hindilinks4u.zip",
         "https://hindilinks4u.pink"
       ],
-      "notes": ".pink is behind Cloudflare JS challenge; .zip serves plain HTML.",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "slug_variants": [
+        "hindilinks4u"
+      ],
+      "tld_history": [
+        "zip",
+        "pink"
+      ],
+      "api_type": "homepage",
+      "status": "active",
+      "rotation_history": [],
+      "last_checked": "2026-11-08T09:46:58Z",
+      "notes": ".pink is behind Cloudflare JS challenge; .zip serves plain HTML."
     },
     "toonworld4all": {
       "active_base_url": "https://toonworld4all.me",
+      "last_verified": "2026-11-08T09:47:28Z",
+      "verified_by": "homepage",
       "known_mirrors": [
         "https://toonworld4all.me",
         "https://www.toonworld4all.me"
       ],
-      "last_checked": "2026-11-08T02:37:07Z"
+      "slug_variants": [
+        "toonworld4all"
+      ],
+      "tld_history": [
+        "me"
+      ],
+      "api_type": "homepage",
+      "status": "active",
+      "rotation_history": [],
+      "last_checked": "2026-11-08T09:47:28Z"
     },
     "xprimehub": {
       "active_base_url": "https://xprimehub.pics",
+      "last_verified": "2026-11-08T09:47:32Z",
+      "verified_by": "sitemap",
       "known_mirrors": [
         "https://xprimehub.pics"
       ],
+      "slug_variants": [
+        "xprimehub"
+      ],
+      "tld_history": [
+        "pics"
+      ],
       "api_type": "xml_sitemap",
-      "sitemap_endpoint": "/sitemap.xml",
       "status": "active",
-      "notes": "18+ adult catalog \u2014 scrape only, never publish; every row is_18_plus=1 (owner-approved 2026-11-08).",
-      "last_checked": "2026-11-08T02:37:07Z"
+      "rotation_history": [],
+      "last_checked": "2026-11-08T09:47:32Z",
+      "sitemap_endpoint": "/sitemap.xml",
+      "notes": "18+ adult catalog — scrape only, never publish; every row is_18_plus=1 (owner-approved 2026-11-08)."
     }
   }
 }

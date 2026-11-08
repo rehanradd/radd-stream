@@ -39,7 +39,7 @@ if str(BASE_DIR) not in sys.path:
 
 import fast_fetch
 from config import staging_db_path
-from domain_resolver import get_active_base_url
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://toonworld4all.me"
 SITE_NAME = "toonworld4all"
@@ -77,8 +77,10 @@ def get_ssl_context() -> ssl.SSLContext:
 class ToonClient:
     """Rate-limited HTTP client with retries for ToonWorld4All."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(MIN_REQUEST_DELAY, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -764,7 +766,13 @@ def main():
         resolve_stored_bridges(db_path, base_url, workers=args.workers, delay=args.delay)
         return
     if args.sync_api:
-        sync_api_to_db(db_path, base_url, args.max_items)
+        count = sync_api_to_db(db_path, base_url, args.max_items)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] ToonWorld4All: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_api_to_db(db_path, new_base, args.max_items)
         return
     run_crawler(db_path, base_url, workers=args.workers, delay=args.delay, limit=args.limit,
                 resolve_redirects=args.resolve and not args.no_resolve)

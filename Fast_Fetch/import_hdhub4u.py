@@ -55,8 +55,10 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://new12.hdhub4u.cl"
+SITE_NAME = "hdhub4u"
 HOST_RESOLVER_URL = "https://h4.suncdn.org/host/"
 TYPESENSE_SEARCH_URL = "https://search.pingora.fyi/collections/post/documents/search"
 DEFAULT_DB_PATH = (
@@ -105,8 +107,10 @@ def normalize_hdhub4u_loc(loc: str, base_url: str) -> str:
 class HDHub4uClient:
     """HTTP Client with rate limiting, retry handling, and dynamic host detection for HDHub4u."""
 
-    def __init__(self, base_url: str = DEFAULT_BASE_URL, request_interval: float = 0.3, retries: int = 3):
-        self.base_url = base_url.rstrip("/")
+    def __init__(self, base_url: str | None = None, request_interval: float = 0.3, retries: int = 3):
+        # Session 106: the registry is the source of truth for the
+        # live domain; an explicit base_url (CLI --base-url) still wins.
+        self.base_url = (base_url or get_active_base_url(SITE_NAME, DEFAULT_BASE_URL)).rstrip("/")
         self.request_interval = max(0.0, request_interval)
         self.retries = max(1, retries)
         self.ssl_ctx = get_ssl_context()
@@ -1177,11 +1181,22 @@ def main():
         return
 
     if args.sync_api:
-        sync_fast_api_to_db(db_path)
+        count = sync_fast_api_to_db(db_path)
+        if count == 0:
+            # Empty sync: retry once on the chain's verdict, and only then.
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] HDHub4u: sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_fast_api_to_db(db_path)
         return
 
     if args.sync_sitemap:
-        sync_sitemaps_to_db(db_path)
+        count = sync_sitemaps_to_db(db_path)
+        if count == 0:
+            new_base = resolve_if_dead(SITE_NAME)
+            if new_base:
+                print(f"[!] HDHub4u: sitemap sync found 0 posts and the cached domain is dead; chain found {new_base}; retrying once", flush=True)
+                sync_sitemaps_to_db(db_path)
         return
 
     # If neither sync requested, run crawler
