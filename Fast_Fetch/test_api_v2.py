@@ -430,11 +430,32 @@ class V2WireFixture(unittest.TestCase):
                           {"release_title": "Twin Beats S01 EP(01-02) 720p",
                            "season": "1", "episode": "1-2", "quality": "720p",
                            "sources": [cdn("TB-CDN")]}])
+        # Session 110: same work, two ranges — the range-crossing refusal
+        # needs a playable sibling the fallback must NOT take.
+        self.add_post("multimovies", "https://m1.multimovies.courses/range-prints-2022/",
+                      clean_title="Range Prints", year=2022, content_type="series",
+                      releases=[
+                          {"release_title": "Range Prints S01 EP(01-02) 1080p",
+                           "season": "1", "episode": "1-2", "quality": "1080p",
+                           "sources": [cdn("RP-DEAD", status="dead")]},
+                          {"release_title": "Range Prints S01 EP(03-04) 720p",
+                           "season": "1", "episode": "3-4", "quality": "720p",
+                           "sources": [cdn("RP-CDN")]}])
+        # Session 110: an adult work with a dead best print and a playable
+        # sibling — a public caller must never be handed the sibling.
+        self.add_post("vegamovies", "https://new1.vegamovies.lease/adult-twins-2024/",
+                      clean_title="Adult Twins", year=2024, is_18_plus=1, releases=[
+                          {"release_title": "Adult Twins (2024) 1080p WEB-DL",
+                           "sources": [dead("AT-DEAD")]},
+                          {"release_title": "Adult Twins (2024) 720p WEBRip",
+                           "quality": "720p", "sources": [cdn("AT-CDN")]}])
         self.mark_probe_on_ledger("DUNE-CDN")
         self.mark_probe_on_ledger("ADULT-CDN")
         self.mark_probe_on_ledger("QV-CDN")
         self.mark_probe_on_ledger("TWIN-CDN")
         self.mark_probe_on_ledger("TB-CDN")
+        self.mark_probe_on_ledger("RP-CDN")
+        self.mark_probe_on_ledger("AT-CDN")
         self.project(rev=1)
         # Out-of-band evidence, including the sentence a probe really writes: this
         # is the one field that reaches a public body carrying a hoster's name.
@@ -491,6 +512,26 @@ class V2WireFixture(unittest.TestCase):
     def _max(self, table):
         return int(self.conn.execute(f"SELECT COALESCE(MAX(id), 0) FROM {table}")
                    .fetchone()[0])
+
+    def _twin_prints(self, title):
+        """Best + sibling print of one two-print work, best-first order."""
+        best = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = ? ORDER BY r.quality_score DESC, r.id ASC LIMIT 1",
+            (title,))
+        sibling = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = ? AND r.id != ?"
+            " ORDER BY r.quality_score DESC, r.id ASC LIMIT 1", (title, best))
+        return best, sibling
+
+    def _map_legacy_release(self, legacy_id, cat_id):
+        """Map a legacy `releases.id` onto a cat print, the way Session 108's
+        tests do, so a route call names that one print."""
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_id_map (kind, old_id, new_id, rev)"
+            " VALUES ('ledger_release', ?, ?, ?)", (legacy_id, cat_id, 9))
+        self.conn.commit()
 
     # ---- the wire -----------------------------------------------------------
     def call(self, path, query=None, *, method="GET", operator=False, body=None,
@@ -839,20 +880,10 @@ class V2PlayWorkPrintFallbackTests(V2WireFixture):
     The caller asked for the WORK, not one print. Live 2026-11-08: work
     54221's best print (624765, one dead link) answered 409 while sibling
     print 624764 plays. The route now tries the prints best-first and
-    returns the first bundle with a playable candidate. A bare `release_id`
-    still names one print and is never switched to a sibling.
+    returns the first bundle with a playable candidate. (Session 110
+    extends the same walk to a bare `release_id`, same-coverage siblings
+    only — see `V2PlayReleasePrintFallbackTests`.)
     """
-
-    def _twin_prints(self, title):
-        best = self._one(
-            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
-            " WHERE w.title = ? ORDER BY r.quality_score DESC, r.id ASC LIMIT 1",
-            (title,))
-        sibling = self._one(
-            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
-            " WHERE w.title = ? AND r.id != ?"
-            " ORDER BY r.quality_score DESC, r.id ASC LIMIT 1", (title, best))
-        return best, sibling
 
     def test_work_id_falls_back_to_the_playable_sibling_print(self):
         best, sibling = self._twin_prints("Twin Prints")
@@ -884,17 +915,93 @@ class V2PlayWorkPrintFallbackTests(V2WireFixture):
         self.assert_problem(reply, code="no_playable_source", status=409,
                             instance="/api/v2/play")
 
-    def test_release_id_for_the_dead_print_still_409s(self):
-        best, _sibling = self._twin_prints("Twin Prints")
-        # Map a legacy id onto the dead print, the way Session 108's tests
-        # do, so the route still names that one print.
-        self.conn.execute(
-            "INSERT OR REPLACE INTO cat_id_map (kind, old_id, new_id, rev)"
-            " VALUES ('ledger_release', ?, ?, ?)", (500001, best, 9))
-        self.conn.commit()
+
+# ── 1d. release_id play fallback: same coverage only ─────────────────────
+
+class V2PlayReleasePrintFallbackTests(V2WireFixture):
+    """Session 110: `/play` by release_id falls back only within same coverage.
+
+    The caller named one print, so its bundle is built first and returned
+    unchanged when it plays. Only when it has no playable candidate does
+    the route walk sibling prints of the same work — and a sibling is
+    eligible only if it covers EXACTLY what the named print covers (the
+    coverage rule in `api_v2._same_coverage_sibling_prints`). The live
+    case: Ali Baba aur 40 Bhoot 720p, all three copies dead, while a
+    sibling print of the same work may play.
+    """
+
+    def test_release_id_falls_back_to_the_same_coverage_sibling_print(self):
+        # (a) Session 109's 409 expectation, superseded by Session 110:
+        # the dead named print's whole-work sibling plays, so the
+        # sibling's bundle is returned. The legacy id still translates
+        # for the NAMED print only (e) — without the map, 500001 as a cat
+        # id resolves to nothing and this would 404 instead of 200.
+        best, sibling = self._twin_prints("Twin Prints")
+        self._map_legacy_release(500001, best)
         reply = self.post("/api/v2/play", {"release_id": 500001})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
+        self.assertNotEqual(reply.json["release_id"], best)
+        self.assertTrue(reply.json["playable"])
+
+    def test_release_id_never_falls_back_across_episode_ranges(self):
+        # (b) The named print covers EP 01-02 (dead); the only playable
+        # sibling covers EP 03-04. Different range, so no fallback — the
+        # answer is the named print's own 409, not the sibling's bundle.
+        best, sibling = self._twin_prints("Range Prints")
+        self._map_legacy_release(500002, best)
+        reply = self.post("/api/v2/play", {"release_id": 500002})
         self.assert_problem(reply, code="no_playable_source", status=409,
                             instance="/api/v2/play")
+        # The 409 names only the dead print's own tried link — the
+        # playable EP 03-04 sibling was never attempted.
+        dead_link_id = self._one(
+            "SELECT id FROM cat_links WHERE resource_id = 'RP-DEAD'")
+        tried = reply.json["details"]["tried"]
+        self.assertEqual([entry["link_id"] for entry in tried], [dead_link_id])
+        self.assertNotEqual(reply.json["details"]["candidate_count"], 0)
+
+    def test_release_id_for_a_playable_print_never_walks(self):
+        # (c) The named print plays, so its bundle is returned as-is — the
+        # walk never runs and the first choice never changes. Addressed by
+        # legacy id, so this also proves (e): the translation still holds
+        # for a playable named print.
+        _best, sibling = self._twin_prints("Twin Prints")
+        self._map_legacy_release(500004, sibling)
+        reply = self.post("/api/v2/play", {"release_id": 500004})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
+        self.assertTrue(reply.json["playable"])
+
+    def test_release_id_never_returns_an_adult_flagged_sibling(self):
+        # (d) The work is flagged, so a public caller gets the same 404
+        # an unknown id gets — the walk never runs and the playable
+        # sibling is never named. Operator bypass unchanged: the same
+        # press walks to the flagged work's playable sibling.
+        best, sibling = self._twin_prints("Adult Twins")
+        self._map_legacy_release(500003, best)
+        reply = self.post("/api/v2/play", {"release_id": 500003})
+        self.assert_problem(reply, code="not_found", status=404,
+                            instance="/api/v2/play")
+        operator_reply = self.post("/api/v2/play", {"release_id": 500003},
+                                   operator=True)
+        self.assertEqual(operator_reply.status, 200, operator_reply.json)
+        self.assertEqual(operator_reply.json["release_id"], sibling)
+        self.assertTrue(operator_reply.json["playable"])
+
+    def test_work_and_episode_paths_still_walk(self):
+        # (e) Session 109 behaviour intact: work_id / episode_id still
+        # walk the target's prints best-first.
+        best, sibling = self._twin_prints("Twin Prints")
+        reply = self.post("/api/v2/play", {"work_id": self.twin_work_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
+        self.assertNotEqual(reply.json["release_id"], best)
+        best, sibling = self._twin_prints("Twin Beats")
+        reply = self.post("/api/v2/play",
+                          {"episode_id": self.twin_beats_episode_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], sibling)
 
 
 # ── 2. provenance: nothing that names a source ever leaves ──────────────────
@@ -1774,7 +1881,8 @@ class V2StatsHonestyTests(V2WireFixture):
                          "a measured link was published as unmeasured")
         self.assertEqual(by_state.get("active", 0),
                          len([tag for tag, state in states.items()
-                              if state == "active" and tag != "ADULT-CDN"]),
+                              if state == "active"
+                              and tag not in ("ADULT-CDN", "AT-CDN")]),
                          "stats advertised actives nobody measured")
         self.assertIn("unchecked", by_state)
         self.assertGreater(by_state["unchecked"], 0)
@@ -1806,11 +1914,11 @@ class V2StatsHonestyTests(V2WireFixture):
         self.assertEqual(health["probes"]["ok"], 1)
         self.assertEqual(health["probes"]["resumable"], 1)
         self.assertEqual(health["probes"]["avg_speed_mbps"], 42.0)
-        # Eight posts, one of them the hidden series: seven works, nine prints and
-        # 15 − 2 = 13 links are what a public caller may be told about (§13).
-        self.assertEqual(counts["works"], 7)
-        self.assertEqual(counts["links"], 13)
-        self.assertEqual(counts["prints"], 9)
+        # Ten posts, two of them hidden works: eight works, eleven prints and
+        # 19 − 4 = 15 links are what a public caller may be told about (§13).
+        self.assertEqual(counts["works"], 8)
+        self.assertEqual(counts["links"], 15)
+        self.assertEqual(counts["prints"], 11)
         self.assertGreater(self.conn.execute(
             "SELECT COUNT(*) FROM cat_works").fetchone()[0], counts["works"])
 
@@ -1895,7 +2003,7 @@ class V2SurfaceTests(V2WireFixture):
                          stats["counts"]["works"])
         self.assertEqual(payload["catalog"]["counts"]["links"],
                          stats["counts"]["links"])
-        self.assertEqual(payload["catalog"]["counts"]["works"], 7)
+        self.assertEqual(payload["catalog"]["counts"]["works"], 8)
         self.assertLess(payload["catalog"]["counts"]["works"],
                         self.conn.execute("SELECT COUNT(*) FROM cat_works").fetchone()[0],
                         "the manifest advertised hidden rows")

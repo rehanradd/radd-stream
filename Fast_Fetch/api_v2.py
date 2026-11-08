@@ -1753,6 +1753,100 @@ def _episode_sibling_prints(conn, episode_id, best_release_id, *, operator):
     return [int(row["id"]) for row in rows]
 
 
+def _same_coverage_sibling_prints(conn, named_release_id, *, operator):
+    """Other prints of the same work covering EXACTLY what the named print covers.
+
+    Session 110 — the coverage rule, the hard constraint on the release_id
+    fallback. "Same coverage" is defined from `cat_releases.coverage_type`
+    plus the materialised episode set in `cat_release_episodes`:
+      * whole_work -> another whole_work print of the same work with the
+        same season number (0 for a movie, the stamped season for a series
+        print that carries one).
+      * season_pack -> another season_pack of the same work, same season.
+      * single_episode / episode_range -> another print of the same
+        coverage_type whose materialised episode set is exactly the named
+        print's set — same episodes, no more, no fewer (compared with two
+        NOT EXISTS, so a print with no rows can never match).
+      * parts -> another parts print of the same work, same part number
+        and season.
+    Anything whose coverage cannot be PROVED equal yields no siblings: an
+    unstamped season_pack, a range with no materialised rows, a parts print
+    with no part number, an unknown coverage_type. Fail closed, never guess
+    — a caller who asked for S1E3 must never be handed S1E4 or a
+    whole-season pack. The adult scope and the streamable/identity filters
+    mirror Session 109; ordering mirrors the projector (quality_score DESC,
+    print_version DESC, id DESC); the cap leaves room for the named print,
+    so at most `_WORK_PRINT_FALLBACK_LIMIT - 1` siblings come back.
+    """
+    where = "" if operator else f" AND {adult_scope('w')}"
+    named = conn.execute(
+        f"""
+        SELECT r.id, r.work_id, r.coverage_type,
+               COALESCE(r.season_number, 0) AS season_number,
+               COALESCE(r.part_number, 0) AS part_number
+        FROM cat_releases r JOIN cat_works w ON w.id = r.work_id
+        WHERE r.id = :rid{where}
+        """, {"rid": int(named_release_id)}).fetchone()
+    if named is None:
+        return []
+    coverage = str(named["coverage_type"] or "")
+    season = int(named["season_number"] or 0)
+    part = int(named["part_number"] or 0)
+    if coverage == "season_pack" and not season:
+        return []
+    if coverage == "parts" and not part:
+        return []
+    if coverage in ("single_episode", "episode_range"):
+        named_eps = {int(row[0]) for row in conn.execute(
+            "SELECT episode_id FROM cat_release_episodes WHERE release_id = ?",
+            (int(named["id"]),)).fetchall()}
+        if not named_eps:
+            return []
+        rows = conn.execute(
+            f"""
+            SELECT r.id FROM cat_releases r
+            JOIN cat_works w ON w.id = r.work_id
+            WHERE r.work_id = :work AND r.id != :named
+              AND r.coverage_type = :type
+              AND r.streamable_count > 0 AND r.identity_suspect = 0{where}
+              AND NOT EXISTS (
+                  SELECT 1 FROM cat_release_episodes n
+                  WHERE n.release_id = :named AND n.episode_id NOT IN (
+                      SELECT episode_id FROM cat_release_episodes
+                      WHERE release_id = r.id))
+              AND NOT EXISTS (
+                  SELECT 1 FROM cat_release_episodes s
+                  WHERE s.release_id = r.id AND s.episode_id NOT IN (
+                      SELECT episode_id FROM cat_release_episodes
+                      WHERE release_id = :named))
+            ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC
+            LIMIT :lim
+            """, {"work": int(named["work_id"]), "named": int(named["id"]),
+                  "type": coverage, "lim": _WORK_PRINT_FALLBACK_LIMIT - 1}).fetchall()
+        return [int(row["id"]) for row in rows]
+    if coverage in ("whole_work", "season_pack", "parts"):
+        part_clause = (" AND COALESCE(r.part_number, 0) = :part"
+                       if coverage == "parts" else "")
+        params: dict = {"work": int(named["work_id"]), "named": int(named["id"]),
+                        "type": coverage, "season": season,
+                        "lim": _WORK_PRINT_FALLBACK_LIMIT - 1}
+        if coverage == "parts":
+            params["part"] = part
+        rows = conn.execute(
+            f"""
+            SELECT r.id FROM cat_releases r
+            JOIN cat_works w ON w.id = r.work_id
+            WHERE r.work_id = :work AND r.id != :named
+              AND r.coverage_type = :type
+              AND COALESCE(r.season_number, 0) = :season{part_clause}
+              AND r.streamable_count > 0 AND r.identity_suspect = 0{where}
+            ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC
+            LIMIT :lim
+            """, params).fetchall()
+        return [int(row["id"]) for row in rows]
+    return []
+
+
 def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
     """Session 109: walk a work/episode's prints, best first, cat ids only.
 
@@ -1785,8 +1879,16 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     print, so the route walks the target's prints best-first and returns the
     first bundle with a playable candidate — a dead best print must not hide
     a playable sibling (live 2026-11-08: work 54221's best print 624765 is
-    dead while sibling 624764 plays). A bare `release_id` names one print
-    and is never switched to a sibling.
+    dead while sibling 624764 plays).
+
+    Session 110: a bare `release_id` names one print, so its bundle is
+    built first and returned unchanged when it plays; only when it has no
+    playable candidate does the route walk same-coverage siblings of the
+    same work (the coverage rule in `_same_coverage_sibling_prints`) — the
+    live case is the app's release_id play of Ali Baba aur 40 Bhoot 720p,
+    whose three copies are all dead while a sibling print of the same work
+    may play. When nothing plays, the NAMED print's bundle is returned, so
+    the 409 / download-only answer is exactly today's.
     """
     release_id = _int_or_none(body.get("release_id"))
     episode_id = _int_or_none(body.get("episode_id"))
@@ -1844,16 +1946,35 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
 
     if candidate_ids:
         # A derived target: walk its prints, best first (Session 109).
-        # A bare release_id names one print and takes the single-bundle
-        # path below, exactly as before.
         bundle = _play_first_playable(conn, candidate_ids,
                                       episode_id=episode_id,
                                       include_adult=bool(operator))
     else:
+        # Session 110: a bare release_id names one print — build its bundle
+        # first (legacy translation applies to the NAMED print only) and
+        # return it unchanged when it plays. Only when it has no playable
+        # candidate, walk same-coverage siblings of the same work, best
+        # first; every sibling id is a cat id resolved by the route itself,
+        # so `legacy_release_id=False` (Session 108 lesson). When nothing
+        # plays the named print's bundle stands, so the 409 / download-only
+        # answer is exactly today's, on the print the caller asked for. A
+        # bundle that is not ok (unknown or hidden target) never walks: the
+        # walk cannot run without the named print's coverage, and a 404
+        # must not become an oracle for hidden rows.
         bundle = catalog_api.play_bundle(conn, release_id=int(release_id),
                                          episode_id=episode_id,
                                          include_adult=bool(operator),
                                          legacy_release_id=legacy_release_id)
+        named_cat_id = bundle.get("release_id") if bundle.get("ok") else None
+        if named_cat_id is not None and not bundle.get("playable"):
+            for sibling_id in _same_coverage_sibling_prints(
+                    conn, int(named_cat_id), operator=operator):
+                sibling_bundle = catalog_api.play_bundle(
+                    conn, release_id=sibling_id, episode_id=episode_id,
+                    include_adult=bool(operator), legacy_release_id=False)
+                if sibling_bundle.get("ok") and sibling_bundle.get("playable"):
+                    bundle = sibling_bundle
+                    break
     ok, code, _message = _from_layer2(bundle)
     if not ok:
         problem(handler, code=code or "not_found", rid=rid, instance=path,
