@@ -305,6 +305,67 @@ SERVICE_STREAMWISH = "streamwish"
 SERVICE_VOE = "voe"
 SERVICE_VIDHIDE = "vidhide"
 SERVICE_VIDMOLY = "vidmoly"
+SERVICE_UPLOADFLIX = "uploadflix"
+SERVICE_1XPLAYER = "1xplayer"
+SERVICE_MOVIEBOX = "moviebox"
+
+# uploadflix (Session 104b, verified live 2026-11-08): a generic XFS file
+# host. The file page (dl.uploadflix.com/<id> 302s to 1uploadflix.net/f/<id>)
+# already carries the download2 form AND the storage-host dllink anchor, so
+# the common path is one GET + one Range probe; the download1/download2 form
+# POSTs are the fallback for a page that shows the form first. The dllink
+# lives on a storage host with a self-signed certificate (curl -k / an
+# unverified SSL context is the only way the probe succeeds), and its token
+# rotates on every page load — the link is a result of this call, never
+# stored durably, and the resolver re-unwraps on every press.
+UPLOADFLIX_HOST_RE = re.compile(r"(?:^|\.)(?:dl\.uploadflix\.com|1uploadflix\.net)$", re.I)
+UPLOADFLIX_FORM_RE = re.compile(
+    r"""<form\b[^>]*>(?P<body>.*?)</form>""", re.I | re.S)
+UPLOADFLIX_INPUT_RE = re.compile(
+    r"""<input\b[^>]*?\bname\s*=\s*["'](?P<name>[^"']+)["'][^>]*?(?:\bvalue\s*=\s*["'](?P<value>[^"']*)["'])?""",
+    re.I)
+# The dllink anchor: an href on a host other than the file host, path /d/<long
+# token>/<filename>. The filename carries spaces unencoded in the href, so the
+# value is read whole (single- or double-quoted) and quoted before requesting.
+UPLOADFLIX_DLLINK_RE = re.compile(
+    r"""href\s*=\s*["'](?P<url>https?://[^"'\s<>]+/d/[A-Za-z0-9_-]{20,}/[^"']*)["']""",
+    re.I)
+UPLOADFLIX_VIDEO_EXTS = (".mp4", ".mkv", ".webm", ".mov", ".avi", ".m3u8")
+
+# 1xplayer (Session 104b, verified live 2026-11-08): the play page carries
+# `let p3 = {"file":"~<per-load>", "key":"<64-char per-load>", ...}` and the
+# player POSTs /playlist/<file-minus-~>.txt with X-CSRF-TOKEN = key, which
+# answers a single signed master URL. The master, its variants and its
+# segments are signed to the requesting IP with a ~2h expiry AND gated on
+# Referer: the play page — a bare master GET 404s, with the Referer it
+# answers 200 #EXTM3U with 4 variants. The resolver MUST re-resolve per
+# play and NEVER cache the master URL. The `file`/`key` values are per-load
+# and the play host rotates (vd.1xplayer.com -> geoxe446syt.com, streams on
+# salov447hev.com), so nothing about the host is pinned.
+XPLAYER_HOST_RE = re.compile(r"(?:^|\.)(?:vd\.)?1xplayer\.com$", re.I)
+XPLAYER_FILE_RE = re.compile(r'''"file"\s*:\s*"([^"]+)"''')
+XPLAYER_KEY_RE = re.compile(r'''"key"\s*:\s*"([^"]+)"''')
+XPLAYER_MASTER_EXPIRY_RE = re.compile(r":(\d{10}):")
+XPLAYER_VARIANT_RE = re.compile(
+    r"""#EXT-X-STREAM-INF:[^\n]*RESOLUTION=\d+x(\d+)[^\n]*\n([^\n#][^\n]*)""")
+XPLAYER_SEGMENT_RE = re.compile(r"""^([^\n#][^\n]*?\.ts(?:\?[^\n\s]*)?)\s*$""", re.M)
+
+# MovieBox (Session 104b, verified live 2026-11-08): themoviebox.xyz and
+# 123moviesfree.club are the same MovieBox frontend on the shared aoneroom
+# backend. Detail pages are trailers-only; the playable route is the signed
+# play API, which answers full MP4 streams ONLY when called with
+# Referer = the /movies/ player-page URL — the same call from /detail/
+# (or with no Referer) returns streams:[] even with session cookies, and
+# plain HTTP with NO cookies at all returns the streams when the Referer
+# is the /movies/ URL, so the Referer is the discriminator and no cookie
+# jar is needed. themoviebox gives 360p+480p MP4 free (1080p vipLocked);
+# 123moviesfree gives 480p+1080p free. DASH is vipLocked and needs an
+# Edge-Cache-Cookie + X-MB-Token, so it is never taken. NEVER probe a
+# signed URL with HEAD (the CDN answers 429) — GET Range only.
+MOVIEBOX_HOST_RE = re.compile(
+    r"(?:^|\.)(?:themoviebox\.xyz|123moviesfree\.club)$", re.I)
+MOVIEBOX_DETAIL_RE = re.compile(
+    r"^/(?:detail|movies)/([^/?#]+)", re.I)
 
 # gofile (Session 103, verified live 2026-11-08): the real website token is
 # generated client-side as sha256(UA :: language :: accountToken ::
@@ -450,6 +511,72 @@ def http_request(url: str, headers: dict | None = None, timeout: float = DEFAULT
                                      data=data)
     try:
         with _open(request, timeout=timeout, follow=follow) as response:
+            return (int(response.status), response.read(PROBE_READ_BYTES),
+                    {k.lower(): v for k, v in response.getheaders()},
+                    response.geturl())
+    except urllib.error.HTTPError as exc:
+        return (int(exc.code), exc.read(PROBE_READ_BYTES),
+                {k.lower(): v for k, v in (exc.headers.items() if exc.headers else [])},
+                url)
+    except Exception as exc:                      # DNS, TLS, timeout, refused
+        return 0, str(exc), {}, url
+
+
+def _cookie_jar_fetch():
+    """A fetch with the http_request return shape that keeps cookies.
+
+    The XFS form flow is a session: the download2 POST is the same session
+    the file page opened. Plain http_request is stateless, so a host that
+    checks the session cookie would refuse the POST; the jar makes the
+    flow match the browser's. One jar per call — nothing persists between
+    unwraps.
+    """
+    import http.cookiejar
+
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=_SSL_CONTEXT),
+        urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+
+    def _fetch(url, headers=None, timeout=DEFAULT_TIMEOUT, method="GET",
+               follow=True, data=None):
+        fields = {"User-Agent": USER_AGENT}
+        fields.update(headers or {})
+        request = urllib.request.Request(url, headers=fields, method=method,
+                                         data=data)
+        try:
+            with opener.open(request, timeout=timeout) as response:
+                return (int(response.status), response.read(PROBE_READ_BYTES),
+                        {k.lower(): v for k, v in response.getheaders()},
+                        response.geturl())
+        except urllib.error.HTTPError as exc:
+            return (int(exc.code), exc.read(PROBE_READ_BYTES),
+                    {k.lower(): v for k, v in (exc.headers.items() if exc.headers else [])},
+                    url)
+        except Exception as exc:                  # DNS, TLS, timeout, refused
+            return 0, str(exc), {}, url
+
+    return _fetch
+
+
+# The uploadflix storage host (cloud.secure-storage.top:8080) serves a
+# self-signed certificate: the default context fails the handshake and the
+# probe would call a live file dead. This context is used ONLY for the Range
+# probe of a dllink this module just extracted from the host's own page —
+# never for a page fetch, never for a URL a caller supplied.
+_UNVERIFIED_CONTEXT = ssl._create_unverified_context()
+
+
+def _unverified_fetch(url, headers=None, timeout=DEFAULT_TIMEOUT,
+                      method="GET", follow=True, data=None):
+    """http_request's shape over the unverified context (see above)."""
+    fields = {"User-Agent": USER_AGENT}
+    fields.update(headers or {})
+    request = urllib.request.Request(url, headers=fields, method=method,
+                                     data=data)
+    opener = urllib.request.build_opener(
+        urllib.request.HTTPSHandler(context=_UNVERIFIED_CONTEXT))
+    try:
+        with opener.open(request, timeout=timeout) as response:
             return (int(response.status), response.read(PROBE_READ_BYTES),
                     {k.lower(): v for k, v in response.getheaders()},
                     response.geturl())
@@ -1824,6 +1951,418 @@ def unwrap_vidhide(embed_url: str, fetch=None, verify: bool = True) -> dict:
     result["http_status"] = probe["http_status"]
     result["content_type"] = probe["content_type"]
     result["size_bytes"] = probe["size_bytes"]
+    result["status"] = probe["status"]
+    if probe["reason"]:
+        result["notes"].append(probe["reason"])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# uploadflix — generic XFS doFree
+# ---------------------------------------------------------------------------
+
+def _xfs_form_fields(body: str) -> dict | None:
+    """The hidden fields of the first XFS download form on the page, or None.
+
+    The form's `op` decides the step: download1 (free) or download2 (final).
+    Name and value are read separately per input tag because the attribute
+    order is the page's choice, not ours.
+    """
+    attr_re = re.compile(r"""\b(name|value)\s*=\s*["']([^"']*)["']""", re.I)
+    for match in UPLOADFLIX_FORM_RE.finditer(body or ""):
+        fields = {}
+        for tag in re.finditer(r"<input\b[^>]*>", match.group("body"), re.I):
+            attrs = dict(attr_re.findall(tag.group(0)))
+            if attrs.get("name"):
+                fields[attrs["name"]] = attrs.get("value") or ""
+        if fields.get("op") in ("download1", "download2") and fields.get("id"):
+            return fields
+    return None
+
+
+def _uploadflix_dllink(page: str, page_host: str) -> str:
+    """The storage-host dllink anchor out of a file page, or "".
+
+    The anchor lives on a host other than the file host (the storage host),
+    path /d/<long token>/<filename>. A video extension wins when several
+    anchors are present; otherwise the first match. The href carries spaces
+    in the filename, so the whole quoted value is read and quoted before
+    any request is made with it.
+    """
+    candidates = []
+    for match in UPLOADFLIX_DLLINK_RE.finditer(page or ""):
+        url = match.group("url")
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+        if host and host != page_host:
+            candidates.append(url)
+    if not candidates:
+        return ""
+    for url in candidates:
+        if urllib.parse.urlsplit(url).path.lower().endswith(UPLOADFLIX_VIDEO_EXTS):
+            return urllib.parse.quote(url, safe="/:#?&=@!$'()*+,;%")
+    return urllib.parse.quote(candidates[0], safe="/:#?&=@!$'()*+,;%")
+
+
+def unwrap_uploadflix(url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    uploadflix file URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Generic XFS doFree (verified live 2026-11-08): GET the file page
+    (dl.uploadflix.com/<id> 302s to 1uploadflix.net/f/<id>), read the
+    storage-host dllink anchor off the page, one Range probe of it over an
+    unverified-SSL fetch (the storage host's certificate is self-signed).
+    When the page shows a download form instead of the anchor, the form is
+    POSTed the JD way — download1 first (method_free set, method_premium
+    dropped), then download2 (adblock_detected=0) — and the anchor is read
+    off the answer. No countdown is ever slept: the waits are client-side
+    theatre. The dllink token rotates on every page load, so the link is a
+    result, never stored durably; the resolver re-unwraps on every press.
+    """
+    page_fetch = fetch or _cookie_jar_fetch()
+    result = _new_result(SERVICE_UPLOADFLIX, url)
+    page_url = result["embed_url"]
+    status, body, _headers, final_url = page_fetch(page_url)
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"file page HTTP {status}")
+        return result
+    page = _page_text(body)
+    page_url = final_url or page_url
+    page_host = (urllib.parse.urlsplit(page_url).hostname or "").lower()
+    link = _uploadflix_dllink(page, page_host)
+    # The form fallback: a page that shows download1/download2 first.
+    for _attempt in range(2):
+        if link:
+            break
+        fields = _xfs_form_fields(page)
+        if not fields:
+            break
+        if fields.get("op") == "download1":
+            fields["method_free"] = fields.get("method_free") or "Free Download"
+            fields.pop("method_premium", None)
+        else:
+            fields["adblock_detected"] = "0"
+            fields.pop("method_premium", None)
+        data = urllib.parse.urlencode(fields).encode()
+        status, body, _headers, _final = page_fetch(
+            page_url,
+            headers={"Content-Type": "application/x-www-form-urlencoded",
+                     "Referer": page_url},
+            method="POST", data=data)
+        if status != 200:
+            result["status"] = ("dead" if status in (404, 410)
+                                else "blocked" if status in (401, 403, 429)
+                                else "unknown")
+            result["notes"].append(f"download form HTTP {status}")
+            return result
+        page = _page_text(body)
+        link = _uploadflix_dllink(page, page_host)
+    if not link:
+        result["status"] = "unknown"
+        result["notes"].append("file page carries no storage-host direct link")
+        return result
+    result["final_url"] = link
+    result["sources"] = [{"url": link, "mime": "", "label": ""}]
+    if not verify:
+        result["notes"].append("unpacked only; the byte endpoint was not probed")
+        return result
+    # The probe must travel over the unverified context: the storage host's
+    # certificate is self-signed, and the verified default would fail the
+    # handshake and call a live file dead. An injected fetch (tests) is
+    # used as-is — it plays the probe itself.
+    probe_fetch = fetch or _unverified_fetch
+    probe = probe_range(link, fetch=probe_fetch)
+    result["http_status"] = probe["http_status"]
+    result["content_type"] = probe["content_type"]
+    result["size_bytes"] = probe["size_bytes"]
+    result["status"] = probe["status"]
+    if probe["reason"]:
+        result["notes"].append(probe["reason"])
+    return result
+
+
+# ---------------------------------------------------------------------------
+# 1xplayer — playlist POST + CSRF key
+# ---------------------------------------------------------------------------
+
+def _m3u8_variants(body: str, base_url: str) -> list[tuple[int, str]]:
+    """(resolution height, absolute URL) for each variant in a master playlist."""
+    out = []
+    for match in XPLAYER_VARIANT_RE.finditer(body or ""):
+        out.append((int(match.group(1)),
+                    urllib.parse.urljoin(base_url, match.group(2).strip())))
+    if not out:
+        for line in (body or "").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and line.endswith(".m3u8"):
+                out.append((0, urllib.parse.urljoin(base_url, line)))
+    return out
+
+
+def _ts_segment_ok(body, content_type: str) -> bool:
+    """Whether a Range slice is real MPEG-TS: video/mp2t, or the 0x47 sync."""
+    data = body if isinstance(body, bytes) else (body or "").encode("utf-8", "ignore")
+    if (content_type or "").split(";")[0].strip().lower().startswith("video/"):
+        return True
+    return len(data) >= 189 and data[0:1] == b"\x47" and data[188:189] == b"\x47"
+
+
+def unwrap_1xplayer(url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    1xplayer play URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Chain (verified live 2026-11-08): GET the play page (vd.1xplayer.com
+    302s to a rotating host), read the per-load `p3.file` (starts `~`) and
+    `p3.key` (64 chars) out of the inline player config, POST
+    /playlist/<file-minus-~>.txt with X-CSRF-TOKEN = key, which answers
+    one signed master URL. The master, its variants and its segments are
+    signed to the requesting IP (~2h) AND gated on Referer: the play page
+    — a bare master GET 404s, with the Referer it answers 200 #EXTM3U
+    with 4 variants — so every request in the chain carries the play page
+    as Referer, and the resolver MUST re-resolve per play and NEVER cache
+    the master URL. verify=True goes one step further than the master: the
+    highest variant playlist is fetched and its first .ts segment
+    Range-probed (206 video/mp2t, 0x47 sync) — a master alone proves the
+    playlist exists, the segment proves the video does.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_1XPLAYER, url)
+    status, body, _headers, final_url = fetch(result["embed_url"])
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"play page HTTP {status}")
+        return result
+    page = _page_text(body)
+    play_url = final_url or result["embed_url"]
+    file_match = XPLAYER_FILE_RE.search(page)
+    key_match = XPLAYER_KEY_RE.search(page)
+    if not file_match or not key_match:
+        result["status"] = "unknown"
+        result["notes"].append("play page carries no p3 file/key config")
+        return result
+    file_value, key_value = file_match.group(1), key_match.group(1)
+    if not file_value.startswith("~") or not 60 <= len(key_value) <= 70:
+        result["status"] = "unknown"
+        result["notes"].append("p3 file/key are not in the expected shape")
+        return result
+    host = urllib.parse.urlsplit(play_url).netloc
+    playlist_url = f"https://{host}/playlist/{file_value[1:]}.txt"
+    status, body, _headers, _final = fetch(
+        playlist_url,
+        headers={"X-CSRF-TOKEN": key_value,
+                 "Content-Type": "application/x-www-form-urlencoded",
+                 "Referer": play_url},
+        method="POST", data=b"")
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"playlist POST HTTP {status}")
+        return result
+    master = _page_text(body).strip()
+    if not master.startswith("http") or ".m3u8" not in master.split("?")[0]:
+        result["status"] = "unknown"
+        result["notes"].append("playlist answer is not a master URL")
+        return result
+    result["final_url"] = master
+    result["sources"] = [{"url": master, "mime": "application/vnd.apple.mpegurl",
+                          "label": "hls"}]
+    expiry = XPLAYER_MASTER_EXPIRY_RE.search(master)
+    if expiry:
+        result["expires_in"] = max(0, int(expiry.group(1)) - int(time.time()))
+    if not verify:
+        result["notes"].append("playlist only; the byte endpoint was not probed")
+        return result
+    # The master is Referer-gated: a bare GET 404s, with the play page as
+    # Referer it answers 200 #EXTM3U. The same Referer rides the variant
+    # and the segment below.
+    status, body, headers, _final = fetch(
+        master, headers={"Referer": play_url}, method="GET")
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"master playlist HTTP {status}")
+        return result
+    master_body = _page_text(body)
+    if not master_body.startswith("#EXTM3U"):
+        result["status"] = "unknown"
+        result["notes"].append("master answer is not a playlist")
+        return result
+    result["http_status"] = status
+    result["content_type"] = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    result["size_bytes"] = len(body) if isinstance(body, bytes) else None
+    variants = _m3u8_variants(master_body, master)
+    if not variants:
+        result["status"] = "unknown"
+        result["notes"].append("master playlist names no variant")
+        return result
+    _height, variant_url = max(variants, key=lambda item: item[0])
+    status, body, _headers, _final = fetch(
+        variant_url, headers={"Referer": play_url}, method="GET")
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"variant playlist HTTP {status}")
+        return result
+    segment_url = ""
+    for match in XPLAYER_SEGMENT_RE.finditer(_page_text(body)):
+        segment_url = urllib.parse.urljoin(variant_url, match.group(1))
+        break
+    if not segment_url:
+        result["status"] = "unknown"
+        result["notes"].append("variant playlist names no segment")
+        return result
+    status, body, headers, _final = fetch(
+        segment_url,
+        headers={"Range": f"bytes=0-{RANGE_PROBE_BYTES - 1}",
+                 "Referer": play_url},
+        method="GET")
+    content_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    if status == 206 and _ts_segment_ok(body, content_type):
+        result["status"] = "active"
+        return result
+    result["status"] = ("dead" if status in (404, 410)
+                        else "blocked" if status in (401, 403, 429)
+                        else "unknown")
+    result["notes"].append(
+        f"segment probe HTTP {status} {content_type or 'no content-type'}")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# MovieBox — signed play API (themoviebox.xyz + 123moviesfree.club)
+# ---------------------------------------------------------------------------
+
+def _moviebox_pick_stream(streams) -> dict | None:
+    """The best free MP4 stream: highest resolution, vipLocked false, URL present."""
+    best = None
+    for item in streams or []:
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("format") or "").upper() != "MP4":
+            continue
+        if item.get("vipLocked"):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url.lower().startswith("https:"):
+            continue
+        try:
+            resolution = int(str(item.get("resolutions") or "0"))
+        except ValueError:
+            resolution = 0
+        if best is None or resolution > best[0]:
+            best = (resolution, item)
+    return best[1] if best else None
+
+
+def unwrap_moviebox(url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    MovieBox detail URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Chain (verified live 2026-11-08 on both skins): the stored detail URL
+    gives the slug; GET the detail API for the numeric subjectId (and the
+    seasons, for series); GET the play API with Referer = the /movies/
+    player-page URL — that Referer is the whole discriminator (the same
+    call from /detail/ returns streams:[], and no cookies are needed at
+    all) — and pick the highest free MP4 stream (vipLocked:false, non-empty
+    URL). DASH is vipLocked and needs an Edge-Cache-Cookie + X-MB-Token,
+    so it is never taken. The signed MP4 URL is probed with GET Range
+    only — never HEAD, which the CDN answers 429 — with the player page
+    as Referer, and re-resolved on every press: sign+t are stable per
+    resource short-term, but the resolver never serves a stored one.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_MOVIEBOX, url)
+    parsed = urllib.parse.urlsplit(result["embed_url"])
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    host = (parsed.hostname or "").lower()
+    if not MOVIEBOX_HOST_RE.search(host):
+        result["status"] = "unknown"
+        result["notes"].append("not a MovieBox detail URL")
+        return result
+    detail = MOVIEBOX_DETAIL_RE.search(parsed.path or "")
+    if not detail:
+        result["status"] = "unknown"
+        result["notes"].append("MovieBox URL carries no detail slug")
+        return result
+    slug = detail.group(1)
+    query = urllib.parse.parse_qs(parsed.query or "")
+    season = (query.get("se") or query.get("detailSe") or ["0"])[0]
+    episode = (query.get("ep") or query.get("detailEp") or ["0"])[0]
+    status, body, _headers, _final = fetch(
+        f"{base}/wefeed-h5api-bff/detail?detailPath={urllib.parse.quote(slug)}")
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"detail API HTTP {status}")
+        return result
+    try:
+        detail_json = json.loads(_page_text(body))
+        subject = (detail_json.get("data") or {}).get("subject") or {}
+        subject_id = subject.get("subjectId")
+    except Exception:  # noqa: BLE001 - a bad detail answer must not crash
+        subject_id = None
+    if not subject_id:
+        result["status"] = "unknown"
+        result["notes"].append("detail API carries no subjectId")
+        return result
+    referer = (f"{base}/movies/{slug}?id={subject_id}"
+               "&type=/movie/detail&detailSe=&detailEp=&lang=en")
+    play_url = (f"{base}/wefeed-h5api-bff/subject/play"
+                f"?subjectId={subject_id}&se={season}&ep={episode}"
+                f"&detailPath={urllib.parse.quote(slug)}")
+    status, body, _headers, _final = fetch(
+        play_url, headers={"Referer": referer})
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"play API HTTP {status}")
+        return result
+    try:
+        play_json = json.loads(_page_text(body))
+        streams = (play_json.get("data") or {}).get("streams")
+    except Exception:  # noqa: BLE001 - a bad play answer must not crash
+        streams = None
+    if streams is None:
+        result["status"] = "unknown"
+        result["notes"].append("play API answer is not JSON")
+        return result
+    picked = _moviebox_pick_stream(streams)
+    if picked is None:
+        result["status"] = "unknown"
+        result["notes"].append("play API offers no free MP4 stream")
+        return result
+    result["final_url"] = str(picked["url"])
+    result["sources"] = [
+        {"url": str(item.get("url") or ""), "mime": "video/mp4",
+         "label": f"{item.get('resolutions')}p"}
+        for item in streams
+        if isinstance(item, dict)
+        and str(item.get("format") or "").upper() == "MP4"
+        and not item.get("vipLocked")
+        and str(item.get("url") or "").startswith("https:")]
+    try:
+        result["size_bytes"] = int(str(picked.get("size") or "0")) or None
+    except ValueError:
+        result["size_bytes"] = None
+    if not verify:
+        result["notes"].append("play API only; the byte endpoint was not probed")
+        return result
+    # GET Range only, with the player page as Referer — the CDN answers 429
+    # to HEAD, and the replay that proved the URL carried the same Referer.
+    probe = _probe_playlist_or_file(result["final_url"], fetch, referer)
+    result["http_status"] = probe["http_status"]
+    result["content_type"] = probe["content_type"]
+    if probe["size_bytes"] is not None:
+        result["size_bytes"] = probe["size_bytes"]
     result["status"] = probe["status"]
     if probe["reason"]:
         result["notes"].append(probe["reason"])

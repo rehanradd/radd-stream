@@ -6854,6 +6854,86 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     _gate_from_verdict = True
                 else:
                     _record_resolve_failure(src["id"], "unwrap_failed")
+            elif hr and (service == hr.SERVICE_UPLOADFLIX
+                         or "uploadflix" in source_u.lower()
+                         or "1uploadflix" in source_u.lower()
+                         or "uploadflix" in cached_u.lower()
+                         or "1uploadflix" in cached_u.lower()):
+                # Session 104b: uploadflix cracked (generic XFS doFree).
+                # The catalog stores these rows under two service values:
+                # "uploadflix" (13,603 rows) and "dl" (57,845 rows, 52,583
+                # of them dl.uploadflix.com), so the branch matches on the
+                # URL markers, not on the service alone — a non-uploadflix
+                # "dl" row must not be misrouted here. The file page
+                # already carries the storage-host dllink anchor; the
+                # download2 form is the fallback. The dllink lives on a
+                # self-signed storage host, so the unwrapper's own
+                # unverified-SSL Range probe IS the gate evidence: a bare
+                # verified probe would fail TLS, not the file. Ranked last
+                # in the chain on purpose, with gofile — a token that
+                # rotates on every page load is re-unwrapped on every
+                # press, so it is tried only after the direct hosts.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_uploadflix(hoster_input("uploadflix"),
+                                               verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_1XPLAYER
+                         or "1xplayer" in source_u.lower()
+                         or "1xplayer" in cached_u.lower()):
+                # Session 104b: 1xplayer cracked (playlist POST + CSRF
+                # key). The play page's per-load p3.file/p3.key buy one
+                # signed master URL; the master, its variants and its
+                # segments are signed to the requesting IP (~2h) AND gated
+                # on Referer: the play page — a bare master GET 404s. The
+                # unwrapper's Referer-carrying chain (master + variant +
+                # first .ts segment 206 video/mp2t) IS the gate evidence,
+                # and the resolver MUST re-resolve per play and NEVER
+                # cache the master URL.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_1xplayer(hoster_input("1xplayer"),
+                                             verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service in (hr.SERVICE_MOVIEBOX, "themoviebox",
+                                     "123moviesfree")
+                         or "themoviebox.xyz" in source_u.lower()
+                         or "123moviesfree.club" in source_u.lower()
+                         or "themoviebox.xyz" in cached_u.lower()
+                         or "123moviesfree.club" in cached_u.lower()):
+                # Session 104b: MovieBox cracked (signed play API on the
+                # shared aoneroom backend). The stored detail URL gives
+                # the slug; the detail API gives the subjectId; the play
+                # API answers full free MP4 streams ONLY with Referer =
+                # the /movies/ player-page URL (the same call from
+                # /detail/ returns streams:[]). The unwrapper's GET-Range
+                # probe of the picked signed MP4 IS the gate evidence
+                # (never HEAD — the CDN answers 429). NOTE: the live
+                # catalog holds 0 themoviebox/123moviesfree rows today —
+                # the importer stages them in its own vault — so this
+                # branch is wired and proven via the fixture harness
+                # against the live site, like vidmoly in Session 103; for
+                # a row to resolve, the importer must store the detail
+                # URL as its source_url (a mirror URL carries no slug).
+                _unwrap_branch_taken = True
+                _mb_url = (source_u if ("themoviebox" in source_u.lower()
+                                        or "123moviesfree" in source_u.lower())
+                           else cached_u)
+                verdict = hr.unwrap_moviebox(_mb_url, verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
         except Exception:
             pass
 

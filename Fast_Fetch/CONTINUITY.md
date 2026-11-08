@@ -7,8 +7,8 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history** 103 session files (101 dated + 2 undated) cover
-   2026-10-23 → 2026-11-07,
+1. **This file is a pointer, not a history** 104 session files (102 dated + 2 undated) cover
+   2026-10-23 → 2026-11-08,
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
    and `Fast_Fetch/test_docs_invariants.py` checks the number written here against that listing — a

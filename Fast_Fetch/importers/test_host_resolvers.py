@@ -1546,5 +1546,73 @@ class TestMain(unittest.TestCase):
         self.assertEqual(stop.exception.code, 1)
 
 
+# Session 104b: the pure helpers behind the three new unwrappers. The
+# end-to-end chains (page -> API -> probe) live in test_database.py, next
+# to the Session 103 unwrapper tests; these pin the parsing rules the
+# chains depend on, against the exact shapes measured live on 2026-11-08.
+class TestSession104bHelpers(unittest.TestCase):
+    def test_uploadflix_dllink_prefers_a_video_anchor(self):
+        page = """<a href='https://1uploadflix.net/f/abc'>file</a>
+<a rel="nofollow" href='https://cloud.secure-storage.top:8080/d/tok1234567890abcdef1234/Some Film (2024) 480p x264 ESub.mkv'>dl</a>
+<a href='https://cloud.secure-storage.top:8080/d/tok1234567890abcdef1234/readme.txt'>txt</a>"""
+        link = hr._uploadflix_dllink(page, "1uploadflix.net")
+        self.assertTrue(link.startswith(
+            "https://cloud.secure-storage.top:8080/d/tok1234567890abcdef1234/"))
+        self.assertIn("Some%20Film%20(2024)", link)
+        self.assertTrue(link.endswith(".mkv"))
+
+    def test_uploadflix_dllink_ignores_a_same_host_d_path(self):
+        page = """<a href='https://1uploadflix.net/d/abc1234567890abcdef1234/file.mkv'>x</a>"""
+        self.assertEqual(hr._uploadflix_dllink(page, "1uploadflix.net"), "")
+
+    def test_uploadflix_form_fields_read_download1(self):
+        body = """<form name="F1" method="POST" action="">
+<input type="hidden" name="op" value="download1">
+<input type="hidden" name="id" value="abc123">
+<input type="hidden" name="method_premium" value="Premium Download">
+</form>"""
+        self.assertEqual(hr._xfs_form_fields(body),
+                         {"op": "download1", "id": "abc123",
+                          "method_premium": "Premium Download"})
+
+    def test_uploadflix_form_fields_ignore_a_form_without_op(self):
+        self.assertIsNone(hr._xfs_form_fields(
+            "<form><input name='q' value='x'></form>"))
+
+    def test_1xplayer_variants_pick_the_highest(self):
+        master = ("#EXTM3U\n"
+                  "#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x268\n"
+                  "./360/index.m3u8\n"
+                  "#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x804\n"
+                  "./1080/index.m3u8\n")
+        variants = hr._m3u8_variants(
+            master, "https://i-arch-400.example/stream2/x/index.m3u8")
+        self.assertEqual(len(variants), 2)
+        self.assertEqual(max(variants, key=lambda item: item[0]),
+                         (804, "https://i-arch-400.example/stream2/x/1080/index.m3u8"))
+
+    def test_ts_segment_ok_needs_the_sync_bytes(self):
+        good = b"\x47" + b"\x00" * 187 + b"\x47" + b"\x00" * 187 + b"\x47"
+        self.assertTrue(hr._ts_segment_ok(good, "application/octet-stream"))
+        self.assertTrue(hr._ts_segment_ok(b"x" * 512, "video/mp2t"))
+        self.assertFalse(hr._ts_segment_ok(b"<html>error</html>", "text/html"))
+        self.assertFalse(hr._ts_segment_ok(b"\x47" + b"\x00" * 100, "text/html"))
+
+    def test_moviebox_pick_stream_skips_locked_and_empty(self):
+        streams = [
+            {"format": "MP4", "url": "", "resolutions": "1080",
+             "vipLocked": True},
+            {"format": "MP4", "url": "https://cdn.example/a.mp4",
+             "resolutions": "480", "vipLocked": False},
+            {"format": "MP4", "url": "https://cdn.example/b.mp4",
+             "resolutions": "1080", "vipLocked": False},
+            {"format": "DASH", "url": "https://cdn.example/c.mpd",
+             "resolutions": "1080", "vipLocked": False},
+        ]
+        picked = hr._moviebox_pick_stream(streams)
+        self.assertEqual(picked["url"], "https://cdn.example/b.mp4")
+        self.assertIsNone(hr._moviebox_pick_stream(streams[:1]))
+
+
 if __name__ == "__main__":
     unittest.main()

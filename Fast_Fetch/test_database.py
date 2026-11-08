@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.parse
 from contextlib import redirect_stdout
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1840,6 +1841,9 @@ class DatabaseSaveTests(unittest.TestCase):
         SERVICE_VOE = "voe"
         SERVICE_VIDHIDE = "vidhide"
         SERVICE_VIDMOLY = "vidmoly"
+        SERVICE_UPLOADFLIX = "uploadflix"
+        SERVICE_1XPLAYER = "1xplayer"
+        SERVICE_MOVIEBOX = "moviebox"
 
         def __init__(self, verdict=None):
             self.verdict = verdict
@@ -1926,6 +1930,33 @@ class DatabaseSaveTests(unittest.TestCase):
                 "is_temporary": True, "expires_in": 129600.0,
                 "content_type": "application/vnd.apple.mpegurl",
                 "http_status": 206, "size_bytes": 512}
+
+        def unwrap_uploadflix(self, url, fetch=None, verify=True):
+            self.calls.append(("uploadflix", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cloud.secure-storage.top:8080/d/abc/Film.mkv",
+                "is_temporary": True, "expires_in": None,
+                "content_type": "application/octet-stream",
+                "http_status": 206, "size_bytes": 2000000000}
+
+        def unwrap_1xplayer(self, url, fetch=None, verify=True):
+            self.calls.append(("1xplayer", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://i-arch-400.example/stream2/index.m3u8",
+                "is_temporary": True, "expires_in": 7200.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
+
+        def unwrap_moviebox(self, url, fetch=None, verify=True):
+            self.calls.append(("moviebox", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://bcdnxw.example/bt/abc.mp4?sign=x&t=1",
+                "is_temporary": True, "expires_in": None,
+                "content_type": "video/mp4", "http_status": 206,
+                "size_bytes": 3466489425}
 
     def _embed_source(self, site, service, embed):
         media_data = self.media(site, f"https://{site}.example/film/")
@@ -2395,6 +2426,468 @@ class DatabaseSaveTests(unittest.TestCase):
             "final_url": "https://cdn.example/f.mp4",
             "http_status": 200, "size_bytes": 100})
         self.assertFalse(file_200["resumable"])
+
+    # -- Session 104b: uploadflix (generic XFS doFree) -------------------
+
+    _UPLOADFLIX_PAGE = """<html><head><title>Hostel Part II</title></head><body>
+<form name="F1" method="POST" action="">
+<input type="hidden" name="op" value="download2">
+<input type="hidden" name="id" value="yba4err36sxr">
+<input type="hidden" name="rand" value="">
+<input type="hidden" name="referer" value="">
+<input type="hidden" name="method_free" value="">
+<input type="hidden" name="method_premium" value="">
+</form>
+<a rel="nofollow noopener noreferrer" href='https://cloud.secure-storage.top:8080/d/jmdldpaniybu2dju2e57qp5qs5q6px6s64ucn6p5kzwwnwy64wctprlkhvlssxlgisqwj4oo/Hostel Part II (2007) 480p BluRay x264 ESub.mkv'>Download</a>
+</body></html>"""
+
+    def test_uploadflix_unwrap_reads_the_dllink_anchor_off_the_file_page(self):
+        """Session 104b: the file page already carries the storage-host
+        dllink anchor (and the download2 form) — one GET + one Range
+        probe. The href carries spaces in the filename, so the whole
+        quoted value is read and quoted before requesting; the probe
+        answers 206 application/octet-stream with EBML magic, which is
+        what makes a Drive-labelled file a video at all."""
+        hr = fast_fetch._embed_resolvers()
+        seen = {}
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            seen[url] = dict(headers or {})
+            if "secure-storage" in url:
+                return (206, b"\x1a\x45\xdf\xa3" + b"\x00" * 508,
+                        {"content-type": "application/octet-stream",
+                         "content-range": "bytes 0-511/2000000000"}, url)
+            return (200, self._UPLOADFLIX_PAGE.encode(), {}, url)
+
+        verdict = hr.unwrap_uploadflix(
+            "https://dl.uploadflix.com/yba4err36sxr", fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(
+            verdict["final_url"],
+            "https://cloud.secure-storage.top:8080/d/"
+            "jmdldpaniybu2dju2e57qp5qs5q6px6s64ucn6p5kzwwnwy64wctprlkhvlssxlgisqwj4oo/"
+            "Hostel%20Part%20II%20(2007)%20480p%20BluRay%20x264%20ESub.mkv")
+        self.assertEqual(verdict["content_type"], "application/octet-stream")
+        self.assertEqual(verdict["http_status"], 206)
+        # The file page already carried the anchor: no form was POSTed.
+        probe_headers = seen.get(verdict["final_url"]) or {}
+        self.assertIn("Range", probe_headers)
+
+    def test_uploadflix_unwrap_posts_download1_then_download2_when_no_anchor(self):
+        """Session 104b: a page that shows the forms first is driven the
+        JD way — download1 (method_free set, method_premium dropped),
+        then download2 (adblock_detected=0) — and the anchor is read off
+        the download2 answer. No countdown is ever slept."""
+        hr = fast_fetch._embed_resolvers()
+        page1 = """<html><body><form name="F1" method="POST" action="">
+<input type="hidden" name="op" value="download1">
+<input type="hidden" name="id" value="abc123">
+<input type="hidden" name="rand" value="r1">
+<input type="hidden" name="referer" value="">
+<input type="hidden" name="method_free" value="Free Download">
+<input type="hidden" name="method_premium" value="Premium Download">
+</form></body></html>"""
+        page2 = """<html><body><form name="F1" method="POST" action="">
+<input type="hidden" name="op" value="download2">
+<input type="hidden" name="id" value="abc123">
+<input type="hidden" name="rand" value="r2">
+<input type="hidden" name="referer" value="">
+<input type="hidden" name="method_free" value="">
+<input type="hidden" name="method_premium" value="">
+</form></body></html>"""
+        posted = []
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            if "secure-storage" in url:
+                return (206, b"\x1a\x45\xdf\xa3" + b"\x00" * 508,
+                        {"content-type": "application/octet-stream",
+                         "content-range": "bytes 0-511/1000"}, url)
+            if method == "POST":
+                posted.append(urllib.parse.parse_qs(
+                    (data or b"").decode()))
+                if posted[-1].get("op") == ["download1"]:
+                    return (200, page2.encode(), {}, url)
+                return (200, self._UPLOADFLIX_PAGE.encode(), {}, url)
+            return (200, page1.encode(), {}, url)
+
+        verdict = hr.unwrap_uploadflix(
+            "https://dl.uploadflix.com/abc123", fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(len(posted), 2, posted)
+        self.assertEqual(posted[0].get("op"), ["download1"])
+        self.assertEqual(posted[0].get("method_free"), ["Free Download"])
+        self.assertNotIn("method_premium", posted[0])
+        self.assertEqual(posted[1].get("op"), ["download2"])
+        self.assertEqual(posted[1].get("adblock_detected"), ["0"])
+
+    def test_uploadflix_unwrap_dead_page_is_dead(self):
+        """A 404 file page is a deleted file, not a gate problem."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            return (404, b"Not Found", {}, url)
+
+        verdict = hr.unwrap_uploadflix(
+            "https://dl.uploadflix.com/gone123", fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "dead", verdict)
+
+    def test_uploadflix_unwrap_page_with_no_link_is_unknown(self):
+        """A live page with no anchor and no download form names nothing
+        playable — unknown, never a guessed URL."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            return (200, b"<html><body>no file here</body></html>", {}, url)
+
+        verdict = hr.unwrap_uploadflix(
+            "https://dl.uploadflix.com/abc123", fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "unknown", verdict)
+
+    # -- Session 104b: 1xplayer (playlist POST + CSRF key) --------------
+
+    _XPLAYER_PAGE = """<html><body><div id='player-502da1cab1226d7b05937ff9fcc78824'></div>
+<script>
+   \tlet p3 = {"file":"~0TYfp6afVaCGGUhYCdfCve","hls":0,"translator":"2","key":"bhLGn4gnv84MiFpwHrGCZj-lylZ$MaLiKnqn3UC9uFxx3brsOxrNf1AkeaL$yk7$","movie":"502da1cab1226d7b05937ff9fcc78824","host":"1xcinema.net","kp":"tt4479696"};
+   \tvar ppl = new HDVBPlayer(p3);
+</script></body></html>"""
+    _XPLAYER_MASTER = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=400000,RESOLUTION=640x268
+./360/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=858x358
+./480/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x536
+./720/index.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x804
+./1080/index.m3u8
+"""
+    _XPLAYER_VARIANT = """#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXTINF:10.0,
+seg-00001.ts
+#EXTINF:10.0,
+seg-00002.ts
+"""
+
+    def test_1xplayer_unwrap_posts_the_playlist_and_probes_the_segment(self):
+        """Session 104b: GET the play page, POST /playlist/<file>.txt
+        with X-CSRF-TOKEN = the per-load key, fetch the signed master
+        (Referer-gated: a bare master GET 404s live), take the highest
+        variant, Range-probe its first .ts segment (206 video/mp2t, 0x47
+        sync at 0/188). The master URL is the final answer; the segment
+        is the proof the video exists behind it."""
+        hr = fast_fetch._embed_resolvers()
+        master_url = ("https://i-arch-400.example/stream2/i-arch-400/abc/"
+                      "tok:1893456000:92.4.95.252:sig:==wTUlUdONEN140U0knTUlUP/"
+                      "index.m3u8")
+        seen = {}
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            seen[url] = dict(headers or {})
+            if "/playlist/" in url and method == "POST":
+                self.assertEqual(
+                    headers.get("X-CSRF-TOKEN"),
+                    "bhLGn4gnv84MiFpwHrGCZj-lylZ$MaLiKnqn3UC9uFxx3brsOxrNf1AkeaL$yk7$")
+                self.assertTrue(url.endswith("/playlist/0TYfp6afVaCGGUhYCdfCve.txt"))
+                return (200, master_url.encode(),
+                        {"content-type": "application/vnd.apple.mpegurl"}, url)
+            if url == master_url:
+                self.assertEqual(
+                    headers.get("Referer"),
+                    "https://vd.1xplayer.com/play/ftt4479696?tr=2")
+                return (200, self._XPLAYER_MASTER.encode(),
+                        {"content-type": "text/html"}, url)
+            if url.endswith("/index.m3u8"):
+                # Any variant playlist (the unwrapper takes the highest).
+                return (200, self._XPLAYER_VARIANT.encode(),
+                        {"content-type": "application/vnd.apple.mpegurl"}, url)
+            if url.endswith(".ts"):
+                self.assertEqual(
+                    headers.get("Referer"),
+                    "https://vd.1xplayer.com/play/ftt4479696?tr=2")
+                body = (b"\x47" + b"\x00" * 187 + b"\x47" + b"\x00" * 187
+                        + b"\x47" + b"\x00" * 135)
+                return (206, body,
+                        {"content-type": "video/mp2t",
+                         "content-range": "bytes 0-511/1000000"}, url)
+            return (200, self._XPLAYER_PAGE.encode(), {}, url)
+
+        with patch.object(hr.time, "time", return_value=1794117000.0):
+            verdict = hr.unwrap_1xplayer(
+                "https://vd.1xplayer.com/play/ftt4479696?tr=2",
+                fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(verdict["final_url"], master_url)
+        # The master URL carries its expiry as :<epoch>: — the resolver
+        # records it so a signed token is never served past its life.
+        self.assertEqual(verdict["expires_in"], 1893456000 - 1794117000)
+
+    def test_1xplayer_unwrap_dead_page_is_dead(self):
+        """The newest 1xplayer row 404s live (file removed) — dead."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            return (404, b"Not Found", {}, url)
+
+        verdict = hr.unwrap_1xplayer(
+            "https://vd.1xplayer.com/play/ftt10115562?tr=2",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "dead", verdict)
+
+    def test_1xplayer_unwrap_page_without_p3_is_unknown(self):
+        """A play page with no p3 file/key config names nothing to POST."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            return (200, b"<html><body>no player here</body></html>", {}, url)
+
+        verdict = hr.unwrap_1xplayer(
+            "https://vd.1xplayer.com/play/ftt4479696?tr=2",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "unknown", verdict)
+
+    # -- Session 104b: MovieBox (signed play API) ------------------------
+
+    _MOVIEBOX_DETAIL = {
+        "code": 0, "message": "ok",
+        "data": {
+            "subject": {
+                "subjectId": 7723849637673029968,
+                "detailPath": "dhurandhar-hindi-iRsvvgqjzc9",
+                "subjectType": 1, "title": "Dhurandhar [Hindi]"},
+            "resource": {
+                "seasons": [{"se": 0, "maxEp": 0}],
+                "source": "fzmovies.cms"}}}
+    _MOVIEBOX_PLAY = {
+        "code": 0, "message": "ok",
+        "data": {
+            "streams": [
+                {"format": "MP4", "id": "8814953776772696784",
+                 "url": "https://bcdnxw.example/bt/aaa.mp4?sign=s1&t=1",
+                 "resolutions": "480", "size": "979275210",
+                 "duration": 12334, "codecName": "h264",
+                 "signCookie": "", "signHeaderKey": "", "vipLocked": False},
+                {"format": "MP4", "id": "5793360583714033352",
+                 "url": "https://bcdnxw.example/resource/bbb.mp4?sign=s2&t=1",
+                 "resolutions": "1080", "size": "3466489425",
+                 "duration": 12334, "codecName": "h264",
+                 "signCookie": "", "signHeaderKey": "", "vipLocked": False}],
+            "freeNum": 999, "limited": False, "dash": [], "hls": [],
+            "hasResource": True, "vipLocked": False,
+            "playConfig": {"adFree": False, "maxResolution": 480}}}
+
+    def test_moviebox_unwrap_picks_the_highest_free_mp4(self):
+        """Session 104b: detail API for the subjectId, play API with
+        Referer = the /movies/ player-page URL (the same call from
+        /detail/ returns streams:[] live — the Referer is the whole
+        discriminator), highest free MP4 wins (1080p on 123moviesfree),
+        GET-Range probe of the signed URL. The captured 123moviesfree
+        Dhurandhar answer is the fixture."""
+        hr = fast_fetch._embed_resolvers()
+        seen = {}
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            seen[url] = dict(headers or {})
+            if "/wefeed-h5api-bff/detail" in url:
+                self.assertIn("detailPath=dhurandhar-hindi-iRsvvgqjzc9", url)
+                return (200, json.dumps(self._MOVIEBOX_DETAIL).encode(),
+                        {}, url)
+            if "/wefeed-h5api-bff/subject/play" in url:
+                self.assertIn("subjectId=7723849637673029968", url)
+                self.assertEqual(
+                    headers.get("Referer"),
+                    "https://123moviesfree.club/movies/dhurandhar-hindi-iRsvvgqjzc9"
+                    "?id=7723849637673029968&type=/movie/detail&detailSe=&detailEp=&lang=en")
+                return (200, json.dumps(self._MOVIEBOX_PLAY).encode(),
+                        {}, url)
+            if "bbb.mp4" in url:
+                self.assertIn("Range", headers)
+                return (206, b"\x00\x00\x00\x18ftypisom" + b"\x00" * 504,
+                        {"content-type": "video/mp4",
+                         "content-range": "bytes 0-511/3466489425"}, url)
+            raise AssertionError(f"unexpected fetch: {url}")
+
+        verdict = hr.unwrap_moviebox(
+            "https://123moviesfree.club/detail/dhurandhar-hindi-iRsvvgqjzc9",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(verdict["final_url"],
+                         "https://bcdnxw.example/resource/bbb.mp4?sign=s2&t=1")
+        self.assertEqual(verdict["content_type"], "video/mp4")
+        self.assertEqual(verdict["size_bytes"], 3466489425)
+        self.assertEqual(
+            [item["label"] for item in verdict["sources"]],
+            ["480p", "1080p"])
+
+    def test_moviebox_unwrap_all_vip_locked_is_unknown(self):
+        """themoviebox's 1080p is vipLocked with an empty URL and its
+        DASH needs a signed cookie — when no stream is free, the answer
+        is unknown, never a locked URL handed to the player."""
+        hr = fast_fetch._embed_resolvers()
+        locked = json.loads(json.dumps(self._MOVIEBOX_PLAY))
+        for stream in locked["data"]["streams"]:
+            stream["vipLocked"] = True
+            stream["url"] = ""
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            if "/wefeed-h5api-bff/detail" in url:
+                return (200, json.dumps(self._MOVIEBOX_DETAIL).encode(),
+                        {}, url)
+            return (200, json.dumps(locked).encode(), {}, url)
+
+        verdict = hr.unwrap_moviebox(
+            "https://themoviebox.xyz/detail/dhurandhar-hindi-iRsvvgqjzc9",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "unknown", verdict)
+
+    def test_moviebox_unwrap_detail_without_subject_id_is_unknown(self):
+        """No subjectId in the detail answer means no play call to make."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            return (200, json.dumps(
+                {"code": 0, "data": {"subject": {}}}).encode(), {}, url)
+
+        verdict = hr.unwrap_moviebox(
+            "https://themoviebox.xyz/detail/some-film-abc123",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "unknown", verdict)
+
+    def test_moviebox_unwrap_series_episode_uses_se_and_ep(self):
+        """A series detail URL carrying se/ep asks the play API for that
+        episode, not the movie default."""
+        hr = fast_fetch._embed_resolvers()
+        seen = {}
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            seen[url] = dict(headers or {})
+            if "/wefeed-h5api-bff/detail" in url:
+                return (200, json.dumps(self._MOVIEBOX_DETAIL).encode(),
+                        {}, url)
+            if "/wefeed-h5api-bff/subject/play" in url:
+                self.assertIn("se=1&ep=2", url)
+                return (200, json.dumps(self._MOVIEBOX_PLAY).encode(),
+                        {}, url)
+            return (206, b"\x00\x00\x00\x18ftypisom" + b"\x00" * 504,
+                    {"content-type": "video/mp4",
+                     "content-range": "bytes 0-511/3466489425"}, url)
+
+        verdict = hr.unwrap_moviebox(
+            "https://themoviebox.xyz/detail/covenant-s1-xyz?se=1&ep=2",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+
+    # -- Session 104b: dispatch ------------------------------------------
+
+    def test_resolve_live_source_unwraps_an_uploadflix_file_to_its_storage_link(self):
+        """Session 104b: uploadflix cracked (generic XFS doFree). The
+        catalog stores these rows under two service values — "uploadflix"
+        and "dl" (57,845 rows, 52,583 of them dl.uploadflix.com) — so
+        the branch matches on the URL markers, and this test uses the
+        "dl" service to prove it. The unwrapper's unverified-SSL Range
+        probe IS the gate evidence: the gate probe is stubbed to FAIL
+        here and success anyway proves the skip."""
+        stored = self._embed_source(
+            "moviesmela", "dl", "https://dl.uploadflix.com/yba4err36sxr")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(
+            res["url"],
+            "https://cloud.secure-storage.top:8080/d/abc/Film.mkv")
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a rotating token is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("uploadflix",
+                           "https://dl.uploadflix.com/yba4err36sxr", True)])
+
+    def test_resolve_live_source_unwraps_a_1xplayer_play_to_its_master(self):
+        """Session 104b: 1xplayer cracked (playlist POST + CSRF key).
+        The unwrapper's Referer-carrying chain (master + variant +
+        segment) already proved the playlist, so it stands as the gate
+        — the gate probe is stubbed to FAIL here and success anyway
+        proves the skip. A playlist for a download caller is refused
+        by the gate verdict's kind, as for the other HLS hosts."""
+        stored = self._embed_source(
+            "moviesmela", "1xplayer",
+            "https://vd.1xplayer.com/play/ftt4479696?tr=2")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(
+            res["url"], "https://i-arch-400.example/stream2/index.m3u8")
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a signed master is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("1xplayer",
+                           "https://vd.1xplayer.com/play/ftt4479696?tr=2",
+                           True)])
+
+    def test_resolve_live_source_unwraps_a_moviebox_detail_to_its_signed_mp4(self):
+        """Session 104b: MovieBox cracked (signed play API). The
+        unwrapper's GET-Range probe of the picked signed MP4 IS the gate
+        evidence — the gate probe is stubbed to FAIL here and success
+        anyway proves the skip. The live catalog holds 0 such rows
+        today; this proves the dispatch, the live site is proven by
+        the fixture harness."""
+        stored = self._embed_source(
+            "moviesmela", "themoviebox",
+            "https://123moviesfree.club/detail/dhurandhar-hindi-iRsvvgqjzc9")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(
+            res["url"], "https://bcdnxw.example/bt/abc.mp4?sign=x&t=1")
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a signed URL is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("moviebox",
+                           "https://123moviesfree.club/detail/dhurandhar-hindi-iRsvvgqjzc9",
+                           True)])
 
     @staticmethod
     def _voe_encode(data):
