@@ -511,7 +511,10 @@ class ProfileLink(Fixture):
         self.link()
         stored = self.column(self.account_id, "pin_hash")
         self.assertTrue(stored.startswith(accounts.PIN_HASH_PREFIX), stored)
-        self.assertNotIn(PIN, stored)
+        # Never stored as plaintext. (A bare-substring check flakes: the
+        # salt+hash are random hex, and main CI run 42576897717 on 7eb5214
+        # failed because "4721" happened to appear inside the digest.)
+        self.assertNotEqual(PIN, stored)
         parts = stored[len(accounts.PIN_HASH_PREFIX):].split("$")
         self.assertEqual(len(parts), 3)
         self.assertEqual(int(parts[0]), accounts.PIN_ITERATIONS)
