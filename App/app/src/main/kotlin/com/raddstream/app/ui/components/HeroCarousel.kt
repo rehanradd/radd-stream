@@ -22,6 +22,8 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -67,8 +69,9 @@ import kotlinx.coroutines.launch
  *  - a vertical scrim that goes from clear at the top to the page background at the
  *    bottom, so the title and buttons stay readable over any poster;
  *  - the title, a year badge and up to [MAX_LANGUAGE_PILLS] language pills;
- *  - a prominent Watch Now button (the slide's own tap target is the same action, so the
- *    whole banner is tappable and the button is the part that says so);
+ *  - a prominent Watch Now button, which starts the title (the slide's own tap target
+ *    only opens the details — the button is the part that says "play"); beside it, a
+ *    My List toggle, so saving a title does not need a trip to its details page;
  *  - page dots, which double as the manual affordance — tapping a dot jumps to that slide.
  *
  * WHAT THE HERO PAINTS (App/AGENTS.md §5): `GET /api/v1/posts` projects a
@@ -95,6 +98,10 @@ fun HeroCarousel(
     /** The operator's theme: false pauses the auto-advance, the interval is in ms. */
     autoplay: Boolean = true,
     intervalMs: Long = AUTO_ADVANCE_MS,
+    /** Session 121 (P-26): Watch Now starts the title instead of only opening it. */
+    onWatchNow: (Post) -> Unit = { post -> onPostClick(post.id) },
+    isFavorite: (Post) -> Boolean = { false },
+    onToggleFavorite: (Post) -> Unit = {},
 ) {
     if (posts.isEmpty()) return
     val reduceMotion = rememberReduceMotion()
@@ -126,6 +133,9 @@ fun HeroCarousel(
                 post = post,
                 backdropUrl = backdropFor(post),
                 onClick = { onPostClick(post.id) },
+                onWatchNow = { onWatchNow(post) },
+                isFavorite = isFavorite(post),
+                onToggleFavorite = { onToggleFavorite(post) },
                 modifier = Modifier.clip(RoundedCornerShape(HERO_CORNER)),
             )
         }
@@ -221,6 +231,9 @@ private fun HeroSlide(
     post: Post,
     backdropUrl: String?,
     onClick: () -> Unit,
+    onWatchNow: () -> Unit = onClick,
+    isFavorite: Boolean = false,
+    onToggleFavorite: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val title = post.displayTitle
@@ -253,14 +266,19 @@ private fun HeroSlide(
         }
 
         // 2 — vertical scrim: clear at the crest, page background under the text.
+        // Session 121 (P-20): the old scrim stayed near-clear until 45% down, so the
+        // hero title collided with the poster's own baked-in title art. The scrim
+        // now starts earlier and ends darker, so the words sit on background,
+        // not on artwork.
         Box(
             Modifier
                 .fillMaxSize()
                 .background(
                     Brush.verticalGradient(
                         0f to MaterialTheme.colorScheme.background.copy(alpha = 0f),
-                        0.45f to MaterialTheme.colorScheme.background.copy(alpha = 0.15f),
-                        1f to MaterialTheme.colorScheme.background.copy(alpha = 0.92f),
+                        0.35f to MaterialTheme.colorScheme.background.copy(alpha = 0.25f),
+                        0.7f to MaterialTheme.colorScheme.background.copy(alpha = 0.65f),
+                        1f to MaterialTheme.colorScheme.background.copy(alpha = 0.95f),
                     )
                 ),
         )
@@ -292,22 +310,47 @@ private fun HeroSlide(
                 languages.forEach { HeroBadge(it, subdued = true) }
             }
 
-            Button(
-                onClick = onClick,
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
-                ),
-                modifier = Modifier.height(52.dp),
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                Icon(
-                    imageVector = Icons.Default.PlayArrow,
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                )
-                Spacer(Modifier.width(8.dp))
-                Text(Brand.copy("hero_watch_now", "Watch Now"), fontWeight = FontWeight.Bold)
+                Button(
+                    onClick = onWatchNow,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                        contentColor = MaterialTheme.colorScheme.onPrimary,
+                    ),
+                    modifier = Modifier.height(52.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(Brand.copy("hero_watch_now", "Watch Now"), fontWeight = FontWeight.Bold)
+                }
+                // Session 121 (P-26): My List on the hero, so saving a title does not
+                // need a trip to its details page first. The filled heart says saved;
+                // the treatment matches the year/type badges above it.
+                Button(
+                    onClick = onToggleFavorite,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
+                        contentColor = MaterialTheme.colorScheme.onBackground,
+                    ),
+                    modifier = Modifier.height(52.dp),
+                ) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                        contentDescription = null,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(if (isFavorite) "Saved" else "My List", fontWeight = FontWeight.Bold)
+                }
             }
         }
     }

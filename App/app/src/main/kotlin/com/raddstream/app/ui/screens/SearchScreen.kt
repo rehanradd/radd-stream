@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -23,7 +24,6 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
@@ -44,6 +44,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,6 +52,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -66,6 +69,7 @@ import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PosterCard
 import com.raddstream.app.ui.components.SectionHeader
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.GenreFilter
 import com.raddstream.app.viewmodel.IndustryFilter
 import com.raddstream.app.viewmodel.QualityFilter
@@ -91,8 +95,10 @@ private sealed interface FilterRailEntry {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+// Session 121 (P-30): Search is a bottom-nav tab root — there is nowhere to go back
+// to from it, so the top bar carries no back arrow and takes no callback. (The Home
+// search bar navigates to this same tab, not to a pushed copy.)
 fun SearchScreen(
-    onBackClick: () -> Unit,
     onPostClick: (Int) -> Unit = {},
     onPlayDirectUrl: (url: String, title: String) -> Unit = { _, _ -> },
     viewModel: SearchViewModel = hiltViewModel(),
@@ -100,25 +106,18 @@ fun SearchScreen(
     val state by viewModel.uiState.collectAsState()
     var showSheet by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    // Session 121 (P-12): submitting a search, or scrolling the results, dismisses
+    // the keyboard — an open keyboard over the results was the whole complaint.
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = {
-                    Text(
-                        if (state.hasSearched) {
-                            resultsSummary(state.resultCount, state.serverTotal, state.hasMore)
-                        } else {
-                            "Search"
-                        },
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                    }
-                },
+                // Session 121 (P-13): the count lives in the body, next to Sort —
+                // the top bar saying "12 results" as well was the same number twice.
+                title = { Text("Search") },
                 actions = {
                     if (state.hasActiveFilters) {
                         Pill(text = "Filtered", backgroundColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
@@ -131,10 +130,16 @@ fun SearchScreen(
             )
         },
     ) { contentPadding ->
+        // Session 120: the open keyboard covered the top row of results and the
+        // empty-state hint hid behind its clipboard bar — the content never
+        // accounted for the IME. imePadding lifts the whole column above the
+        // keyboard (with adjustResize in the manifest) so results stay
+        // reachable while typing.
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(contentPadding)
+                .imePadding()
                 .padding(horizontal = 16.dp),
         ) {
             OutlinedTextField(
@@ -142,7 +147,10 @@ fun SearchScreen(
                 onValueChange = viewModel::onQueryChanged,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                label = { Text("Title") },
+                // The API searches titles only, so the label says so honestly —
+                // "Search titles, actors, or genres" would promise what the
+                // server cannot do.
+                label = { Text("Search for a title") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (state.query.isNotEmpty()) {
@@ -152,7 +160,13 @@ fun SearchScreen(
                     }
                 },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { viewModel.submitCurrentQuery() }),
+                // Session 121 (P-12): searching dismisses the keyboard so the
+                // results are visible instead of sitting under it.
+                keyboardActions = KeyboardActions(onSearch = {
+                    focusManager.clearFocus()
+                    keyboardController?.hide()
+                    viewModel.submitCurrentQuery()
+                }),
             )
 
             Spacer(Modifier.height(8.dp))
@@ -204,10 +218,13 @@ fun SearchScreen(
                 LazyRow(
                     modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    contentPadding = PaddingValues(vertical = 4.dp),
+                    // Session 121 (P-14): the last suggestion chip was clipped at the
+                    // right edge — the row needs the same end padding the rail gets.
+                    contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
                 ) {
                     items(state.suggestions, key = { it.id }) { suggestion ->
                         FilterChip(
+                            colors = raddFilterChipColors(),
                             selected = false,
                             onClick = { viewModel.runSuggestion(suggestion.title) },
                             label = {
@@ -349,7 +366,10 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel) {
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
-        contentPadding = PaddingValues(vertical = 4.dp),
+        // Session 121 (P-29): the last chip ("Anime") was clipped at the right edge —
+        // the row needs end padding; start stays 0 because the outer column already
+        // pads 16 dp.
+        contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
     ) {
         items(entries.size) { index ->
             when (val entry = entries[index]) {
@@ -360,6 +380,7 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel) {
                     modifier = Modifier.padding(start = if (index == 0) 0.dp else 12.dp),
                 )
                 is FilterRailEntry.Choice -> FilterChip(
+                    colors = raddFilterChipColors(),
                     selected = entry.selected,
                     onClick = entry.onClick,
                     label = { Text(entry.label) },
@@ -376,6 +397,15 @@ private fun SearchBody(
     onPostClick: (Int) -> Unit,
     onOpenFilters: () -> Unit,
 ) {
+    // Session 121 (P-12): scrolling the results dismisses the keyboard — the open
+    // keyboard covering the top row was the other half of the complaint (the first
+    // half was submit, handled at the field). Hoisted here so the scroll state is
+    // remembered unconditionally, not inside the branch that renders the list.
+    val resultsScroll = rememberScrollState()
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(resultsScroll.value) {
+        if (resultsScroll.value > 0) focusManager.clearFocus()
+    }
     when {
         !state.hasSearchIntent -> {
             if (state.recents.isNotEmpty()) {
@@ -386,7 +416,7 @@ private fun SearchBody(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         state.recents.take(8).forEach { recent ->
-                            FilterChip(selected = false, onClick = { viewModel.runRecent(recent) }, label = { Text(recent) })
+                            FilterChip(colors = raddFilterChipColors(), selected = false, onClick = { viewModel.runRecent(recent) }, label = { Text(recent) })
                         }
                     }
                 }
@@ -416,7 +446,7 @@ private fun SearchBody(
                 }
             },
         )
-        else -> Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        else -> Column(Modifier.fillMaxSize().verticalScroll(resultsScroll)) {
             Row(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -512,6 +542,7 @@ private fun FilterSheetContent(
             Text("Plan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
+                    colors = raddFilterChipColors(),
                     selected = state.filters.includedOnly,
                     onClick = { viewModel.setIncludedOnly(!state.filters.includedOnly) },
                     label = { Text("Included in my plan") },
@@ -578,6 +609,7 @@ private fun <T> FacetChips(
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         options.forEach { option ->
             FilterChip(
+                colors = raddFilterChipColors(),
                 selected = isSelected(option),
                 onClick = { onSelect(option) },
                 label = { Text(label(option)) },

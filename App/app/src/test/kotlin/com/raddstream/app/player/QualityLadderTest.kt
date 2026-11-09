@@ -121,6 +121,23 @@ class QualityLadderTest {
     }
 
     @Test
+    fun `a probe that measured bytes, not a file, shows no size at all`() {
+        // Session 121 (P-8): a 3.05 GB film once arrived with sizeBytes 513 — a probe
+        // that measured a redirect, not the file — and rendered as "≈ 513 B". A size
+        // under 1 MB is not a video; the row shows only what the rung can do.
+        val tiny = QualityLadder.from(
+            ladder.copy(tiers = listOf(tier("1080p", "Full HD", link("h", size = 513))))
+        ).options.single()
+        assertNull(tiny.sizeLine)
+        assertEquals(PLAYABLE_HERE, tiny.detailLine)
+        // The boundary: exactly 1 MB is a real (if tiny) file and still shows.
+        val edge = QualityLadder.from(
+            ladder.copy(tiers = listOf(tier("1080p", "Full HD", link("h", size = 1_000_000))))
+        ).options.single()
+        assertEquals("977 KB", edge.sizeLine)
+    }
+
+    @Test
     fun `a scope is matched on the served text and never borrows another episode`() {
         val groups = listOf(
             ladder.copy(season = "1", episode = "1"),

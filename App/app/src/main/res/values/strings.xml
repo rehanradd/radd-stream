@@ -1,5 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!-- App launch: the branded waiting screen while the first route resolves. -->
+    <string name="app_loading">Loading…</string>
     <!-- ═══ PLAYER CHROME ═══ every word the player paints, so no prose lives in
          PlayerScreen.kt. Placeholders are always positional (%1$s, %2$d): a locale
          that reorders a sentence has to be able to. Values with two consecutive
@@ -30,7 +32,6 @@
     <string name="player_prints_tools">Prints &amp; tools</string>
     <string name="player_pause">Pause</string>
     <string name="player_play">Play</string>
-    <string name="player_time_of_unknown">%1$s / --:--</string>
     <string name="player_leave_cinema">Leave cinema mode</string>
     <string name="player_lock">Lock controls</string>
     <string name="player_quality_label">Quality: %1$s</string>
@@ -61,16 +62,19 @@
     <string name="player_notice_spaced">%1$s %2$s</string>
     <string name="player_giveup_download_only">Download only</string>
     <string name="player_giveup_no_candidate">Nothing playable here right now</string>
-    <string name="player_giveup_download_body">This quality can be kept for offline viewing, but it cannot stream here.</string>
-    <string name="player_giveup_no_candidate_body">Every option for this print failed. Retry, keep it for offline, or open it in another player.</string>
+    <string name="player_giveup_download_body">This quality can’t stream here. Go back to the title to keep it for offline, or open it in another player.</string>
+    <string name="player_giveup_no_candidate_body">Every option for this print failed. Retry, try another print, or open it in another player.</string>
     <string name="player_giveup_timeout">Taking too long to start</string>
     <string name="player_giveup_timeout_body">The link is still being found. Retry, try another print, or open it in another player.</string>
     <string name="player_start_slow">Taking longer than usual — your link is being found</string>
     <string name="player_start_try_another">Try another print</string>
+    <string name="player_attempt_counter">Trying copy %1$d of %2$d</string>
     <string name="player_start_giveup_message">This copy did not start within 30 seconds.</string>
     <string name="player_first_frame">Started in %1$s</string>
     <string name="player_open_external">Open with another player</string>
     <string name="player_close">Close</string>
+    <string name="player_keep_waiting">Keep waiting</string>
+    <string name="player_back_to_details">Back to details</string>
     <string name="player_subtitles_for_colour">%1$s subtitles</string>
     <string name="player_selected_suffix">, selected</string>
     <string name="player_resume_title">Resume playback?</string>

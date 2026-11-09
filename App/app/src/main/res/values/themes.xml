@@ -3,10 +3,12 @@
     <!--
       Base application theme — edge-to-edge, dark-first ("Undertow").
       This XML theme only governs the window BEFORE Compose takes over:
-      windowBackground must match RaddInk950 so cold starts and the nav-drawer
-      flash are the same color the first frame paints. System bars stay
-      transparent (enableEdgeToEdge in MainActivity) and their icon contrast is
-      handled by the dark background.
+      windowBackground is the branded launch drawable (ink background, logo
+      mark centred on API 23+; flat ink on API 21-22, where a layer-list item
+      cannot carry gravity) so a cold start shows a loading screen instead of
+      flat black, and the nav-drawer flash stays the same ink the first frame
+      paints. System bars stay transparent (enableEdgeToEdge in MainActivity)
+      and their icon contrast is handled by the dark background.
 
       Only attributes that exist at minSdk 21 belong here. `android:windowLightStatusBar`
       (API 23) lives in values-v23 and `android:windowLayoutInDisplayCutoutMode` (API 27) in
@@ -24,7 +26,7 @@
       because AndroidManifest.xml must reference a real resource name.
     -->
     <style name="Theme.RaddStream" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/radd_ink_950</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
         <item name="android:statusBarColor">#00000000</item>
         <item name="android:navigationBarColor">#00000000</item>
     </style>

@@ -370,7 +370,9 @@ object ReleaseLayoutBuilder {
                     ?: artworkAt(pool, seasonIndex),
             )
         }
-        // Recompute show-wide absolute numbering across seasons.
+        // Recompute show-wide absolute numbering across seasons, in
+        // chronological order — S01E01 is still absolute 1. The display flip
+        // below runs AFTER this, so the numbers never follow the display.
         var running = 0
         val numbered = seasons.map { sg ->
             sg.copy(episodes = sg.episodes.map { e -> e.copy(absoluteNumber = ++running) })
@@ -378,7 +380,12 @@ object ReleaseLayoutBuilder {
 
         return ReleaseLayout(
             isSeriesLike = true,
-            seasons = numbered,
+            // Newest season first (Session 114): the viewer lands on the
+            // latest season, not the first one ever made. Episodes inside a
+            // season stay oldest-first — the flip is per season, never
+            // inside one. `numbered` is already chronological, so this only
+            // reorders the display; absolute numbers stay chronological.
+            seasons = numbered.sortedByDescending { it.number },
             workPrints = emptyList(),
             capabilities = capabilities,
             officialPrintCount = officialCount,

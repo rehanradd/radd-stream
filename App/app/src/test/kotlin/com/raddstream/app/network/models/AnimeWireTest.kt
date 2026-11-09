@@ -113,10 +113,11 @@ class AnimeWireTest {
     fun `the label owner never paints an unknown type at a viewer`() {
         assertNull(WorkTypeLabel.of(null, null))
         assertNull(WorkTypeLabel.of("", null))
-        assertEquals("Complete_season", WorkTypeLabel.of("complete_season", null))
-        // Unchanged from before this rule existed: only an animated series-family row is
-        // relabelled, so nothing else on screen moved.
-        assertEquals("Ongoing_season", WorkTypeLabel.of("ongoing_season", false))
+        // Session 120: these painted the raw wire word ("Complete_season"), so the
+        // search rail headed "Seasons" sat over cards saying "Complete_season" —
+        // the header described no card under it. A season post paints "Season".
+        assertEquals("Season", WorkTypeLabel.of("complete_season", null))
+        assertEquals("Season", WorkTypeLabel.of("ongoing_season", false))
     }
 
     @Test

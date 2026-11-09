@@ -136,9 +136,15 @@ object CacheAffordance {
             val approx = if (state.isEstimate) "~" else ""
             "$approx$saved$total saved"
         }
+        // Session 120: this used to read "Keeping 0 B of 3.05 GB", which on a
+        // start that never lands reads as "the player is downloading the whole
+        // file before it will play". It is not: playback streams from the
+        // redirector at once and the keep is a background copy — a bounded
+        // ~40 MiB ahead-window while watching, the whole file only after the
+        // viewer taps Keep — so the chip says what it is (a background copy)
+        // and never quotes the full file size as a download still owed.
         is KeepUiState.Keeping ->
-            "Keeping ${formatBytes(state.savedBytes)}" +
-                (state.totalBytes?.let { " of ${formatBytes(it)}" } ?: "") +
+            "Saving a copy in the background" +
                 (if (state.bytesPerSec > 0) " · ${formatBytes(state.bytesPerSec)}/s" else "")
         is KeepUiState.Stored -> "Kept ✓" + (state.note?.let { " · $it" } ?: "")
         is KeepUiState.Blocked -> state.message

@@ -52,8 +52,13 @@ data class QualityOption(
     /** A rung you can only keep: the card says it out loud instead of failing quietly. */
     val downloadOnly: Boolean get() = !playsHere && !isProviderPage
 
-    /** Netflix-style size hint, "≈ 1.4 GB"; null when the server never measured a size. */
-    val sizeLine: String? get() = sizeBytes?.takeIf { it > 0 }?.let { formatBytes(it) }
+    /**
+     * Netflix-style size hint, "≈ 1.4 GB"; null when the server never measured a size.
+     * Session 121 (P-8): also null when the probe measured something implausibly small
+     * for a video file (a redirect or landing page, not the file — a 3.05 GB film once
+     * arrived as 513 bytes and rendered as "≈ 513 B"). A real video is never under 1 MB.
+     */
+    val sizeLine: String? get() = sizeBytes?.takeIf { it >= 1_000_000 }?.let { formatBytes(it) }
 
     /** The row's sentence: what the picture is, then what the app can do with it. */
     val detailLine: String

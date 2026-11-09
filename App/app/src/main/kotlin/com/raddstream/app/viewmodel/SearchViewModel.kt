@@ -427,31 +427,7 @@ class SearchViewModel @Inject constructor(
             yearOk
         }
 
-        val groups = filtered
-            .groupBy { typeGroupKey(it) }
-            .toSortedMap(typeComparator)
-            .map { (key, posts) ->
-                TypeGroup(
-                    label = normalizeTypeLabel(key),
-                    typeKey = key,
-                    items = when (sort) {
-                        SearchSort.TITLE -> posts.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
-                        SearchSort.HIGHEST_IMDB -> posts.sortedWith(
-                            compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
-                                .thenByDescending { it.id },
-                        )
-                        SearchSort.NEWEST -> posts.sortedWith(
-                            compareByDescending<Post> { it.year ?: 0 }
-                                .thenByDescending { it.id },
-                        )
-                        // Mirrors the server's coverage ranking: no play counts exist.
-                        SearchSort.MOST_SOURCES -> posts.sortedWith(
-                            compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
-                                .thenByDescending { it.id },
-                        )
-                    },
-                )
-            }
+        val groups = groupSearchResults(filtered, sort)
 
         _uiState.update {
             it.copy(
@@ -475,16 +451,6 @@ class SearchViewModel @Inject constructor(
     private companion object {
         const val DEBOUNCE_MS = 300L
         const val PAGE_SIZE = 100
-
-        val typeComparator = compareBy<String> { typeOrder(it) }
-
-        fun typeOrder(label: String): Int = when (label) {
-            "Movies" -> 0
-            "Series" -> 1
-            "Seasons" -> 2
-            "Anime" -> 3
-            else -> 4
-        }
     }
 }
 
@@ -494,11 +460,75 @@ internal fun parseYear(year: String?): Int? {
     return null
 }
 
+/**
+ * Rail order, by the LABEL the rail is headed with — Movies, Series, Seasons,
+ * Anime, then anything else. Session 120: this used to live behind a
+ * `compareBy { typeOrder(it) }` fed the raw wire keys ("movie"), which it never
+ * matched, so every key ordered equal (see [groupSearchResults]).
+ */
+internal fun typeOrder(label: String): Int = when (label) {
+    "Movies" -> 0
+    "Series" -> 1
+    "Seasons" -> 2
+    "Anime" -> 3
+    else -> 4
+}
+
+/**
+ * Group search rows into labelled rails, in rail order.
+ *
+ * Session 120: this used to be
+ * `groupBy { typeGroupKey(it) }.toSortedMap(typeComparator)`, which collapsed
+ * every group into ONE. `toSortedMap` is a TreeMap, and a TreeMap treats two keys
+ * as the SAME key when the comparator returns 0 — and `typeOrder` only ever
+ * matched the plural labels ("Movies"), never the raw wire keys it was actually
+ * handed ("movie"), so every key compared equal. The map kept the FIRST key and
+ * the LAST value: a "Series" header, the Movies count, and film cards
+ * underneath — exactly what the TestingBot retest showed ("Series — 4" over
+ * "2026 · Movie" cards). Sorting the built list instead keeps every group,
+ * and the header is the label of the rows it actually heads.
+ */
+internal fun groupSearchResults(posts: List<Post>, sort: SearchSort): List<TypeGroup> =
+    posts
+        .groupBy { typeGroupKey(it) }
+        .map { (key, grouped) ->
+            TypeGroup(
+                label = normalizeTypeLabel(key),
+                typeKey = key,
+                items = when (sort) {
+                    SearchSort.TITLE -> grouped.sortedBy { (it.cleanTitle ?: it.title).lowercase() }
+                    SearchSort.HIGHEST_IMDB -> grouped.sortedWith(
+                        compareByDescending<Post> { it.imdbRating?.toDoubleOrNull() ?: -1.0 }
+                            .thenByDescending { it.id },
+                    )
+                    SearchSort.NEWEST -> grouped.sortedWith(
+                        compareByDescending<Post> { it.year ?: 0 }
+                            .thenByDescending { it.id },
+                    )
+                    // Mirrors the server's coverage ranking: no play counts exist.
+                    SearchSort.MOST_SOURCES -> grouped.sortedWith(
+                        compareByDescending<Post> { (it.releaseCount ?: 0) + (it.sourceCount ?: 0) }
+                            .thenByDescending { it.id },
+                    )
+                },
+            )
+        }
+        .sortedBy { typeOrder(it.label) }
+
 internal fun normalizeTypeLabel(contentType: String?): String = when (contentType?.lowercase()?.trim()) {
     "movie" -> "Movies"
     "series" -> "Series"
     "complete_season", "ongoing_season" -> "Seasons"
     "anime" -> "Anime"
+    // Session 120: these used to fall into "Other" while the tile painted the
+    // capitalised wire word ("Documentary", "Sport_event"), so the header
+    // described no card under it. A rail is headed with the word its cards
+    // paint — see WorkTypeLabel.of, which answers the same word per row.
+    "documentary" -> "Documentary"
+    "sport_event" -> "Sport event"
+    "music_video" -> "Music video"
+    "tv_special" -> "TV special"
+    "miniseries" -> "Miniseries"
     null, "" -> "Other"
     else -> "Other"
 }

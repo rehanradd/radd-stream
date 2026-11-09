@@ -98,7 +98,10 @@ object V1CatalogMapper {
             }
         }
 
-        val seasons = (seasonNumbers + episodesBySeason.keys).sorted().map { number ->
+        // Newest season first (Session 114): the viewer lands on the latest
+        // season, not the first one ever made. Episodes inside a season stay
+        // oldest-first — the flip is per season, never inside one.
+        val seasons = (seasonNumbers + episodesBySeason.keys).sortedDescending().map { number ->
             val eps = episodesBySeason[number].orEmpty().values.sortedBy { it.number }
                 .mapIndexed { index, episode -> episode.copy(absoluteNumber = index + 1) }
             Season(
@@ -129,7 +132,11 @@ object V1CatalogMapper {
             imdbRating = detail.imdbRating,
             country = detail.country,
             industry = detail.industry,
-            language = detail.language,
+            // P-5 (Session 121): the server sometimes serves `language` as a raw
+            // JSON array string ("[\"Tamil\", \"English\"]") and the details meta line
+            // printed it verbatim. Normalize here (and again at the render site, which
+            // is idempotent) so the meta line reads "Tamil, English".
+            language = WireText.listOf(detail.language).joinToString(", ").takeIf { it.isNotBlank() },
             seasons = seasons,
             prints = prints,
             entitlements = listOf(Entitlement.freeDefault),

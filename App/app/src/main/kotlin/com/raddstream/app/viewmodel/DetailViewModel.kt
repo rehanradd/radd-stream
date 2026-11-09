@@ -331,8 +331,11 @@ class DetailViewModel @Inject constructor(
             state.ladderEpisode,
         )
         val premiumLocked = qualityGateEnabled && !serverVip && (
-            VipQualityGate.hasPremiumPrints(full, freeQualityCap) ||
-                scope.options.any { VipQualityGate.isPremiumBand(it.band, freeQualityCap) || VipQualityGate.isPremiumLabel(it.title, freeQualityCap) }
+            VipQualityGate.hasPlayablePremiumPrints(full, freeQualityCap) ||
+                scope.options.any {
+                    (VipQualityGate.isPremiumBand(it.band, freeQualityCap) || VipQualityGate.isPremiumLabel(it.title, freeQualityCap)) &&
+                        it.band !in scope.downloadOnlyBands
+                }
             )
         // What this viewer can watch, in one line — the free cap is the
         // operator's, so the line names it rather than a hardcoded 720p.
@@ -921,6 +924,30 @@ class DetailViewModel @Inject constructor(
                 playLink(link, external, print.season, print.episodeFrom)
             }
         }
+    }
+
+    /**
+     * Session 121 (P-26): play the best print of the loaded title — the hero's Watch
+     * Now. The "best" is the same print the screen's own Play button offers
+     * (highest `rankKey` across every print of the title), so the hero and the
+     * details page never disagree about what plays. A title with no print, a
+     * locked print, or a print with nothing playable degrades gracefully: the
+     * viewer stays on the details page with the reason in front of them, because
+     * `playPrint` says so instead of navigating anywhere.
+     */
+    fun playBest() {
+        val layout = _uiState.value.layout
+        val best = layout?.let {
+            (it.workPrints +
+                it.seasons.flatMap { season -> season.episodes.flatMap { e -> e.prints } } +
+                it.seasons.flatMap { season -> season.packedPrints })
+                .maxByOrNull { print -> print.rankKey }
+        }
+        if (best == null) {
+            _uiState.update { it.copy(actionMessage = "Nothing playable on this title yet.") }
+            return
+        }
+        playPrint(best)
     }
 
     /**

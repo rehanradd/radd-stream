@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Session 120: API 23+ launch background — the same ink as the base version,
+  with the logo mark centred, so the window the system shows while the app
+  starts is a branded loading screen instead of flat black. The mark is the
+  existing 96 dp vector; gravity centres it at its intrinsic size.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/radd_ink_950" />
+    <item
+        android:drawable="@drawable/ic_logo_mark"
+        android:gravity="center" />
+</layer-list>

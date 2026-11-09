@@ -84,6 +84,8 @@ fun HomeScreen(
     /** False when the operator's `feature_flags.search` is off: the entry point disappears. */
     searchEnabled: Boolean = true,
     onPostClick: (Int) -> Unit = {},
+    /** Session 121 (P-26): the hero's Watch Now — opens the title and starts it. */
+    onWatchNowClick: (Int) -> Unit = onPostClick,
     onBrowseType: (String?) -> Unit = {},
     onSetupServerClick: () -> Unit = {},
     /** The phone's own videos (Movies/ and Download/), listed from MediaStore. */
@@ -229,6 +231,9 @@ fun HomeScreen(
                         HeroCarousel(
                             posts = heroItems,
                             onPostClick = onPostClick,
+                            onWatchNow = { post -> onWatchNowClick(post.id) },
+                            isFavorite = { post -> post.id in state.favoriteIds },
+                            onToggleFavorite = { post -> viewModel.toggleFavorite(post) },
                             autoplay = heroAutoplay,
                             intervalMs = heroIntervalMs,
                         )
@@ -523,7 +528,7 @@ private fun BrowserStrip(
     onOpenDownloads: () -> Unit,
 ) {
     Column(Modifier.padding(top = 4.dp)) {
-        SectionHeader(title = "Media browser")
+        SectionHeader(title = "Browse")
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),

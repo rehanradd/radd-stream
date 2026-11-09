@@ -32,6 +32,8 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -64,6 +66,22 @@ import androidx.compose.ui.unit.dp
  * Motion respects the system "remove animations" / animator-duration-scale setting
  * so the shimmer does not run for users who asked for reduced motion.
  */
+
+/**
+ * Session 121 (P-16): the app's filter chips, in the accent. `FilterChip`'s default
+ * selected container is `secondaryContainer` — maroon (`#3A1210`) in this brand — so
+ * a selected chip read as an error state next to the jade accent. Selected chips use
+ * the jade `primaryContainer` (with its `onPrimaryContainer` label and check) instead;
+ * everything unselected keeps the default. Every `FilterChip` in the app uses this.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun raddFilterChipColors() = FilterChipDefaults.filterChipColors(
+    selectedContainerColor = MaterialTheme.colorScheme.primaryContainer,
+    selectedLabelColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
+)
 
 @Composable
 fun rememberReduceMotion(): Boolean {

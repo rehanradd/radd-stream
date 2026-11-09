@@ -133,6 +133,29 @@ class ReleaseLayoutBuilderTest {
     }
 
     @Test
+    fun `seasons come out newest first and absolute numbers stay chronological`() {
+        val layout = ReleaseLayoutBuilder.build(
+            contentType = "tv",
+            releases = listOf(
+                release(id = 1, releaseTitle = "Alpha S01 E01", season = "1", episode = "1"),
+                release(id = 2, releaseTitle = "Alpha S01 E02", season = "1", episode = "2"),
+                release(id = 3, releaseTitle = "Alpha S02 E01", season = "2", episode = "1"),
+            ),
+        )
+        // Session 114: the viewer lands on the latest season, not the first
+        // one ever made — S02 first, S01 last.
+        assertEquals(listOf(2, 1), layout.seasons.map { it.number })
+        // The flip is display-only: absolute numbering still runs
+        // chronologically, S01E01 first.
+        val s1 = layout.seasons.first { it.number == 1 }
+        assertEquals(1, s1.episodes.first().absoluteNumber)
+        assertEquals(2, s1.episodes.last().absoluteNumber)
+        assertEquals(3, layout.seasons.first { it.number == 2 }.episodes.first().absoluteNumber)
+        // Episodes inside a season stay oldest-first.
+        assertEquals(listOf(1, 2), s1.episodes.map { it.numberWithinSeason })
+    }
+
+    @Test
     fun `series prints group into seasons and episodes`() {
         val layout = ReleaseLayoutBuilder.build(
             contentType = "tv",

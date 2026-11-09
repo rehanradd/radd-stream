@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Session 120: the launch window used to be a flat near-black background for the
+  whole cold start, which on a slow first install reads as a dead app. Same ink
+  background as before — this base version (API 21-22) stays flat, because
+  `android:gravity` on a layer-list item needs API 23; the v23 override centres
+  the logo mark on the same ink. No new colour, no new asset.
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/radd_ink_950" />
+</layer-list>

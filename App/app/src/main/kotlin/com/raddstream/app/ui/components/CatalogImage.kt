@@ -142,9 +142,13 @@ fun ImageFallbackCard(
                 diameter = 30.dp,
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
             )
-            if (!label.isNullOrBlank()) {
+            // Session 121 (P-15): the label is title initials ("AL"), never punctuation.
+            // A label with no letter or digit in it — a "?" from a mistyped title, or
+            // a stray symbol — renders as the mark alone instead of a stray glyph.
+            val safeLabel = label?.takeIf { it.any { ch -> ch.isLetterOrDigit() } }
+            if (!safeLabel.isNullOrBlank()) {
                 Text(
-                    text = label,
+                    text = safeLabel,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.titleSmall,
                     textAlign = TextAlign.Center,

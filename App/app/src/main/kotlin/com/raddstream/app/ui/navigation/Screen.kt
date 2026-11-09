@@ -39,9 +39,11 @@ sealed class Screen(val route: String) {
         const val ARG_TYPE = "type"
         fun createRoute(type: String?): String = "browse/${type ?: "all"}"
     }
-    object Detail : Screen("detail/{postId}") {
+    object Detail : Screen("detail/{postId}?autoplay={autoplay}") {
         const val ARG_POST_ID = "postId"
-        fun createRoute(postId: Int): String = "detail/$postId"
+        const val ARG_AUTOPLAY = "autoplay"
+        fun createRoute(postId: Int, autoplay: Boolean = false): String =
+            "detail/$postId?autoplay=$autoplay"
     }
     /**
      * The player is addressed by the server's OPAQUE STREAM HANDLE, never by a URL: a route

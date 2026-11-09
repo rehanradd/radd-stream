@@ -10,7 +10,7 @@
       carries everything from values/themes.xml and values-v23 plus the cutout item.
     -->
     <style name="Theme.RaddStream" parent="android:Theme.Material.NoActionBar">
-        <item name="android:windowBackground">@color/radd_ink_950</item>
+        <item name="android:windowBackground">@drawable/launch_background</item>
         <item name="android:statusBarColor">#00000000</item>
         <item name="android:navigationBarColor">#00000000</item>
         <item name="android:windowLightStatusBar">false</item>

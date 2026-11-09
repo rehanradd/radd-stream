@@ -43,14 +43,19 @@ data class PrintInfo(
     /** Audio codecs named by the print (e.g. ["dts","eac3"]) — used for device-capability hints. */
     @SerializedName("audio_codecs") val audioCodecs: List<String> = emptyList(),
 ) {
-    /** Short human label for the top-bar "playing" chip: the quality rung and how it was captured. */
+    /**
+     * Short human label for the top-bar "playing" chip: the quality rung and how it was captured.
+     * Session 121 (P-7): when nothing about the quality is known this returns "" — it used to
+     * fall back to the print's `label`, which is the TITLE, so the player printed
+     * "Quality: Ali Baba aur 40 Bhoot". A title is not a quality; saying nothing is.
+     */
     fun summary(): String {
         val parts = listOfNotNull(
             resolution?.takeIf { it.isNotBlank() && it != "unknown" },
             sourceTag?.takeIf { it.isNotBlank() && it != "unknown" }?.replace('_', ' '),
             codec?.takeIf { it.isNotBlank() && it != "unknown" }?.uppercase(),
         )
-        return if (parts.isNotEmpty()) parts.joinToString(" · ") else (label ?: "")
+        return if (parts.isNotEmpty()) parts.joinToString(" · ") else ""
     }
 
     /**
@@ -248,6 +253,21 @@ data class PlaybackRendition(
             playback.label?.takeIf { it.isNotBlank() },
         ).distinct().joinToString(" · ").ifBlank { "Rank #$rank" }
     }
+}
+
+/**
+ * Session 121 (P-7): does this label name a quality rung, or is it something else (a title,
+ * a rank) that must never be printed after "Quality:"? A label counts as quality language
+ * when any of its words is a rung or a codec word; "Rank #1" and a film title have none.
+ * Used to gate the start notice's "Quality:" line and the top-bar subtitle.
+ */
+internal fun looksLikeQualityLabel(label: String): Boolean {
+    val qualityWords = setOf(
+        "720p", "1080p", "2160p", "1440p", "480p", "360p", "144p", "240p",
+        "4k", "uhd", "hd", "sd", "auto", "bitrate", "hls", "hevc", "avc", "hdr",
+        "dolby", "saver",
+    )
+    return label.lowercase().split(Regex("[^a-z0-9]+")).any { it in qualityWords }
 }
 
 data class PlaybackDownloadOption(

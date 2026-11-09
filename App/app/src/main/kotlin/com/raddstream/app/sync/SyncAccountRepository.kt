@@ -253,6 +253,14 @@ class SyncAccountRepository @Inject constructor(
             // with, so the honest outcome is "no trial", not a countdown the UI cannot honour.
             if (currentKey() == null) return DeviceTrialOutcome.Refused(TrialRefusal.UNAVAILABLE)
             settingsRepository.saveDeviceTrial(read.secondsRemaining, System.currentTimeMillis())
+            // The trial account IS a VIP account on the server (vip_until = now
+            // + 3 days), so the entitlement this device holds must learn that
+            // at once. The old code never re-read it here, so the Membership
+            // card kept the pre-trial "Free plan" reading while the Account
+            // card already showed the free VIP days (Session 114). A failed
+            // read keeps the previous value; the card's own trial branch
+            // covers the window until the next read lands.
+            refreshEntitlement(force = true)
             DeviceTrialOutcome.Active(
                 secondsRemaining = read.secondsRemaining,
                 newAccount = grant?.created == true,

@@ -13,6 +13,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -152,6 +153,7 @@ import com.raddstream.app.player.GestureMapper
 import com.raddstream.app.player.GestureSettings
 import com.raddstream.app.player.HandoffWhy
 import com.raddstream.app.player.KeepUiState
+import com.raddstream.app.player.looksLikeQualityLabel
 import com.raddstream.app.player.PinchCommand
 import com.raddstream.app.player.PlayerOrientation
 import com.raddstream.app.player.PlayerUiState
@@ -267,6 +269,18 @@ private fun PlayerScreenContent(
     // transient overlays that take no state of their own; the stateful chrome
     // pieces resolve it from `state.playerTheme` themselves.
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
+
+    // System Back always leaves the player (Session 117): the give-up card's
+    // AlertDialog handles Back while it is showing, and the top-left arrow
+    // always worked, but nothing handled Back during playback — the 114
+    // device retest pressed it three times on a stuck player and once while
+    // the card was up, and the player never exited. This handler is the
+    // fallback underneath the dialog's own: it is registered first, so a
+    // dialog or sheet that is showing wins the press (its handler was added
+    // later and both end in the same place — back to details), and with
+    // nothing showing, Back pops the player instead of doing nothing. The
+    // lock does not gate it: a locked player must still let its viewer out.
+    BackHandler { onBackClick() }
 
     var controlsVisible by remember { mutableStateOf(true) }
     var interactTick by remember { mutableStateOf(0L) }
@@ -436,18 +450,26 @@ private fun PlayerScreenContent(
 
         // 5 — chrome. Ghost mode paints only the edge strip; everything else keeps the
         // three-zone MX bars, the pause scrim and the big centre button.
-        if (controlsVisible && !state.locked) {
+        // Session 121 (P-17): while the player is still starting there is no picture
+        // to protect and no back button anywhere — the top bar (or the edge strip
+        // in Ghost mode) stays up until the start phase ends, even if the viewer
+        // tapped the chrome away. The centre controls and the bottom bar still
+        // obey the tap; only the way out is forced visible.
+        val chromeVisible = controlsVisible || state.startPhase != StartPhase.NONE
+        if (chromeVisible && !state.locked) {
             if (state.pureCinema) {
                 EdgeHud(state = state, vm = vm, onBack = onBackClick)
             } else {
                 TopBar(vm = vm, state = state, onBack = onBackClick)
-                CenterControls(state, vm)
-                BottomControls(
-                    state = state,
-                    vm = vm,
-                    onEnterPip = launchPip,
-                    onActivity = { interactTick = System.nanoTime() },
-                )
+                if (controlsVisible) {
+                    CenterControls(state, vm)
+                    BottomControls(
+                        state = state,
+                        vm = vm,
+                        onEnterPip = launchPip,
+                        onActivity = { interactTick = System.nanoTime() },
+                    )
+                }
             }
         }
         if (state.locked) {
@@ -484,6 +506,17 @@ private fun PlayerScreenContent(
                 onRetry = { vm.retryCurrentCandidates() },
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissGiveUp() },
+                onBackToDetails = onBackClick,
+                // Session 120: the deadline card offered this and the handoff
+                // card did not, so after every candidate failed the viewer
+                // could only retry the same dead ladder. A further print past
+                // max_ranks is still an honest manual hop — tryNextPrint
+                // moves to a different print, never the same URL again.
+                onTryAnother = if (state.canTryAnotherPrint) {
+                    { vm.tryNextPrint() }
+                } else {
+                    null
+                },
             )
         } ?: if (state.deadlineGiveUp) {
             // The 30 s hard deadline (§5 P5): no candidate failed, but none produced a
@@ -496,6 +529,7 @@ private fun PlayerScreenContent(
                 onRetry = { vm.retryCurrentCandidates() },
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissDeadlineGiveUp() },
+                onBackToDetails = onBackClick,
                 onTryAnother = if (state.canTryAnotherPrint) {
                     { vm.tryNextPrint() }
                 } else {
@@ -526,13 +560,33 @@ private fun PlayerScreenContent(
             state.startDeadlineStage != StartDeadlineStage.GIVE_UP
         ) {
             val actions = state.startDeadlineStage == StartDeadlineStage.ACTIONS
+            // Session 121 (P-36): the 30-second wait showed no progress at all. When
+            // the bundle has more than one copy, say which one is being tried — the
+            // active rendition's place in the bundle is the attempt number, and the
+            // bundle's size is the total. One copy needs no counter.
+            val attemptLabel = run {
+                val renditions = state.bundle?.renditions.orEmpty()
+                if (renditions.size <= 1) {
+                    null
+                } else {
+                    val index = state.activeRendition?.let { renditions.indexOf(it) }
+                        ?.takeIf { it >= 0 } ?: 0
+                    stringResource(R.string.player_attempt_counter, index + 1, renditions.size)
+                }
+            }
             StartNoticeCard(
                 phase = state.startPhase,
                 title = state.pendingTitle,
+                attemptLabel = attemptLabel,
                 slowHint = state.startDeadlineStage != StartDeadlineStage.SILENT,
+                // Session 121 (P-7): the rung label must name a rung. The display label
+                // used to fall back to the print's title, so the notice read
+                // "Quality: Ali Baba aur 40 Bhoot"; a non-quality label falls through
+                // to the band label instead, and the line is dropped when neither
+                // names a rung.
                 rungLabel = if (state.startDeadlineStage != StartDeadlineStage.SILENT) {
-                    state.activeRendition?.displayLabel()?.takeIf { it.isNotBlank() }
-                        ?: state.qualityLabel.takeIf { it.isNotBlank() }
+                    state.activeRendition?.displayLabel()?.takeIf { looksLikeQualityLabel(it) }
+                        ?: state.qualityLabel.takeIf { it.isNotBlank() && looksLikeQualityLabel(it) }
                 } else {
                     null
                 },
@@ -1093,20 +1147,37 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                 val hlsTag = stringResource(R.string.player_tag_hls)
                 val expiringTag = stringResource(R.string.player_tag_expiring)
                 val autoTag = state.autoQualityBand?.let { band -> stringResource(R.string.player_tag_auto, band) }
-                Text(
-                buildString {
-                    append(print.displayLabel())
-                    if (print.playback.isHls()) append(" · ").append(hlsTag)
-                    if (print.playback.ephemeral) append(" · ").append(expiringTag)
+                // Session 121 (P-7): the subtitle is quality language only. When the
+                // quality is unknown the display label is a rank ("Rank #1"), not a
+                // rung — printing it would repeat the title's job badly. The tags
+                // (HLS / expiring / Auto) are still worth showing on their own, and
+                // the line is dropped entirely when there is nothing to say.
+                val subtitle = buildString {
+                    print.displayLabel().takeIf { looksLikeQualityLabel(it) }?.let { append(it) }
+                    if (print.playback.isHls()) {
+                        if (isNotEmpty()) append(" · ")
+                        append(hlsTag)
+                    }
+                    if (print.playback.ephemeral) {
+                        if (isNotEmpty()) append(" · ")
+                        append(expiringTag)
+                    }
                     // Says out loud that the rung shown is Auto's current choice, so a
                     // quality that moves on its own is never mistaken for a hand-picked one.
-                    autoTag?.let { append(" · ").append(it) }
-                },
-                    color = Color.White.copy(alpha = 0.72f),
-                    fontSize = brandSp(11),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+                    autoTag?.let {
+                        if (isNotEmpty()) append(" · ")
+                        append(it)
+                    }
+                }
+                if (subtitle.isNotBlank()) {
+                    Text(
+                        subtitle,
+                        color = Color.White.copy(alpha = 0.72f),
+                        fontSize = brandSp(11),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
         if (state.sleep.mode == SleepMode.COUNTDOWN) {
@@ -1128,7 +1199,9 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                 modifier = Modifier.padding(end = 6.dp),
             )
         }
-        KeepChip(state, vm)
+        // Session 121 (P-35): the keep chip lived here and squeezed the title to a
+        // stub ("Ali Baba …") on a narrow phone. It now rides its own row above
+        // the scrubber in BottomControls, where it cannot crowd anything.
         IconButton(onClick = { vm.showPrintSheet() }) {
             Icon(Icons.Default.ListAlt, stringResource(R.string.player_prints_tools), tint = Color.White)
         }
@@ -1248,14 +1321,19 @@ private fun EdgeHud(
                 )
             }
             Text(
-                text = if (state.durationMs > 0) {
+                // Session 121 (P-11): same rule as the bottom bar — "Loading…" while
+                // the start is in flight, position alone once playing with an
+                // unknown total, never a "--:--" total that was never measured.
+                text = if (state.startPhase != StartPhase.NONE) {
+                    stringResource(R.string.app_loading)
+                } else if (state.durationMs > 0) {
                     stringResource(
                         R.string.player_time_of,
                         state.positionMs.formatTime(),
                         state.durationMs.formatTime(),
                     )
                 } else {
-                    stringResource(R.string.player_time_of_unknown, state.positionMs.formatTime())
+                    state.positionMs.formatTime()
                 },
                 color = Color.White.copy(alpha = 0.8f),
                 fontSize = brandSp(11),
@@ -1302,6 +1380,19 @@ private fun BottomControls(
                 .fillMaxWidth()
                 .background(chrome.bar),
         ) {
+            // Session 121 (P-35): the keep chip's own row, above the scrubber. It is
+            // not a seventh transport button, so the six-primaries rule still holds —
+            // and here it cannot crowd the title the way it did in the top bar.
+            // The guard matters: an empty row would still take its top padding.
+            if (state.keep !is KeepUiState.Unavailable) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, top = 8.dp),
+                ) {
+                    KeepChip(state, vm)
+                }
+            }
             Scrubber(
                 chrome = chrome,
                 positionMs = state.positionMs,
@@ -1318,13 +1409,28 @@ private fun BottomControls(
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(state.positionMs.formatTime(), color = Color.White, fontSize = brandSp(12))
-                Spacer(Modifier.weight(1f))
-                Text(
-                    if (state.durationMs > 0) state.durationMs.formatTime() else "--:--",
-                    color = Color.White.copy(alpha = 0.75f),
-                    fontSize = brandSp(12),
-                )
+                // Session 121 (P-11): a duration the player has not learned yet is not
+                // "0:00 / --:--" — while the start is still in flight the row says the
+                // wait out loud, and once playing with an unknown total it shows the
+                // position alone instead of a total that was never measured.
+                if (state.startPhase != StartPhase.NONE) {
+                    Text(
+                        stringResource(R.string.app_loading),
+                        color = Color.White.copy(alpha = 0.75f),
+                        fontSize = brandSp(12),
+                    )
+                    Spacer(Modifier.weight(1f))
+                } else {
+                    Text(state.positionMs.formatTime(), color = Color.White, fontSize = brandSp(12))
+                    Spacer(Modifier.weight(1f))
+                    if (state.durationMs > 0) {
+                        Text(
+                            state.durationMs.formatTime(),
+                            color = Color.White.copy(alpha = 0.75f),
+                            fontSize = brandSp(12),
+                        )
+                    }
+                }
             }
             Row(
                 Modifier
@@ -1779,6 +1885,7 @@ private fun StartNoticeCard(
     title: String?,
     slowHint: Boolean = false,
     rungLabel: String? = null,
+    attemptLabel: String? = null,
     onRetry: (() -> Unit)? = null,
     onTryAnother: (() -> Unit)? = null,
 ) {
@@ -1818,6 +1925,17 @@ private fun StartNoticeCard(
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // Session 121 (P-36): which copy is being tried, out of how many — the
+            // wait reads as progress through the failover ladder, not a freeze.
+            if (!attemptLabel.isNullOrBlank()) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    attemptLabel,
+                    color = Color.White.copy(alpha = 0.6f),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
                 )
             }
             // The soft hint (§5 P5, past two seconds): the wait is normal, and here is
@@ -1868,18 +1986,25 @@ private fun GiveUpCard(
     onRetry: () -> Unit,
     onExternal: () -> Unit,
     onDismiss: () -> Unit,
+    onBackToDetails: () -> Unit,
     onTryAnother: (() -> Unit)? = null,
 ) {
+    // Back, and a tap outside the card, both leave the player (Session 114):
+    // a failed play must never trap the viewer — the old dismiss meant "keep
+    // waiting", so Back only dismissed the card and the card came back. "Keep
+    // waiting" below still means keep waiting, for a viewer who wants to give
+    // the slow link more time; it is no longer the only way out.
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = onBackToDetails,
         containerColor = RaddPlayerDialog,
         icon = {
-            // The logo-mark (§4.7): 32 dp, only while nothing is playing — which
-            // is exactly when this card exists. Its own colours, never tinted.
+            // Session 121 (P-34): the logo-mark is the brand loader's job, not an
+            // error's — a failure gets a warning triangle in the same coral the
+            // connection-error card already uses, so the two failure states agree.
             Icon(
-                painter = painterResource(R.drawable.ic_logo_mark),
+                Icons.Default.Warning,
                 contentDescription = null,
-                tint = Color.Unspecified,
+                tint = RaddCoral400,
                 modifier = Modifier.size(32.dp),
             )
         },
@@ -1912,18 +2037,49 @@ private fun GiveUpCard(
                 )
             }
         },
+        // Session 120: five actions in one horizontal row overflowed a 360 dp
+        // phone — AlertDialog lays its two button slots side by side, so
+        // "Open with another player" wrapped onto four lines ("Open / with /
+        // anothe / r") and "Close" printed over its final letter. All five
+        // actions stack vertically instead, each full width, so every one is
+        // fully visible and tappable no matter which subset is offered.
+        // The dismiss slot stays empty: "Back to details" and "Close" are
+        // actions in the same stack, not a second row fighting for width.
         confirmButton = {
-            Row {
-                TextButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = RaddCurrent500) }
-                onTryAnother?.let {
-                    TextButton(onClick = it) { Text(stringResource(R.string.player_start_try_another), color = RaddCurrent500) }
+            Column(Modifier.fillMaxWidth()) {
+                // Session 121 (P-33): five green buttons shout at once, so the two
+                // recoveries that end the failure (retry the same print, or leave
+                // for the title) stay green and the two alternates read as
+                // secondary white; the dismiss stays the quietest white.
+                TextButton(onClick = onRetry, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.player_retry), color = RaddCurrent500)
                 }
-                TextButton(onClick = onExternal) { Text(stringResource(R.string.player_open_external), color = RaddCurrent500) }
+                onTryAnother?.let {
+                    TextButton(onClick = it, modifier = Modifier.fillMaxWidth()) {
+                        Text(
+                            stringResource(R.string.player_start_try_another),
+                            color = Color.White.copy(alpha = 0.85f),
+                        )
+                    }
+                }
+                TextButton(onClick = onExternal, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        stringResource(R.string.player_open_external),
+                        color = Color.White.copy(alpha = 0.85f),
+                    )
+                }
+                TextButton(onClick = onBackToDetails, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.player_back_to_details), color = RaddCurrent500)
+                }
+                // Session 121 (P-19): "Close" said nothing about what happens next
+                // — this button dismisses the card and keeps waiting on the slow
+                // link, so it says so.
+                TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.player_keep_waiting), color = Color.White.copy(alpha = 0.7f))
+                }
             }
         },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_close), color = Color.White.copy(alpha = 0.7f)) }
-        },
+        dismissButton = {},
     )
 }
 

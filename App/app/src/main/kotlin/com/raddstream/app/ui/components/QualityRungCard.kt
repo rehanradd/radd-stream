@@ -185,6 +185,10 @@ private fun TierPill(tier: String) {
         Text(
             text = tier,
             style = MaterialTheme.typography.labelSmall,
+            // Session 121 (P-9): the pill is one word ("Standard" / "VIP") and must
+            // never wrap mid-word ("Stan / dard") when the rung row runs out of room.
+            maxLines = 1,
+            softWrap = false,
             color = if (isVip) {
                 MaterialTheme.colorScheme.onPrimaryContainer
             } else {

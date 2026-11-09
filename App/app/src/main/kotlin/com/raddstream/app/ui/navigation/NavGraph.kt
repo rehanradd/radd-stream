@@ -168,11 +168,17 @@ fun RaddStreamNavGraph(
             composable(Screen.Region.route) {
                 RegionSelectionScreen(
                     onContinue = {
-                        // Two entrances, one button. Opened from Settings the viewer already has a
-                        // catalog behind this screen, so popping back to it keeps one Home entry;
-                        // on a first install the region screen IS the whole stack, and there is
-                        // nothing to pop, so Home is pushed and this screen leaves for good.
-                        if (!navController.popBackStack(Screen.Home.route, inclusive = false)) {
+                        // Two entrances, one button. Opened from Settings the
+                        // viewer came from a screen that is still behind this
+                        // one, so popping just this screen returns them to it
+                        // — popping back to Home destroyed the Settings entry
+                        // and left the viewer with no way back to the row they
+                        // just used (Session 114: the row "disappeared"
+                        // because its screen did). On a first install the
+                        // region screen IS the whole stack, so there is
+                        // nothing to pop and Home is pushed instead, with
+                        // this screen leaving for good.
+                        if (!navController.popBackStack()) {
                             navController.navigate(Screen.Home.route) {
                                 popUpTo(Screen.Region.route) { inclusive = true }
                             }
@@ -186,6 +192,11 @@ fun RaddStreamNavGraph(
                     onSearchClick = { navController.navigate(Screen.Search.route) },
                     searchEnabled = features.search,
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    // Session 121 (P-26): the hero's Watch Now opens the title and
+                    // starts it, instead of only opening the title.
+                    onWatchNowClick = { postId ->
+                        navController.navigate(Screen.Detail.createRoute(postId, autoplay = true))
+                    },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
                     onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
@@ -216,14 +227,19 @@ fun RaddStreamNavGraph(
 
             composable(Screen.Search.route) {
                 SearchScreen(
-                    onBackClick = { navController.popBackStack() },
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onPlayDirectUrl = { url, title ->
                         // The address is staged, never routed: the player
                         // opens the opaque key and reads the address from
                         // the store (see PlayerSessionStore).
                         val key = PlayerSessionStore.Instance.stageDirectUrl(url)
-                        navController.navigate(Screen.Player.createRoute(key, title))
+                        navController.navigate(Screen.Player.createRoute(key, title)) {
+                            // A double-tap on Play must not stack two identical
+                            // players: one Back would then land on the same
+                            // player again and look like Back doing nothing
+                            // (Session 114).
+                            launchSingleTop = true
+                        }
                     },
                 )
             }
@@ -263,11 +279,15 @@ fun RaddStreamNavGraph(
                     onBackClick = { navController.popBackStack() },
                     onPlay = { item ->
                         item.streamHandle?.let {
-                            navController.navigate(Screen.Player.createRoute(it, item.title))
+                            navController.navigate(Screen.Player.createRoute(it, item.title)) {
+                                launchSingleTop = true
+                            }
                         }
                     },
                     onPlayLocal = { uri, title ->
-                        navController.navigate(Screen.PlayerLocal.createRoute(uri, title))
+                        navController.navigate(Screen.PlayerLocal.createRoute(uri, title)) {
+                            launchSingleTop = true
+                        }
                     },
                     onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
                 )
@@ -277,7 +297,9 @@ fun RaddStreamNavGraph(
                 LocalFilesScreen(
                     onBackClick = { navController.popBackStack() },
                     onPlayLocal = { uri, title ->
-                        navController.navigate(Screen.PlayerLocal.createRoute(uri, title))
+                        navController.navigate(Screen.PlayerLocal.createRoute(uri, title)) {
+                            launchSingleTop = true
+                        }
                     },
                 )
             }
@@ -286,18 +308,29 @@ fun RaddStreamNavGraph(
                 route = Screen.Detail.route,
                 arguments = listOf(
                     navArgument(Screen.Detail.ARG_POST_ID) { type = NavType.IntType },
+                    // Session 121 (P-26): the hero's Watch Now opens the title and starts
+                    // it — an optional flag, so every existing detail link still works.
+                    navArgument(Screen.Detail.ARG_AUTOPLAY) {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    },
                 ),
                 deepLinks = listOf(
                     androidx.navigation.navDeepLink { uriPattern = Brand.deepLinkUri("detail/{postId}") },
                 ),
-            ) {
+            ) { backStackEntry ->
                 DetailScreen(
+                    autoplay = backStackEntry.arguments?.getBoolean(Screen.Detail.ARG_AUTOPLAY) ?: false,
                     onBackClick = { navController.popBackStack() },
                     onPlayStream = { streamId, title ->
-                        navController.navigate(Screen.Player.createRoute(streamId, title))
+                        navController.navigate(Screen.Player.createRoute(streamId, title)) {
+                            launchSingleTop = true
+                        }
                     },
                     onOpenProviderPage = { streamId, title ->
-                        navController.navigate(Screen.Embed.createRoute(streamId, title))
+                        navController.navigate(Screen.Embed.createRoute(streamId, title)) {
+                            launchSingleTop = true
+                        }
                     },
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },

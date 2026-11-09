@@ -99,13 +99,26 @@ enum class WorkType(val wire: String) {
 object WorkTypeLabel {
 
     /**
-     * "Anime" for a work the ledger flags as animated, otherwise `content_type` capitalised,
-     * otherwise null. Never an invented word, and never "Unknown" painted at a viewer.
+     * "Anime" for a work the ledger flags as animated, otherwise a proper display
+     * word for the `content_type` — never the raw wire value capitalised
+     * ("Complete_season", "Sport_event"), because the search rail is headed with
+     * the same word (see [com.raddstream.app.viewmodel.normalizeTypeLabel]) and
+     * the two must agree, or the header describes no card under it (Session
+     * 120). A season post paints "Season" under the "Seasons" rail; anything
+     * unmapped still paints nothing rather than "Unknown".
      */
     fun of(contentType: String?, isAnimated: Boolean?): String? {
         if (WorkType.fromContentType(contentType, isAnimated) == WorkType.ANIME) return "Anime"
-        return contentType?.trim()?.takeIf { it.isNotEmpty() }
-            ?.replaceFirstChar { it.uppercase() }
+        val trimmed = contentType?.trim().orEmpty()
+        return when (trimmed.lowercase()) {
+            "" -> null
+            "complete_season", "ongoing_season" -> "Season"
+            "sport_event", "sports_event", "sport" -> "Sport event"
+            "music_video" -> "Music video"
+            "tv_special", "special" -> "TV special"
+            "miniseries" -> "Miniseries"
+            else -> trimmed.replaceFirstChar { it.uppercase() }
+        }
     }
 }
 

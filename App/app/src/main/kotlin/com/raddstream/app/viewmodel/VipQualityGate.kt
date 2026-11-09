@@ -158,4 +158,16 @@ object VipQualityGate {
         (layout.workPrints +
             layout.seasons.flatMap { season -> season.episodes.flatMap { it.prints } + season.packedPrints })
             .any { isPremiumResolution(it.resolution, freeQualityCap) }
+
+    /**
+     * Session 121 (P-10): the same premium check, but only for a print the viewer can
+     * actually play. A 1080p download-only copy is not a VIP unlock, it is a keep —
+     * the old check counted resolution alone, so a title whose every premium print
+     * was download-only still got the "4K and 1080p are part of VIP" card while
+     * nothing on it could play at all.
+     */
+    fun hasPlayablePremiumPrints(layout: ReleaseLayout, freeQualityCap: String): Boolean =
+        (layout.workPrints +
+            layout.seasons.flatMap { season -> season.episodes.flatMap { it.prints } + season.packedPrints })
+            .any { isPremiumResolution(it.resolution, freeQualityCap) && (it.playableHere || it.opensProviderPage) }
 }
