@@ -11,6 +11,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.raddstream.app.network.models.PanelDisclaimer
+import com.raddstream.app.ui.components.RaddDialogTitle
 
 /**
  * The operator's disclaimer, in full.
@@ -39,7 +40,9 @@ internal fun DisclaimerDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        title = { Text("Disclaimer") },
+        // D-2: one dialog title style everywhere — display family,
+        // semibold, 20sp.
+        title = { RaddDialogTitle("Disclaimer") },
         text = {
             Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 Text(

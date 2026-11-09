@@ -98,6 +98,7 @@ import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PrintQualityBadge
 import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.QualityRungCard
+import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
 import com.raddstream.app.ui.components.raddFilterChipColors
@@ -363,7 +364,9 @@ private fun KeepConfirmDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Download this title?") },
+        // D-2: one dialog title style everywhere — display family,
+        // semibold, 20sp.
+        title = { RaddDialogTitle("Download this title?") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(pending.title, style = MaterialTheme.typography.titleSmall)
@@ -745,7 +748,15 @@ private fun PrimaryActions(
             onClick = if (resume != null) onPlayResume else onPlay,
             enabled = if (resume != null) true else bestPrint?.canStart == true,
             modifier = Modifier.weight(1f).height(52.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+            // D-29: a disabled Play keeps the same shape and language as the
+            // enabled one — a tonal fill, not a dead grey slab. The reason it
+            // cannot start rides right under the button, so the tonal state
+            // is never mistaken for a working one.
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            ),
         ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
             Spacer(Modifier.width(8.dp))
@@ -755,8 +766,17 @@ private fun PrimaryActions(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        OutlinedButton(onClick = onKeep, enabled = hasAnyPrint, modifier = Modifier.height(52.dp)) {
-            Icon(Icons.Default.Download, contentDescription = "Download video", modifier = Modifier.size(20.dp))
+        // D-29: the download action is a proper secondary button in the same
+        // row language — same height, same shape, icon + label — not a bare
+        // circle beside a pill.
+        OutlinedButton(
+            onClick = onKeep,
+            enabled = hasAnyPrint,
+            modifier = Modifier.height(52.dp),
+        ) {
+            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Download", maxLines = 1)
         }
     }
 }
@@ -857,6 +877,7 @@ private fun VipSourcesCard(onOpenVipUpgrade: () -> Unit) {
 @Composable
 private fun ExpandableSynopsis(text: String) {
     var expanded by remember { mutableStateOf(false) }
+    var hasOverflow by remember { mutableStateOf(false) }
     Column {
         Text(
             text = text,
@@ -864,8 +885,13 @@ private fun ExpandableSynopsis(text: String) {
             color = MaterialTheme.colorScheme.onSurface,
             maxLines = if (expanded) Int.MAX_VALUE else 4,
             overflow = TextOverflow.Ellipsis,
+            // D-31: the "Read more" affordance appears exactly when the text
+            // is actually cut — a length gate hid it on short-but-tall text
+            // and showed it on long-but-fitting text. The layout result is
+            // the truth; a short synopsis that fits shows no button at all.
+            onTextLayout = { result -> hasOverflow = result.hasVisualOverflow },
         )
-        if (text.length > 180) {
+        if (expanded || hasOverflow) {
             TextButton(onClick = { expanded = !expanded }) {
                 Text(if (expanded) "Show less" else "Read more")
             }

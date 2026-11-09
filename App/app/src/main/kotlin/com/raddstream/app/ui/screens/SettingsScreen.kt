@@ -67,6 +67,7 @@ import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
+import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.AccountCardCopy
 import com.raddstream.app.viewmodel.AccountUiState
@@ -983,7 +984,9 @@ private fun lanShareStatusLine(status: LanShareStatus): String = when (status) {
 internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewModel, serverUrl: String) {
     AlertDialog(
         onDismissRequest = viewModel::closeLinkForm,
-        title = { Text(AccountCardCopy.LINK_TITLE) },
+        // D-2: one dialog title style everywhere — display family,
+        // semibold, 20sp.
+        title = { RaddDialogTitle(AccountCardCopy.LINK_TITLE) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(

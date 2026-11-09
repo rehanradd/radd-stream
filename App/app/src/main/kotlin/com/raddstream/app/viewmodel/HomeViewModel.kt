@@ -109,9 +109,13 @@ data class HomeUiState(
      * The daily check-in, on Home where the viewer actually is. The count is
      * this device's own (one open a day, recorded at launch); the ladder and
      * the wallet are the server's. The card renders only once the ladder
-     * arrives — an absent plan is never shown as a zero.
+     * arrives — an absent plan is never shown as a zero. `serverStreak` is
+     * the server's claimed-days count, the only number the card may present
+     * as "Day N"; null until the overview answers, and the card must not
+     * print a day number from the local count in the meantime (HO-6).
      */
     val streakCount: Int = 0,
+    val serverStreak: Int? = null,
     val streakLadder: Map<Int, Int> = emptyMap(),
     val coinBalance: Int = 0,
     val signedIn: Boolean = false,
@@ -285,10 +289,12 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             val ladder = syncAccountRepository.loadStreakLadder()
             val balance = syncAccountRepository.loadCoinBalance()
+            val overview = syncAccountRepository.loadAccountOverview()
             _uiState.update {
                 it.copy(
                     streakLadder = ladder.ifEmpty { it.streakLadder },
                     coinBalance = balance ?: it.coinBalance,
+                    serverStreak = overview?.streak?.currentStreak ?: it.serverStreak,
                 )
             }
         }
@@ -317,6 +323,9 @@ class HomeViewModel @Inject constructor(
                     it.copy(
                         claimedToday = true,
                         coinBalance = balance ?: it.coinBalance,
+                        // The claim answer carries the server's count — keep
+                        // the card on it without waiting for a re-read.
+                        serverStreak = earned.currentStreak,
                         claimMessage = when {
                             earned.status == "same_day_noop" -> "Already claimed today."
                             earned.currentStreak > 7 ->

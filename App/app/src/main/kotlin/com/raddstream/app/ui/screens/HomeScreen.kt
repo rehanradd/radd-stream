@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.play.core.install.model.ActivityResult as PlayCoreActivityResult
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -71,6 +72,7 @@ import com.raddstream.app.ui.components.HeroSkeleton
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.PosterCard
+import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SeeAllButton
 import com.raddstream.app.ui.components.SkeletonBox
@@ -103,6 +105,8 @@ fun HomeScreen(
     onOpenDownloads: () -> Unit = {},
     /** Session 123: the check-in card opens the standalone check-in screen. */
     onOpenCheckIn: () -> Unit = {},
+    /** Session 123 (HO-7): a guest's way into an account — Settings, where sign-in lives. */
+    onOpenSignIn: () -> Unit = {},
     /** The operator's hero knobs from the panel theme: 0 hides the hero slot. */
     heroMax: Int = HERO_LIMIT,
     heroAutoplay: Boolean = true,
@@ -182,6 +186,7 @@ fun HomeScreen(
             if (state.streakLadder.isNotEmpty()) {
                 DailyCheckInCard(
                     streakCount = state.streakCount,
+                    serverStreak = state.serverStreak,
                     streakLadder = state.streakLadder,
                     coinBalance = state.coinBalance,
                     signedIn = state.signedIn,
@@ -190,6 +195,7 @@ fun HomeScreen(
                     claimMessage = state.claimMessage,
                     onClaim = viewModel::claimDailyLogin,
                     onOpenCheckIn = onOpenCheckIn,
+                    onOpenSignIn = onOpenSignIn,
                 )
                 Spacer(Modifier.height(12.dp))
             }
@@ -254,8 +260,13 @@ fun HomeScreen(
                 // catalog data (freshest additions) and not a hand-picked fake "featured" set.
                 // heroMax 0 hides the slot entirely — no carousel, no skeleton — because
                 // the operator asked for no hero, not for a hero that never loads.
+                // HO-1: the hero IS that rail's presentation, so its posters are
+                // de-duplicated out of the rail below — the same six titles must
+                // not appear twice on one screen.
+                val heroSection = if (heroMax > 0) state.sections.firstOrNull { it.visible } else null
+                val heroItems = heroSection?.items.orEmpty().take(heroMax)
+                val heroIds = heroItems.map { it.id }.toSet()
                 if (heroMax > 0) {
-                    val heroItems = state.sections.firstOrNull { it.visible }?.items.orEmpty().take(heroMax)
                     if (heroItems.isNotEmpty()) {
                         HeroCarousel(
                             posts = heroItems,
@@ -282,7 +293,12 @@ fun HomeScreen(
                 val renderedRows = shownRows.filter { it.visible || it.loading || it.error != null }
                 renderedRows.forEach { section ->
                     HomeRailSection(
-                        section = section,
+                        // HO-1: the hero's posters are not repeated in their own rail.
+                        section = if (section.key == heroSection?.key) {
+                            section.copy(items = section.items.filterNot { it.id in heroIds })
+                        } else {
+                            section
+                        },
                         onPostClick = onPostClick,
                         onSeeAll = { onBrowseType(section.type) },
                         onRetry = { viewModel.retrySection(section.key) },
@@ -453,12 +469,13 @@ private fun AppUpdateDialog(
         onDismissRequest = if (required) ({}) else onDismiss,
         icon = { RaddStreamMark(diameter = 40.dp) },
         title = {
-            Text(
+            // D-2: one dialog title style everywhere — display family,
+            // semibold, 20sp.
+            RaddDialogTitle(
                 text = Brand.copy(
                     if (required) "update_required_title" else "update_title",
                     if (required) "Update required" else "A new build is available",
                 ),
-                fontWeight = FontWeight.Bold,
             )
         },
         text = {
@@ -505,17 +522,57 @@ private fun AppUpdateDialog(
 }
 
 /**
- * The daily check-in in one compact card: the streak this device has kept,
+ * The check-in card's day line, as a pure function so the wording is pinned
+ * by a test (HO-6): the day number is the server's claimed count, never the
+ * device's open count; until the server answers, no day number is printed
+ * at all; a guest reads the honest local wording.
+ */
+internal fun checkInDayLine(
+    signedIn: Boolean,
+    serverStreak: Int?,
+    streakCount: Int,
+    targetDays: Int,
+): String = when {
+    signedIn && serverStreak != null ->
+        "Day $serverStreak of $targetDays — claim today's coins to keep the streak going."
+    signedIn ->
+        "Claim today's coins to keep your streak going."
+    else ->
+        "You've opened the app $streakCount days in a row."
+}
+
+/**
+ * The claim button's label (HO-8): today's pay from the server's ladder at
+ * the next claimable day. No ladder value, no amount promised — the button
+ * falls back to the plain wording instead of inventing a number.
+ */
+internal fun claimButtonLabel(
+    serverStreak: Int?,
+    streakLadder: Map<Int, Int>,
+    isClaiming: Boolean,
+): String {
+    if (isClaiming) return "Claiming…"
+    val todayDay = (serverStreak ?: 0) + 1
+    val todayCoins = streakLadder[todayDay] ?: return "Claim today's coins"
+    return "Claim $todayCoins coins for Day $todayDay"
+}
+
+/**
+ * The daily check-in in one compact card: the streak the server has counted,
  * and the wallet it pays into. The claim is the VIP screen's own call — same
- * guards, same words — and the button promises no amount the server has not
- * confirmed: the local streak counts days the app was opened, while the
- * server counts days claimed, so a local day number is not today's pay. The
- * full ladder and the pass shop stay on the VIP screen; this card is the
- * daily tap, not the shop.
+ * guards, same words — and the button states the amount today pays, from the
+ * server's ladder at the next claimable day (HO-8). The day number is the
+ * server's claimed count, never the device's open count: the local number
+ * counts days the app was opened, the server counts days claimed, and only
+ * the server's may be presented as "Day N" (HO-6). A guest gets the honest
+ * local wording plus a way in — a sign-in button, not a dead end (HO-7).
+ * The full ladder and the pass shop stay on the check-in screen; this card
+ * is the daily tap, not the shop.
  */
 @Composable
 private fun DailyCheckInCard(
     streakCount: Int,
+    serverStreak: Int?,
     streakLadder: Map<Int, Int>,
     coinBalance: Int,
     signedIn: Boolean,
@@ -524,6 +581,7 @@ private fun DailyCheckInCard(
     claimMessage: String?,
     onClaim: () -> Unit,
     onOpenCheckIn: () -> Unit = {},
+    onOpenSignIn: () -> Unit = {},
 ) {
     val targetDays = streakLadder.keys.maxOrNull() ?: 7
     Card(
@@ -545,7 +603,7 @@ private fun DailyCheckInCard(
                 )
             }
             Text(
-                text = "Day $streakCount of $targetDays — claim today's coins to keep the streak going.",
+                text = checkInDayLine(signedIn, serverStreak, streakCount, targetDays),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -563,6 +621,9 @@ private fun DailyCheckInCard(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    Button(onClick = onOpenSignIn) {
+                        Text("Sign in")
+                    }
                 }
                 claimedToday -> {
                     Text(
@@ -573,7 +634,7 @@ private fun DailyCheckInCard(
                 }
                 else -> {
                     Button(onClick = onClaim, enabled = !isClaiming) {
-                        Text(if (isClaiming) "Claiming…" else "Claim today's coins")
+                        Text(claimButtonLabel(serverStreak, streakLadder, isClaiming))
                     }
                     claimMessage?.let { message ->
                         Text(
@@ -606,13 +667,13 @@ private fun BrowserStrip(
     onOpenDownloads: () -> Unit,
 ) {
     Column(Modifier.padding(top = 4.dp)) {
-        SectionHeader(title = "Browse")
+        SectionHeader(title = "Your library")
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             BrowserTile(
-                label = "Play a video link",
+                label = "Paste a video link",
                 icon = Icons.Default.Link,
                 onClick = onPlayVideoLink,
                 modifier = Modifier.weight(1f),
@@ -673,10 +734,11 @@ private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
         JumpOff("Seasons", "complete_season"),
     )
     Column(Modifier.padding(top = 4.dp)) {
-        SectionHeader(title = "Browse")
+        SectionHeader(title = "Browse by type")
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
                 .horizontalScrollPadding(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -710,6 +772,9 @@ private fun HeroSearchBar(onClick: () -> Unit) {
         shape = RoundedCornerShape(28.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        // HO-4: the bar sits inside the same 16dp margin as every other
+        // element on this screen instead of touching the screen edges.
+        modifier = Modifier.padding(horizontal = 16.dp),
     ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),

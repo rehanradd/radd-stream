@@ -24,6 +24,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -45,6 +46,8 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -56,6 +59,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -161,15 +165,17 @@ fun SearchScreen(
                 .imePadding()
                 .padding(horizontal = 16.dp),
         ) {
-            OutlinedTextField(
+            // D-15: one search affordance everywhere — a filled rounded pill
+            // with the same prompt Home's bar uses ("Search movies and
+            // shows"), no floating label, no border-box form look. The field
+            // still searches titles and cast names (the omnibox); only the
+            // prompt is unified, not the capability.
+            TextField(
                 value = state.query,
                 onValueChange = viewModel::onQueryChanged,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                // The API searches titles and cast names, so the label says
-                // both honestly — "actors or genres" would still promise
-                // what the server cannot do.
-                label = { Text("Search for a title or an actor") },
+                placeholder = { Text("Search movies and shows") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (state.query.isNotEmpty()) {
@@ -186,6 +192,15 @@ fun SearchScreen(
                     keyboardController?.hide()
                     viewModel.submitCurrentQuery()
                 }),
+                shape = RoundedCornerShape(28.dp),
+                colors = TextFieldDefaults.colors(
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    focusedIndicatorColor = Color.Transparent,
+                    unfocusedIndicatorColor = Color.Transparent,
+                    disabledIndicatorColor = Color.Transparent,
+                ),
             )
 
             Spacer(Modifier.height(8.dp))
@@ -213,7 +228,7 @@ fun SearchScreen(
                     Spacer(Modifier.height(8.dp))
                 }
                 PastedText.NotAUrl -> {
-                    // The Home tile says "Play a video link", but nothing on
+                    // The Home tile says "Paste a video link", but nothing on
                     // this screen said a link could be pasted here — the field
                     // only reacts once a URL is typed. One honest line: a
                     // direct .mp4 or .m3u8 link plays in the app, any other

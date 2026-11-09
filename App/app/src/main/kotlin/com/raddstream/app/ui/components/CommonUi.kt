@@ -58,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import android.provider.Settings
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.raddstream.app.ui.theme.RaddTokens
 
 /**
  * Shared page-level building blocks: section headers, empty/error/loading states,
@@ -96,6 +97,26 @@ fun rememberReduceMotion(): Boolean {
             false
         }
     }
+}
+
+/**
+ * One title style for every dialog (D-2): the display family, semibold,
+ * 20sp — the same face screen titles use, so a dialog headline never renders
+ * in the thin, faint face the video audit caught on the give-up, consent and
+ * volume dialogs. Every `AlertDialog` title goes through here; the colour
+ * defaults to the surface's own, and the player dialogs pass white for their
+ * dark container.
+ */
+@Composable
+fun RaddDialogTitle(
+    text: String,
+    color: Color = MaterialTheme.colorScheme.onSurface,
+) {
+    Text(
+        text = text,
+        style = RaddTokens.Type.Headline,
+        color = color,
+    )
 }
 
 @Composable

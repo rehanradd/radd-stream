@@ -1,19 +1,20 @@
 package com.raddstream.app.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -111,13 +112,13 @@ private fun RungRow(
                     )
                     if (isAuto) {
                         Spacer(Modifier.width(6.dp))
-                        AssistChip(
-                            onClick = onPlay,
-                            label = { Text("Auto", style = MaterialTheme.typography.labelSmall) },
-                        )
+                        // D-33: "Auto" is a pill in the same language as the
+                        // tier pill — not an AssistChip that looks like a
+                        // label and plays on tap. The play button plays.
+                        RungPill(text = "Auto", highlighted = false)
                     }
                     Spacer(Modifier.width(6.dp))
-                    TierPill(tier = tier)
+                    RungPill(text = tier, highlighted = tier == "VIP")
                 }
                 Text(
                     text = option.detailLine,
@@ -146,8 +147,10 @@ private fun RungRow(
                 }
             }
             // One action per rung: it plays here, or it is kept. Never both, never a list.
+            // D-33: the glyphs sit on tonal pads, not bare on the row — a bare
+            // icon reads as decoration, a pad reads as a button.
             if (option.playsHere) {
-                IconButton(onClick = onPlay) {
+                RungIconButton(onClick = onPlay) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
                         contentDescription = "Play in ${option.title}",
@@ -155,7 +158,7 @@ private fun RungRow(
                     )
                 }
             }
-            IconButton(onClick = onKeep) {
+            RungIconButton(onClick = onKeep) {
                 Icon(
                     imageVector = Icons.Default.Download,
                     contentDescription = "Download ${option.title}",
@@ -167,29 +170,50 @@ private fun RungRow(
 }
 
 /**
- * The tier a rung requires, as a small pill beside its title. VIP draws the
- * eye (it is the reason the rung may be absent for a free viewer); Standard
- * sits quiet. It is a label, not a button — tapping it plays nothing.
+ * One rung action: a 40dp tonal pad with the glyph centred. The pad is the
+ * button — the same surfaceVariant the rung's quiet pills use, so the row
+ * has one action language instead of bare glyphs beside filled buttons.
  */
 @Composable
-private fun TierPill(tier: String) {
-    val isVip = tier == "VIP"
+private fun RungIconButton(
+    onClick: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    Surface(
+        onClick = onClick,
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        modifier = Modifier.size(40.dp),
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            content()
+        }
+    }
+}
+
+/**
+ * One pill language for the rung row (D-33): the tier a rung requires and the
+ * "Auto" mark share it, so the row never shows two chip styles again. VIP
+ * draws the eye (it is the reason the rung may be absent for a free viewer);
+ * everything else sits quiet. A pill is a label, not a button — tapping it
+ * plays nothing. One word, never wrapped mid-word (Session 121, P-9).
+ */
+@Composable
+private fun RungPill(text: String, highlighted: Boolean) {
     Surface(
         shape = RoundedCornerShape(8.dp),
-        color = if (isVip) {
+        color = if (highlighted) {
             MaterialTheme.colorScheme.primaryContainer
         } else {
             MaterialTheme.colorScheme.surfaceVariant
         },
     ) {
         Text(
-            text = tier,
+            text = text,
             style = MaterialTheme.typography.labelSmall,
-            // Session 121 (P-9): the pill is one word ("Standard" / "VIP") and must
-            // never wrap mid-word ("Stan / dard") when the rung row runs out of room.
             maxLines = 1,
             softWrap = false,
-            color = if (isVip) {
+            color = if (highlighted) {
                 MaterialTheme.colorScheme.onPrimaryContainer
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant

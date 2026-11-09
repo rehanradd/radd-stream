@@ -217,6 +217,9 @@ fun RaddStreamNavGraph(
                     // Session 123: the Home check-in card opens the standalone
                     // check-in screen — the card claims, the screen shows the week.
                     onOpenCheckIn = { navController.navigate(Screen.CheckIn.route) },
+                    // Session 123 (HO-7): a guest's sign-in door is Settings,
+                    // where the account card lives.
+                    onOpenSignIn = { navController.navigate(Screen.Settings.route) },
                     heroMax = theme.heroMax,
                     heroAutoplay = theme.heroAutoplay && autoplayPreviews,
                     heroIntervalMs = theme.heroIntervalS * 1_000L,

@@ -22,6 +22,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.awaitEachGesture
@@ -161,6 +162,7 @@ import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
 import com.raddstream.app.player.qualityCostPerHour
+import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.theme.RaddCaptionPlate
 import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
 import com.raddstream.app.ui.theme.RaddCoral400
@@ -1518,7 +1520,7 @@ private fun BottomControls(
         if (showVolumeDialog) {
             AlertDialog(
                 onDismissRequest = { showVolumeDialog = false },
-                title = { Text(stringResource(R.string.player_volume_title)) },
+                title = { RaddDialogTitle(stringResource(R.string.player_volume_title)) },
                 text = {
                     Column {
                         Text(stringResource(R.string.player_volume, (state.userVolume * 100).toInt()))
@@ -1803,7 +1805,16 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
         ) {
             Icon(Icons.Default.Warning, null, tint = RaddCoral400, modifier = Modifier.size(40.dp))
             Spacer(Modifier.height(10.dp))
-            Text(message, color = Color.White, fontSize = brandSp(13), textAlign = TextAlign.Center)
+            // D-47: the two failure states share one language — the give-up
+            // card's body is left-aligned, so this message is too. The icon
+            // stays centred, as on the give-up card.
+            Text(
+                message,
+                color = Color.White,
+                fontSize = brandSp(13),
+                textAlign = TextAlign.Start,
+                modifier = Modifier.fillMaxWidth(),
+            )
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = Color.White) }
         }
@@ -2014,6 +2025,13 @@ private fun GiveUpCard(
     // the slow link more time; it is no longer the only way out.
     AlertDialog(
         onDismissRequest = onBackToDetails,
+        // D-48: the dialog reads as a surface, not a slab on black — a 1dp
+        // outline in the dialog's own shape, over the tonal container.
+        modifier = Modifier.border(
+            1.dp,
+            MaterialTheme.colorScheme.outlineVariant,
+            MaterialTheme.shapes.extraLarge,
+        ),
         containerColor = RaddPlayerDialog,
         icon = {
             // Session 121 (P-34): the logo-mark is the brand loader's job, not an
@@ -2027,14 +2045,15 @@ private fun GiveUpCard(
             )
         },
         title = {
-            Text(
-                when (why) {
+            // D-2: one dialog title style everywhere — display family,
+            // semibold, 20sp — not the thin 16sp face this card used.
+            RaddDialogTitle(
+                text = when (why) {
                     HandoffWhy.DOWNLOAD_ONLY -> stringResource(R.string.player_giveup_download_only)
                     HandoffWhy.NO_CANDIDATE_LEFT -> stringResource(R.string.player_giveup_no_candidate)
                     HandoffWhy.START_TIMEOUT -> stringResource(R.string.player_giveup_timeout)
                 },
                 color = Color.White,
-                fontSize = brandSp(16),
             )
         },
         text = {
@@ -2207,7 +2226,7 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
     AlertDialog(
         onDismissRequest = { vm.resolveResume(false) },
         containerColor = RaddPlayerDialog,
-        title = { Text(stringResource(R.string.player_resume_title), color = Color.White, fontSize = brandSp(16)) },
+        title = { RaddDialogTitle(stringResource(R.string.player_resume_title), color = Color.White) },
         text = {
             Text(
                 stringResource(
@@ -2242,7 +2261,7 @@ private fun SponsorBreakDialog(slot: AdSlot, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = RaddPlayerDialog,
-        title = { Text(stringResource(R.string.player_ad_title), color = Color.White, fontSize = brandSp(16)) },
+        title = { RaddDialogTitle(stringResource(R.string.player_ad_title), color = Color.White) },
         text = {
             Text(
                 stringResource(R.string.player_ad_body, moment),
@@ -2266,7 +2285,7 @@ private fun CalibrationDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = RaddPlayerDialog,
-        title = { Text(stringResource(R.string.player_calibration_title), color = Color.White, fontSize = brandSp(16)) },
+        title = { RaddDialogTitle(stringResource(R.string.player_calibration_title), color = Color.White) },
         text = {
             Column {
                 Text(
@@ -2303,7 +2322,7 @@ private fun PlayFromDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = RaddPlayerDialog,
-        title = { Text(stringResource(R.string.player_play_from_title), color = Color.White, fontSize = brandSp(16)) },
+        title = { RaddDialogTitle(stringResource(R.string.player_play_from_title), color = Color.White) },
         text = {
             OutlinedTextField(
                 value = text,
