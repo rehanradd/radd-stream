@@ -17,14 +17,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -81,6 +76,7 @@ import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -110,11 +106,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.drawscope.withTransform
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -186,7 +177,7 @@ import com.raddstream.app.ui.theme.RaddPlayerDialog
 import com.raddstream.app.ui.theme.RaddPlayerSheet
 import com.raddstream.app.ui.theme.RaddPlayerSnackbarPlate
 import com.raddstream.app.ui.theme.RaddPlayerStage
-import com.raddstream.app.ui.theme.RaddTideIndigo
+import com.raddstream.app.ui.theme.RaddTokens
 import com.raddstream.app.ui.theme.brandSp
 import com.raddstream.app.ui.theme.paint
 import com.raddstream.app.viewmodel.PlayerEvent
@@ -547,7 +538,10 @@ private fun PlayerScreenContent(
         if (state.isBuffering && !state.isPlaying && state.giveUp == null &&
             state.startPhase == StartPhase.NONE
         ) {
-            LoadingWave(modifier = Modifier.align(Alignment.Center))
+            PlayerLoadingIndicator(
+                label = stringResource(R.string.player_buffering),
+                modifier = Modifier.align(Alignment.Center),
+            )
         }
 
         // The window before the first frame is the one a viewer cannot tell apart from a
@@ -1825,57 +1819,36 @@ private fun PlayerCoachOverlay(onDismiss: () -> Unit) {
 }
 
 /**
- * The brand loading current (plan §5 step 8, §4.7): the three wave lines from
- * `loading-wave.svg` (jade / coral / indigo), whose dashes flow along the wave and
- * chase each other — the same 34/20 dash and 1.5 s cycle as the asset's CSS, the
- * coral line half a second behind and the indigo line a second behind. Drawn in
- * Compose, not played from the asset's GIF, so it needs no new dependency and no
- * bitmap: the paths are the asset's own Q/T curves, rebuilt from its coordinates.
- * Replaces the generic spinner wherever the player waits.
+ * The player's loading indicator (Session 123, D-36): a real indeterminate
+ * progress ring, not the brand mark. The three-wave mark is the logo — a
+ * viewer cannot tell whether it is a spinner or a picture — so the wait
+ * shows the ring the platform owns, in the action colour, with the reason
+ * underneath when the caller has one. The mark stays for brand moments (the
+ * splash, the start card's corner) and never stands in for progress.
  */
 @Composable
-private fun LoadingWave(modifier: Modifier = Modifier) {
-    val phase by rememberInfiniteTransition().animateFloat(
-        initialValue = 0f,
-        targetValue = -54f,
-        animationSpec = infiniteRepeatable(animation = tween(1500, easing = LinearEasing)),
-    )
-    Canvas(modifier.size(96.dp)) {
-        val waveScale = size.minDimension / 200f
-        withTransform({ scale(waveScale, waveScale) }) {
-            drawPath(
-                loadingWavePath(76f),
-                color = RaddCurrent500,
-                style = Stroke(width = 6f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(34f, 20f), phase)),
-            )
-            drawPath(
-                loadingWavePath(100f),
-                color = RaddCoral400,
-                style = Stroke(width = 6f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(34f, 20f), phase - 18f)),
-            )
-            drawPath(
-                loadingWavePath(124f),
-                color = RaddTideIndigo,
-                style = Stroke(width = 6f, cap = StrokeCap.Round, pathEffect = PathEffect.dashPathEffect(floatArrayOf(34f, 20f), phase - 36f)),
+private fun PlayerLoadingIndicator(
+    label: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(RaddTokens.Touch.MinTarget),
+            color = MaterialTheme.colorScheme.primary,
+            strokeWidth = 3.dp,
+        )
+        if (!label.isNullOrBlank()) {
+            Spacer(Modifier.height(RaddTokens.Space.Sm))
+            Text(
+                label,
+                color = Color.White,
+                style = MaterialTheme.typography.bodyMedium,
+                textAlign = TextAlign.Center,
             )
         }
-    }
-}
-
-/**
- * One wave line from `loading-wave.svg`: M14, then a Q curve and six T curves
- * across to x=186, the control points alternating 13 above and 13 below the line —
- * each T reflects the previous control point across its endpoint, which is what the
- * SVG's T command does. Pure geometry, no player state.
- */
-private fun loadingWavePath(y: Float): Path = Path().apply {
-    moveTo(14f, y)
-    var controlX = 26.5f
-    var controlY = y - 13f
-    floatArrayOf(39f, 64f, 89f, 114f, 139f, 164f, 186f).forEach { x ->
-        quadraticBezierTo(controlX, controlY, x, y)
-        controlX = 2 * x - controlX
-        controlY = 2 * y - controlY
     }
 }
 
@@ -1908,7 +1881,7 @@ private fun StartNoticeCard(
                 .padding(horizontal = 32.dp)
                 .semantics(mergeDescendants = true) { contentDescription = spoken },
         ) {
-            LoadingWave()
+            PlayerLoadingIndicator()
             Spacer(Modifier.height(14.dp))
             Text(
                 label,

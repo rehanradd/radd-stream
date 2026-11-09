@@ -32,6 +32,7 @@
     <string name="player_prints_tools">Prints &amp; tools</string>
     <string name="player_pause">Pause</string>
     <string name="player_play">Play</string>
+    <string name="player_buffering">Buffering…</string>
     <string name="player_leave_cinema">Leave cinema mode</string>
     <string name="player_lock">Lock controls</string>
     <string name="player_quality_label">Quality: %1$s</string>

@@ -52,6 +52,7 @@ class OfflineCacheEngine @Inject constructor(
     private val repository: CacheRepository,
     private val taskDao: CacheTaskDao,
     private val fileDao: CacheFileDao,
+    private val manifestDao: ByteRangeManifestDao,
     private val storage: StorageGate,
     private val keepTtl: KeepTtlHolder,
     @CacheScope private val scope: CoroutineScope,
@@ -61,6 +62,9 @@ class OfflineCacheEngine @Inject constructor(
 
     /** Live loopback servers, one per kept work being served; guarded by a lock on the map. */
     private val proxies = LinkedHashMap<String, LocalMediaProxy>()
+
+    /** Source keys whose live proxy serves a partial prefix, not the whole file. */
+    private val partialProxies = mutableSetOf<String>()
 
     @Volatile
     private var lastFreeBytes: Long = Long.MAX_VALUE
@@ -181,37 +185,95 @@ class OfflineCacheEngine @Inject constructor(
     suspend fun playableUriForSourceKey(sourceKey: String): String? =
         sourceKey.takeIf { it.isNotBlank() }?.let { serveUri(it) }
 
+    /**
+     * Serve one kept work to the player — complete when it is complete, and
+     * up to its verified prefix when it is not.
+     *
+     * Session 123 (SU-1): this used to answer null for anything but a
+     * committed file, so a download interrupted by a dead server was
+     * unplayable even though its bytes were on disk — the server going away
+     * bricked the title. A partial progressive file now plays through the
+     * same loopback proxy, capped at the manifest's contiguous prefix, so
+     * the player sees EOF at the frontier instead of nothing at all. The
+     * prefix is read at open time: bytes that land after the open are a
+     * later open's prefix, never bytes served past what the manifest proved.
+     */
     private suspend fun serveUri(sourceKey: String): String? {
-        val committed = fileDao.getBySourceKey(sourceKey).firstOrNull { it.isComplete && !it.isTemporary }
-            ?: return null
-        val file = File(committed.path)
-        if (!file.isFile || file.length() <= 0L) {
-            closeProxy(sourceKey)
-            return null
+        val files = fileDao.getBySourceKey(sourceKey)
+        return when (val choice = selectServeFile(files)) {
+            is ServeFileChoice.Complete -> {
+                val file = File(choice.file.path)
+                if (!file.isFile || file.length() <= 0L) {
+                    closeProxy(sourceKey)
+                    null
+                } else {
+                    withContext(Dispatchers.IO) {
+                        proxyFor(sourceKey, file, prefixProvider = { file.length() }, isPartial = false).baseHttpUrl
+                    }
+                }
+            }
+            is ServeFileChoice.Partial -> {
+                val file = File(choice.file.path)
+                if (!file.isFile || file.length() <= 0L) {
+                    closeProxy(sourceKey)
+                    null
+                } else {
+                    // The manifest is the only witness to which bytes are
+                    // really on disk; the proxy caps every range at it, so a
+                    // pre-allocated tail of zeros never reaches the player
+                    // as if it were media.
+                    val prefix = manifestDao.contiguousPrefix(choice.taskId)
+                    if (prefix <= 0L) {
+                        closeProxy(sourceKey)
+                        null
+                    } else {
+                        withContext(Dispatchers.IO) {
+                            proxyFor(sourceKey, file, prefixProvider = { prefix }, isPartial = true).baseHttpUrl
+                        }
+                    }
+                }
+            }
+            ServeFileChoice.None -> null
         }
-        return withContext(Dispatchers.IO) { proxyFor(sourceKey, file).baseHttpUrl }
     }
 
-    private fun proxyFor(sourceKey: String, file: File): LocalMediaProxy = synchronized(proxies) {
-        proxies[sourceKey]?.let { return it }
+    private fun proxyFor(
+        sourceKey: String,
+        file: File,
+        prefixProvider: () -> Long,
+        isPartial: Boolean,
+    ): LocalMediaProxy = synchronized(proxies) {
+        val cached = proxies[sourceKey]
+        if (cached != null && (sourceKey in partialProxies) == isPartial) return cached
+        if (cached != null) {
+            // The file finished (or regressed) since this proxy opened: the
+            // old prefix is a lie now, so the socket goes and a fresh one
+            // opens rather than serving EOF at a frontier that moved.
+            proxies.remove(sourceKey)?.close()
+            partialProxies.remove(sourceKey)
+        }
         val fresh = LocalMediaProxy(
             file = file,
             // A committed file is complete, so the verified prefix is the whole file. The
             // provider is read per request, so a sweep that truncates the file is answered
-            // honestly (416) instead of serving bytes that no longer exist.
-            prefixProvider = { file.length() },
+            // honestly (416) instead of serving bytes that no longer exist. A partial
+            // file's provider is the prefix captured at open time (see serveUri).
+            prefixProvider = prefixProvider,
             contentType = contentTypeFor(file),
         )
         proxies[sourceKey] = fresh
+        if (isPartial) partialProxies.add(sourceKey)
         while (proxies.size > MAX_LIVE_PROXIES) {
             val eldest = proxies.keys.firstOrNull { it != sourceKey } ?: break
             proxies.remove(eldest)?.close()
+            partialProxies.remove(eldest)
         }
         fresh
     }
 
     private fun closeProxy(sourceKey: String) {
         synchronized(proxies) { proxies.remove(sourceKey) }?.close()
+        synchronized(proxies) { partialProxies.remove(sourceKey) }
     }
 
     private fun contentTypeFor(file: File): String = when (file.extension.lowercase()) {
@@ -284,4 +346,42 @@ class OfflineCacheEngine @Inject constructor(
         /** Loopback servers kept alive at once; the player opens one work at a time. */
         private const val MAX_LIVE_PROXIES = 4
     }
+}
+
+/** What [OfflineCacheEngine] may serve for one source key. */
+sealed interface ServeFileChoice {
+    /** A committed file: the whole file is verified. */
+    data class Complete(val file: CacheFileEntity) : ServeFileChoice
+    /** A partial progressive file: only the verified contiguous prefix is served. */
+    data class Partial(val file: CacheFileEntity, val taskId: Long) : ServeFileChoice
+    /** Nothing servable. */
+    data object None : ServeFileChoice
+}
+
+/** Progressive containers whose prefix a player can open mid-file. */
+private val PARTIAL_SERVABLE_EXTENSIONS = setOf("mp4", "m4v", "mkv", "webm", "ts", "mp3", "m4a")
+
+/**
+ * Pure choice of what to serve for one source key — the SU-1 rule, kept
+ * testable without Room.
+ *
+ * A complete committed file wins. Otherwise a partial temp file may still
+ * play up to its verified prefix — that is what a dead server leaves behind,
+ * and answering null for it is what bricked playback when the server went
+ * away. Only progressive media qualifies: a truncated .m3u8 playlist is a
+ * broken index, not a playable prefix, so HLS keeps still wait for
+ * completion. A partial without a task id cannot prove its prefix, so it
+ * serves nothing rather than bytes nobody verified. A row marked complete
+ * while still temporary is trusted by neither branch: only a committed
+ * (non-temp) row may claim the whole file.
+ */
+internal fun selectServeFile(files: List<CacheFileEntity>): ServeFileChoice {
+    files.firstOrNull { it.isComplete && !it.isTemporary }
+        ?.let { return ServeFileChoice.Complete(it) }
+    val partial = files.filter { it.isTemporary && !it.isComplete }
+        .filter { it.taskId != null }
+        .filter { it.path.substringAfterLast('.', "").lowercase() in PARTIAL_SERVABLE_EXTENSIONS }
+        .maxByOrNull { it.sizeBytes }
+        ?: return ServeFileChoice.None
+    return ServeFileChoice.Partial(partial, partial.taskId!!)
 }

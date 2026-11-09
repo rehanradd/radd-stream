@@ -56,6 +56,7 @@ import com.raddstream.app.data.RegionChoice
 import com.raddstream.app.data.RegionChoices
 import com.raddstream.app.data.UserRegion
 import com.raddstream.app.ui.theme.RaddStreamMark
+import com.raddstream.app.ui.theme.RaddTokens
 import com.raddstream.app.viewmodel.RegionUiState
 import com.raddstream.app.viewmodel.RegionViewModel
 
@@ -139,6 +140,15 @@ fun RegionSelectionScreen(
                 Text("Continue")
             }
         }
+        // Session 123 (D-4): the screen ends at the button, so the value the
+        // viewer gets for choosing is written under it — no more dead void.
+        Spacer(Modifier.height(RaddTokens.Space.Md))
+        Text(
+            text = "Free forever · No account needed",
+            style = RaddTokens.Type.BodySmall,
+            color = RaddTokens.Color.TextSecondary,
+            textAlign = TextAlign.Center,
+        )
         // Session 121 (P-24): the question is a convenience, never a door — a viewer
         // who does not want to choose skips straight to the default (Desi).
         TextButton(
