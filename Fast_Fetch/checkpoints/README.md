@@ -5,6 +5,16 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-09 — Muse [PHASE-E-LINKHEALTH-DRIFT-WARM]: link-health wiring +
+  coin drift-guard test + pre-warming — new `link_sweep.py` (stratified
+  1,000-link sample, plan/run/status/merge, staging first, merge through
+  `apply_evidence`, stamp `link_sweep_last_run`); admin panel reads the
+  stamped `links_by_state`/`link_coverage` + the sweep stamp + the latest
+  propagate run; coin drift-guard tests (refund, velocity cap, refund
+  counts toward velocity, grant + spend idempotency replays); first
+  maintenance tick warms the top-200 eager set, later ticks top up 20 —
+  [20261109-muse-session-linkhealth-drift-warm.md](20261109-muse-session-linkhealth-drift-warm.md)
+
 - 2026-11-09 — Muse [MUSE-SESSION126-PLAYER-COMPLETE]: video player
   complete — the consolidated plan's whole open list: D-35 poster backdrop,
   PL-2 sponsor placeholder removed (countdown advances directly), PL-3

@@ -61,6 +61,13 @@ PROPAGATE_BATCHES_PER_TICK = 2
 WARM_LIMIT_PER_TICK = 20
 HEAL_LIMIT_PER_TICK = 50
 
+#: The first tick after `serve` starts warms the whole eager set (the scale
+#: plan's top-200), so the links `/play` picks first are resolved before the
+#: first press of the day; later ticks top up 20 at a time. A 200-link warm
+#: is minutes of network work in the daemon thread — it delays only the
+#: tick's own heal job, never a request.
+FIRST_TICK_WARM_LIMIT = 200
+
 #: The fleet guardrail's memory floor (AGENTS.md): stop heavy work at once
 #: below this much available memory.
 MEMORY_FLOOR_MB = 1500
@@ -159,11 +166,26 @@ def tick_once(*, propagate_batches: int = PROPAGATE_BATCHES_PER_TICK,
     return summary
 
 
-def _loop(*, interval: float, **tick_kwargs) -> None:
+def _first_tick_kwargs(first_tick_warm_limit: int, **tick_kwargs) -> dict:
+    """The first tick's kwargs: the warm job takes the eager-set limit, so
+    serve start fills the top-200 instead of the first 20. Later ticks use
+    the caller's kwargs unchanged."""
+    return {**tick_kwargs, "warm_limit": int(first_tick_warm_limit)}
+
+
+def _loop(*, interval: float,
+          first_tick_warm_limit: int = FIRST_TICK_WARM_LIMIT,
+          **tick_kwargs) -> None:
     time.sleep(FIRST_TICK_DELAY_SECONDS)
+    first = True
     while True:
         try:
-            tick_once(**tick_kwargs)
+            if first:
+                tick_once(**_first_tick_kwargs(first_tick_warm_limit,
+                                               **tick_kwargs))
+                first = False
+            else:
+                tick_once(**tick_kwargs)
         except Exception as ex:      # noqa: BLE001 — the loop must never die
             print(f"[maintenance] tick crashed: {ex}", flush=True)
         time.sleep(interval)

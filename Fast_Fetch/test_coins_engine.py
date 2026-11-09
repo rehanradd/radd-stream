@@ -1493,5 +1493,107 @@ class Edge(Wallet):
         self.assertNotIn("account_id", body)
 
 
+class DriftGuard(Wallet):
+    """The balance is derived, never stored — so prove it cannot drift.
+
+    Every mutation below ends with the same check: the balance the wallet
+    serves (the API reply) and the balance `engagement.coin_balance`
+    returns both equal a `SUM(delta)` recomputed from the ledger rows by
+    this file's own SQL, never by the function under test. A refused grant
+    and a replayed grant must write no row at all.
+    """
+
+    def _ledger_sum(self, account_id=None):
+        """The balance, recomputed from the rows — not via `engagement`."""
+        with closing(sqlite3.connect(str(self.state))) as conn:
+            row = conn.execute(
+                "SELECT COALESCE(SUM(delta), 0) FROM coin_ledger"
+                " WHERE account_id = ?",
+                (int(account_id or self.account_id),)).fetchone()
+        return int(row[0])
+
+    def _assert_no_drift(self):
+        """Served == derived == recomputed, for this account."""
+        served = self.body(self.get(COINS))["balance"]
+        derived = engagement.coin_balance(self.state, self.account_id)
+        recomputed = self._ledger_sum()
+        self.assertEqual(derived, recomputed,
+                         "coin_balance disagrees with the ledger rows")
+        self.assertEqual(served, recomputed,
+                         "the served wallet disagrees with the ledger rows")
+
+    def _server_grant(self, amount, *, reason="admin_grant", now=None,
+                      idempotency=None):
+        """A server-vouched grant (source='server', so the velocity guard
+        binds — the `Wallet.grant` helper uses source='admin', which is
+        exempt by design)."""
+        with closing(engagement.connect(self.state)) as conn:
+            return engagement.grant_coins(
+                conn, self.account_id, amount=amount, reason=reason,
+                source="server", ref="test-drift", idempotency_key=idempotency,
+                now=now)
+
+    def test_a_refund_clawback_moves_the_balance_by_exactly_the_refund(self):
+        """A compensating row is a debit like any other: the balance is the
+        sum, and the sum is the balance."""
+        self.assertEqual(self.grant(100)["balance"], 100)
+        spent = self.spend(30, reason="refund")
+        self.assertEqual(spent["balance"], 70)
+        self.assertEqual([row["delta"] for row in self.rows()], [100, -30])
+        self.assertEqual(self._ledger_sum(), 70)
+        self._assert_no_drift()
+
+    def test_a_velocity_capped_grant_writes_no_row_and_moves_nothing(self):
+        """Twenty credits in the window is the guard's edge: the 21st is
+        refused and the ledger does not move under it."""
+        moment = time.time()
+        for _ in range(engagement.VELOCITY_MAX_GRANTS):
+            self._server_grant(5, now=moment)
+        self.assertEqual(self._ledger_sum(), 5 * engagement.VELOCITY_MAX_GRANTS)
+        before = self.wallet_state()
+        with self.assertRaises(engagement.VelocityLimitReached):
+            self._server_grant(5, now=moment)
+        self.assertEqual(self.wallet_state(), before,
+                         "a refused grant must write no row")
+        self._assert_no_drift()
+
+    def test_a_refund_credit_counts_toward_velocity_like_a_grant(self):
+        """The guard counts every positive row — a refund that returns coins
+        is a credit, and a refund loop is the same shape as a grant loop."""
+        moment = time.time()
+        for _ in range(engagement.VELOCITY_MAX_GRANTS - 1):
+            self._server_grant(5, now=moment)
+        self._server_grant(5, reason="refund", now=moment)
+        with self.assertRaises(engagement.VelocityLimitReached):
+            self._server_grant(5, now=moment)
+        self._assert_no_drift()
+
+    def test_an_idempotency_replay_mints_no_second_coin(self):
+        first = self.grant(50, idempotency="drift-replay-grant")
+        self.assertEqual(first["granted"], 1)
+        second = self.grant(50, idempotency="drift-replay-grant")
+        self.assertEqual(second["granted"], 0)
+        self.assertTrue(second["idempotent"])
+        with closing(sqlite3.connect(str(self.state))) as conn:
+            keyed = conn.execute(
+                "SELECT COUNT(*) FROM coin_ledger"
+                " WHERE idempotency_key = ?",
+                ("drift-replay-grant",)).fetchone()[0]
+        self.assertEqual(keyed, 1, "one key, one row, one grant")
+        self.assertEqual(self._ledger_sum(), 50)
+        self._assert_no_drift()
+
+    def test_a_spend_replay_deducts_only_once(self):
+        self.grant(100)
+        first = self.spend(20, idempotency="drift-replay-spend")
+        self.assertEqual(first["spent"], 20)
+        second = self.spend(20, idempotency="drift-replay-spend")
+        self.assertEqual(second["spent"], 0)
+        self.assertTrue(second["already_applied"])
+        self.assertEqual([row["delta"] for row in self.rows()], [100, -20])
+        self.assertEqual(self._ledger_sum(), 80)
+        self._assert_no_drift()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
