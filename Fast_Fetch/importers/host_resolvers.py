@@ -308,6 +308,7 @@ SERVICE_VIDMOLY = "vidmoly"
 SERVICE_UPLOADFLIX = "uploadflix"
 SERVICE_1XPLAYER = "1xplayer"
 SERVICE_MOVIEBOX = "moviebox"
+SERVICE_CASTLE = "castle"
 SERVICE_VIDBOLT = "vidbolt"
 SERVICE_VIBUXER = "vibuxer"
 SERVICE_VIDRIFT = "vidrift"
@@ -396,6 +397,21 @@ MOVIEBOX_HOST_RE = re.compile(
     r"(?:^|\.)(?:themoviebox\.xyz|123moviesfree\.club)$", re.I)
 MOVIEBOX_DETAIL_RE = re.compile(
     r"^/(?:detail|movies)/([^/?#]+)", re.I)
+
+# Castle (bulwik.com, Session newsites-batch1, verified live 2026-11-10):
+# a movie/series page ships a signed tlnob HLS master in its JSON-LD.
+# The signature lives ~3h from minting and the page itself may be
+# CDN-cached with an already-expired signature, so the stored final_url is
+# never served — unwrap_castle re-extracts a fresh signature from the live
+# page on every press. The URL is JSON-escaped in the page (\\u0026 for &)
+# and must be unescaped before use: a truncated URL (no expire param) 403s.
+# The playlist answers 200/206 with a real #EXTM3U to a plain GET, with or
+# without Referer, so the Range probe needs no special headers.
+CASTLE_HOST_RE = re.compile(r"(?:^|\.)bulwik\.com$", re.I)
+CASTLE_PAGE_RE = re.compile(r"^/(?:movie|series)/[^/?#]+/\d+", re.I)
+CASTLE_M3U8_RE = re.compile(
+    r"https://img01\.tlnob\.com/video/[^\s\"'<>]+", re.I)
+CASTLE_EXPIRE_RE = re.compile(r"[?&]expire=(\d+)")
 
 # gofile (Session 103, verified live 2026-11-08): the real website token is
 # generated client-side as sha256(UA :: language :: accountToken ::
@@ -3052,6 +3068,94 @@ def unwrap_moviebox(url: str, fetch=None, verify: bool = True) -> dict:
     return result
 
 
+def is_castle_page(url: str) -> bool:
+    """True for a bulwik.com movie/series page (the Castle re-extract target)."""
+    try:
+        parsed = urllib.parse.urlsplit(url or "")
+    except Exception:
+        return False
+    host = (parsed.hostname or "").lower()
+    if not CASTLE_HOST_RE.search(host):
+        return False
+    return bool(CASTLE_PAGE_RE.search(parsed.path or ""))
+
+
+def _castle_unescape(raw: str) -> str:
+    """JSON-unescape a signed URL as embedded in page JSON.
+
+    The page sometimes carries the URL up to an escaped closing quote
+    (``...expire=1234\\``), so a trailing backslash is stripped first —
+    without that, the JSON parse fails and the caller gets a truncated
+    URL that the CDN 403s.
+    """
+    raw = raw.rstrip("\\")
+    try:
+        return json.loads('"%s"' % raw.replace('"', '\\"'))
+    except Exception:
+        return raw.replace("\\u0026", "&").replace("\\/", "/")
+
+
+def unwrap_castle(url: str, fetch=None, verify: bool = True) -> dict:
+    """
+    Castle (bulwik.com) movie/series page -> {final_url, service,
+    is_temporary, expires_in, status, notes, …}.
+
+    Chain (verified live 2026-11-10): GET the page, take the first
+    ``img01.tlnob.com/video/<hash>/index_401.m3u8?auth_key=…&expire=…``
+    (JSON-unescaped — the raw page text carries ``\\u0026`` for ``&`` and a
+    truncated URL 403s), then Range-probe the playlist with the page URL
+    as Referer. The signature lives ~3h, so the result is always
+    ``is_temporary`` and the caller must re-resolve per press, never serve
+    a stored one. A page whose signature is already expired answers 403
+    on the probe and comes back ``blocked`` with the reason named.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_CASTLE, url)
+    if not is_castle_page(result["embed_url"]):
+        result["status"] = "unknown"
+        result["notes"].append("not a Castle (bulwik.com) movie/series page")
+        return result
+    status, body, _headers, _final = fetch(result["embed_url"])
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"Castle page HTTP {status}")
+        return result
+    page = _page_text(body)
+    signed = None
+    for raw in CASTLE_M3U8_RE.findall(page):
+        candidate = _castle_unescape(raw)
+        if "index_" in candidate and ".m3u8" in candidate:
+            signed = candidate
+            break
+    if not signed:
+        result["status"] = "unknown"
+        result["notes"].append("Castle page carries no signed stream")
+        return result
+    result["final_url"] = signed
+    expire_m = CASTLE_EXPIRE_RE.search(signed)
+    if expire_m:
+        try:
+            result["expires_in"] = max(
+                0, int(int(expire_m.group(1)) / 1000 - time.time()))
+        except ValueError:
+            result["expires_in"] = None
+    if not verify:
+        result["notes"].append("page only; the byte endpoint was not probed")
+        return result
+    probe = _probe_playlist_or_file(result["final_url"], fetch,
+                                    result["embed_url"])
+    result["http_status"] = probe["http_status"]
+    result["content_type"] = probe["content_type"]
+    if probe["size_bytes"] is not None:
+        result["size_bytes"] = probe["size_bytes"]
+    result["status"] = probe["status"]
+    if probe["reason"]:
+        result["notes"].append(probe["reason"])
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     """One URL in, one JSON verdict out — a manual check of the chain."""
     args = argv if argv is not None else sys.argv[1:]
@@ -3078,6 +3182,8 @@ def main(argv: list[str] | None = None) -> int:
         unwrap = unwrap_gdrive
     elif is_animahd_player(url):
         unwrap = unwrap_animahd
+    elif is_castle_page(url):
+        unwrap = unwrap_castle
     else:
         unwrap = unwrap_mxdrop
     verdict = unwrap(url, verify="--no-verify" not in args)

@@ -568,10 +568,10 @@ class RegistryTests(unittest.TestCase):
         self.assertTrue(again["updated_at"])
         tmp.cleanup()
 
-    def test_shipped_registry_is_v2_with_all_22_sites(self):
+    def test_shipped_registry_is_v2_with_all_25_sites(self):
         reg = dr.load_registry()
         self.assertEqual(reg.get("version"), "2.0")
-        self.assertEqual(len(reg["sites"]), 22)
+        self.assertEqual(len(reg["sites"]), 25)
         for name, entry in reg["sites"].items():
             self.assertTrue(entry.get("slug_variants"), name)
             self.assertTrue(entry.get("tld_history"), name)

@@ -7078,6 +7078,28 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = 1
                     embed_verdict = verdict
                     _gate_from_verdict = True
+            elif hr and (service in (hr.SERVICE_CASTLE, "castle")
+                         or "bulwik.com" in source_u.lower()
+                         or "bulwik.com" in cached_u.lower()):
+                # Session newsites-batch1: Castle (bulwik.com) serves a
+                # signed tlnob .m3u8 in the movie page JSON-LD (~3h expiry,
+                # and the page itself may be CDN-cached with a stale
+                # signature — the stored final_url is never served). The
+                # unwrapper re-extracts a fresh signature from the live
+                # page on every press and Range-probes the playlist; the
+                # probe IS the gate evidence. For a row to resolve, the
+                # importer must store the bulwik page URL as its source_url
+                # (a signed URL carries no page to re-extract from).
+                _unwrap_branch_taken = True
+                _castle_url = (source_u if "bulwik.com" in source_u.lower()
+                               else cached_u)
+                verdict = hr.unwrap_castle(_castle_url, verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
             elif hr and (service == hr.SERVICE_VIDBOLT
                          or "vidbolt" in source_u.lower()
                          or "vidbolt" in cached_u.lower()):

@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "updated_at": "2026-11-09T19:35:00Z",
+  "updated_at": "2026-11-09T20:35:00Z",
   "sites": {
     "10xflix": {
       "active_base_url": "https://10xflix.asia",
@@ -684,6 +684,61 @@
       "last_checked": "2026-11-09T19:35:00Z",
       "api_endpoint": "/wp-json/wp/v2/posts",
       "notes": "WP download catalog; posts link mdrive.lol/archive/<id>/ per quality, archive pages link hubcloud.ist/drive/... and gdflix.vip/file/... (known file-host families)."
+    },
+    "dramadog": {
+      "active_base_url": "https://dramadog.app",
+      "last_verified": "2026-11-09T20:20:00Z",
+      "verified_by": "sitemap",
+      "known_mirrors": [
+        "https://dramadog.app"
+      ],
+      "slug_variants": [
+        "dramadog"
+      ],
+      "tld_history": [
+        "app"
+      ],
+      "api_type": "xml_sitemap",
+      "status": "active",
+      "last_checked": "2026-11-09T20:20:00Z"
+    },
+    "megacartoons": {
+      "active_base_url": "https://www.megacartoons.net",
+      "last_verified": "2026-11-09T20:20:00Z",
+      "verified_by": "homepage",
+      "known_mirrors": [
+        "https://megacartoons.net",
+        "https://www.megacartoons.net"
+      ],
+      "slug_variants": [
+        "megacartoons"
+      ],
+      "tld_history": [
+        "net"
+      ],
+      "api_type": "homepage",
+      "status": "active",
+      "last_checked": "2026-11-09T20:20:00Z",
+      "notes": "Enumerated via wp-json /wp-json/wp/v2/posts (the tracker verifies the homepage because cartoon titles carry no quality marker for the wp-json proof)."
+    },
+    "castle": {
+      "active_base_url": "https://www.bulwik.com",
+      "last_verified": "2026-11-09T20:20:00Z",
+      "verified_by": "sitemap",
+      "known_mirrors": [
+        "https://www.bulwik.com"
+      ],
+      "slug_variants": [
+        "castle",
+        "bulwik"
+      ],
+      "tld_history": [
+        "com"
+      ],
+      "api_type": "xml_sitemap",
+      "status": "active",
+      "last_checked": "2026-11-09T20:20:00Z",
+      "notes": "Site brand is Castle; domain is bulwik.com. Signed tlnob .m3u8 (~3h expiry) re-extracted per press by unwrap_castle; series need JS episode loading (movies only in batch 1)."
     }
   }
 }

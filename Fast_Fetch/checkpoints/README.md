@@ -5,6 +5,19 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-10 — Muse [NEWSITES-BATCH1]: DramaDog + MegaCartoons + Castle
+  importers — DramaDog sitemap enumeration (30 platform sitemaps, direct
+  .m3u8 per episode, ep1 + last probed per title, middle episodes
+  active-by-pattern), MegaCartoons wp-json + JW Player .mp4 with the Range
+  + ffprobe play gate, Castle movies sitemap + JSON-LD + signed tlnob .m3u8
+  (JSON-unescape fix, ~3h expiry, stale stored unverified) + unwrap_castle
+  re-extraction in the resolve dispatch (fast_fetch.py) and the host
+  resolvers. Registry 22 → 25 sites; 🧪 72 → 75. Tests: dramadog 14,
+  megacartoons 12, castle 14, host_resolvers 230, docs_invariants 22,
+  domain_resolver 39, database 217, redact 82 — all OK. Live syncs (staging
+  DBs, ~200/site) not yet run — see the checkpoint for the VM procedure —
+  [20261110-muse-newsites-batch1.md](20261110-muse-newsites-batch1.md)
+
 - 2026-11-10 — Muse [SESSION-118-SWEEPS]: fuller 118 sweeps — MovieNestBD
   letter sweep (count 16,353 for "a", 909 pages), HarPal /programs 30-page
   index (509 programs, not the homepage's 11 — sync now walks homepage +

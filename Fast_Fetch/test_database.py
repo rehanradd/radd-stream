@@ -2011,6 +2011,7 @@ class DatabaseSaveTests(unittest.TestCase):
         SERVICE_UPLOADFLIX = "uploadflix"
         SERVICE_1XPLAYER = "1xplayer"
         SERVICE_MOVIEBOX = "moviebox"
+        SERVICE_CASTLE = "castle"
         SERVICE_VIDBOLT = "vidbolt"
         SERVICE_VIBUXER = "vibuxer"
         SERVICE_VIDRIFT = "vidrift"
@@ -2182,6 +2183,15 @@ class DatabaseSaveTests(unittest.TestCase):
                 "status": "active",
                 "final_url": "https://cdn.example/cineverse/master.m3u8",
                 "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200, "size_bytes": 512}
+
+        def unwrap_castle(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("castle", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://img01.tlnob.example/video/abc/index_401.m3u8",
+                "is_temporary": True, "expires_in": 10800.0,
                 "content_type": "application/vnd.apple.mpegurl",
                 "http_status": 200, "size_bytes": 512}
 
@@ -3432,6 +3442,29 @@ seg-00002.ts
         self.assertTrue(res["success"], res)
         self.assertEqual(res["url"], "https://cdn.example/cineverse/master.m3u8")
         self.assertEqual(resolvers.calls, [("cineverse", embed, True)])
+
+    def test_resolve_live_source_routes_a_castle_row_to_the_castle_unwrapper(self):
+        """Session newsites-batch1: a bulwik.com page is not a Stage-1
+        host, so the row reaches the castle branch; the verified verdict
+        serves even though the Stage-2 probe is stubbed to fail — the
+        stored signed URL is never served, the unwrapper re-extracts a
+        fresh signature from the live page on every press."""
+        embed = "https://www.bulwik.com/movie/all-pass/10285268178004214"
+        stored = self._embed_source("castle", "castle", embed)
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://img01.tlnob.example/video/abc/index_401.m3u8")
+        self.assertEqual(resolvers.calls, [("castle", embed, True)])
 
     def test_resolve_live_source_unwraps_a_pkembed_embed_to_its_top_rendition(self):
         embed = "https://pkembed.site/embed-g64v61whic26.html"

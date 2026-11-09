@@ -584,6 +584,23 @@ jobs:
       - name: 🧪 test_archive_import.py
         run: python3 -S Fast_Fetch/importers/test_archive_import.py
 
+      # New-sites batch 1 (DramaDog + MegaCartoons + Castle, Session
+      # newsites-batch1): DramaDog sitemap enumeration + the predictable
+      # .m3u8 episode pattern (ep1 + last probed per title, middle episodes
+      # active-by-pattern); MegaCartoons wp-json + JW Player .mp4 with the
+      # Range + ffprobe play gate (unproven files stay unverified);
+      # Castle movies sitemap + JSON-LD + the signed tlnob .m3u8
+      # (JSON-unescape, ~3h expiry, stale signatures stored unverified) +
+      # the unwrap_castle re-extraction chain. Offline — fixtures shaped
+      # from the 2026-11-10 live probe run; the small live batches are in
+      # the session checkpoint, not in these tests.
+      - name: 🧪 test_dramadog_import.py
+        run: python3 -S Fast_Fetch/importers/test_dramadog_import.py
+      - name: 🧪 test_megacartoons_import.py
+        run: python3 -S Fast_Fetch/importers/test_megacartoons_import.py
+      - name: 🧪 test_castle_import.py
+        run: python3 -S Fast_Fetch/importers/test_castle_import.py
+
       # The admin panel feed for the app (sections / broadcasts / hides): the
       # resolver, the adult fail-closed rule, the hide expiry/restore rules,
       # and the posts-route hide enforcement. Offline — temp SQLite files.

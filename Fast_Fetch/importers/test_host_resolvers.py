@@ -2109,5 +2109,105 @@ class TestSession104bHelpers(unittest.TestCase):
         self.assertIsNone(hr._moviebox_pick_stream(streams[:1]))
 
 
+# ---------------------------------------------------------------------------
+# Castle (bulwik.com) — signed tlnob re-extraction
+# ---------------------------------------------------------------------------
+
+CASTLE_PAGE = "https://www.bulwik.com/movie/all-pass/10285268178004214"
+CASTLE_PAGE_HTML = """<!DOCTYPE html><html><head>
+<title>All Pass Full Movie Watch Online Free</title>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Movie","name":"All Pass","image":"https://img1.bhcxy.com/image/2daffdb21745b63ab6b4769d8052b350fa0d753c.jpg","description":"Three families in North Chennai share peaceful lives.","genre":["Drama"],"datePublished":"2026-10-09","duration":"PT123M","contentRating":"PG"}]}</script>
+</head><body>
+<video><source src="https://img01.tlnob.com/video/30a719e0b2063f6666445411191bb26c2be59d31/index_401.m3u8?auth_key=n2W309DOxzOumDaP%2FwlhF3eC9U%2FWdODY93ycfLmbH04%3D\\u0026expire=1893456000000"></video>
+</body></html>"""
+CASTLE_PLAYLIST = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:52\n"
+CASTLE_SIGNED = ("https://img01.tlnob.com/video/30a719e0b2063f6666445411191bb26c2be59d31/"
+                 "index_401.m3u8?auth_key=n2W309DOxzOumDaP%2FwlhF3eC9U%2FWdODY93ycfLmbH04%3D"
+                 "&expire=1893456000000")
+
+
+class TestUnwrapCastle(unittest.TestCase):
+    def test_full_chain_active_and_unescaped(self):
+        fetch = scripted_fetch({
+            "bulwik.com/movie/all-pass": (200, CASTLE_PAGE_HTML, {}),
+            "index_401.m3u8": (200, CASTLE_PLAYLIST,
+                               {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "castle")
+        self.assertTrue(verdict["is_temporary"])
+        self.assertEqual(verdict["final_url"], CASTLE_SIGNED)
+        self.assertIn("&expire=", verdict["final_url"])
+        self.assertNotIn("\\u0026", verdict["final_url"])
+        self.assertGreater(verdict["expires_in"], 0)
+
+    def test_verify_off_returns_unverified_without_probing(self):
+        fetch = scripted_fetch({
+            "bulwik.com/movie/all-pass": (200, CASTLE_PAGE_HTML, {}),
+        })
+        verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch, verify=False)
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(verdict["final_url"], CASTLE_SIGNED)
+        self.assertEqual(len(fetch.calls), 1)
+        self.assertIn("not probed", json.dumps(verdict["notes"]))
+
+    def test_non_castle_url_is_refused_before_any_request(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_castle("https://www.example.com/movie/x/1",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertEqual(fetch.calls, [])
+
+    def test_homepage_is_not_a_re_extract_target(self):
+        self.assertFalse(hr.is_castle_page("https://www.bulwik.com/"))
+        self.assertFalse(hr.is_castle_page("https://www.bulwik.com/movies"))
+        self.assertTrue(hr.is_castle_page(CASTLE_PAGE))
+        self.assertTrue(hr.is_castle_page(
+            "https://www.bulwik.com/series/marshals-season-2/10290779789781498"))
+
+    def test_page_without_a_signed_stream_is_unknown(self):
+        fetch = scripted_fetch({
+            "bulwik.com/movie/all-pass": (200, "<html>no player</html>", {}),
+        })
+        verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no signed stream", json.dumps(verdict["notes"]))
+
+    def test_page_failure_shapes(self):
+        for status, expected in ((404, "dead"), (410, "dead"), (403, "blocked"),
+                                 (429, "blocked"), (500, "unknown")):
+            fetch = scripted_fetch({
+                "bulwik.com/movie/all-pass": (status, b"", {}),
+            })
+            verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch)
+            self.assertEqual(verdict["status"], expected, status)
+            self.assertEqual(verdict["notes"], [f"Castle page HTTP {status}"])
+
+    def test_expired_signature_probes_blocked(self):
+        fetch = scripted_fetch({
+            "bulwik.com/movie/all-pass": (200, CASTLE_PAGE_HTML, {}),
+            "index_401.m3u8": (403, b"<html>403</html>",
+                               {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "blocked")
+        self.assertIn("HTTP 403", json.dumps(verdict["notes"]))
+
+    def test_truncated_url_without_expire_is_never_served(self):
+        # A page that only carries the auth_key half (no &expire=) must not
+        # yield a final_url: the CDN 403s it, and the unwrapper must say so
+        # instead of handing out a URL that cannot play.
+        html = CASTLE_PAGE_HTML.replace("\\u0026expire=1893456000000", "")
+        fetch = scripted_fetch({
+            "bulwik.com/movie/all-pass": (200, html, {}),
+            "index_401.m3u8": (403, b"<html>403</html>",
+                               {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "blocked")
+        self.assertNotIn("expire=", verdict["final_url"])
+
+
 if __name__ == "__main__":
     unittest.main()
