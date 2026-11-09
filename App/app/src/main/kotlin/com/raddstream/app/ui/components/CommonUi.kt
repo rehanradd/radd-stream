@@ -69,10 +69,13 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Session 121 (P-16): the app's filter chips, in the accent. `FilterChip`'s default
- * selected container is `secondaryContainer` — maroon (`#3A1210`) in this brand — so
+ * selected container is `secondaryContainer` — a dark red-brown in this brand — so
  * a selected chip read as an error state next to the jade accent. Selected chips use
  * the jade `primaryContainer` (with its `onPrimaryContainer` label and check) instead;
  * everything unselected keeps the default. Every `FilterChip` in the app uses this.
+ * Session 123: the brand value itself moved from maroon toward the coral secondary
+ * (same dark container role, warmer hue) so a chip that misses this override still
+ * reads as coral family, not an error.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

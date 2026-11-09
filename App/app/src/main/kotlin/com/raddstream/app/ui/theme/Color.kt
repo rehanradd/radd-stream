@@ -251,18 +251,29 @@ val RaddOnDangerContainerLight = brandColor(BuildConfig.BRAND_COLORS_LIGHT_ON_DA
 // afterthought: every tier here exists so a white glyph clears 4.5:1 whatever
 // the film is showing behind it. They live in this file because ui/theme/
 // Color.kt is the one owner of raw paint — a screen names the role, never the
-// bytes. Migration note: the solid plates below are blue-grey while the brand
-// neutrals are teal-shifted (§1), and the accent has no brand role at all. The
-// hues were moved here unchanged rather than re-decided blind, because this
-// box has no device; folding them into colors.dark.* is an owner call, and the
-// old-to-brand-role table is recorded in this session's App/AGENTS.md log.
+// bytes.
+//
+// FOLD (Session 123, owner decision 2026-11-09): the chrome is folded into
+// brand roles — one token system, no orphan accents. The old-to-brand-role
+// table, hues preserved where they carry meaning:
+//   Stage/Sheet/Dialog plates  -> ink ramp (Ink900 / Ink850 / Ink800)
+//   AccentOrange               -> colors.dark.player_accent (#FF8552, same hue)
+//   AccentOrangeToast          -> player accent at 80%
+//   NarrationPlate             -> Ink800 at 80%
+//   NarrationCheck             -> RaddSuccess (one "that worked" green)
+//   PlayerSnackbarPlate        -> Ink800 at 90% (deliberately colourless)
+//   KeepStored/Blocked/Keeping -> Success / Danger / TideIndigo at 40%
+//     (Keeping drops the orphan blue #1565C0, D-39)
+// The MIDNIGHT/EMBER paid skins keep their own fills below: a theme fill is
+// a skin, explicitly allowed by DESIGN_SYSTEM.md §9, and never a meaning
+// colour — the accent that paints a state stays the brand accent in every skin.
 
 /** Full-bleed backdrop for audio-only playback, where there is no frame. */
-val RaddPlayerStage        = Color(0xFF0B0E14)
+val RaddPlayerStage        = RaddInk900
 /** Bottom-sheet container in the player (tracks, quality, subtitles, sleep). */
-val RaddPlayerSheet        = Color(0xFF12161F)
+val RaddPlayerSheet        = RaddInk850
 /** Dialog container — one lift above a sheet, same scrim under both. */
-val RaddPlayerDialog       = Color(0xFF151A23)
+val RaddPlayerDialog       = RaddInk800
 
 /** 53% black — the top/bottom HUD bars and any idle chip riding them. */
 val RaddHudBar             = Color(0x88000000)
@@ -347,26 +358,26 @@ val RaddCaptionPlateArgb   = 0xB3000000.toInt()
 
 /** The player's own accent: the selected rung, live speed, buffering, cinema.
  *  It paints states that CARRY meaning, so DESIGN_SYSTEM.md §9 forbids replacing
- *  it with an artwork-driven accent. No colors.dark.* role matches this orange;
- *  it is app-local until the brand file says otherwise. */
-val AccentOrange           = Color(0xFFFF8552)
-/** AccentOrange at 80% — the boost badge, which must read over any frame. */
-val AccentOrangeToast      = Color(0xCCFF8552)
-/** 80% blue-grey — the narration banner that reports a source change. */
-val RaddNarrationPlate     = Color(0xCC1F2937)
-/** The banner's "that worked" check. Not RaddSuccess: this green is the
- *  player's own, and changing it would restate the meaning of the banner. */
-val RaddNarrationCheck     = Color(0xFF8FD14F)
-/** 90% neutral grey — the player snackbar, deliberately colourless: whatever
+ *  it with an artwork-driven accent. Its brand role is colors.dark.player_accent
+ *  (Session 123 fold): the orange is a brand decision now, not an app-local one. */
+val AccentOrange           = brandColor(BuildConfig.BRAND_COLORS_DARK_PLAYER_ACCENT)
+/** The player accent at 80% — the boost badge, which must read over any frame. */
+val AccentOrangeToast      = AccentOrange.copy(alpha = 0.8f)
+/** 80% ink — the narration banner that reports a source change. */
+val RaddNarrationPlate     = RaddInk800.copy(alpha = 0.8f)
+/** The banner's "that worked" check. One success green for the whole app. */
+val RaddNarrationCheck     = RaddSuccess
+/** 90% ink — the player snackbar, deliberately colourless: whatever
  *  it reports may itself have been an error, so it must not shout. */
-val RaddPlayerSnackbarPlate = Color(0xE6323232)
+val RaddPlayerSnackbarPlate = RaddInk800.copy(alpha = 0.9f)
 
 /** Keep-chip states at 40% so the frame shows through. The hues are the
- *  player's, not the catalog's badge greens/reds — a chip floating over video
- *  is measured against video, not against Ink950. */
-val RaddKeepStored         = Color(0x662E7D32)
-val RaddKeepBlocked        = Color(0x668B3A3A)
-val RaddKeepKeeping        = Color(0x661565C0)
+ *  brand's meaning colours now — success, danger, download indigo — so a chip
+ *  floating over video is measured against the same language as the rest of
+ *  the app, not against a second palette. */
+val RaddKeepStored         = RaddSuccess.copy(alpha = 0.4f)
+val RaddKeepBlocked        = RaddDanger.copy(alpha = 0.4f)
+val RaddKeepKeeping        = RaddTideIndigo.copy(alpha = 0.4f)
 
 // ═════════════════════════════════════════════════════════════════════════════
 //  LEGACY ALIASES — do not use in new code.
