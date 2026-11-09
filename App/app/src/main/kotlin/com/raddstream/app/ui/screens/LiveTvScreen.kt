@@ -175,6 +175,10 @@ private fun LiveTvChannelCard(
                     url = channel.logoUrl,
                     contentDescription = channel.name,
                     fallbackLabel = channel.name,
+                    // Phase 7 (M4): channel logos come from the operator-curated
+                    // channel registry, not the catalog — their hosts are the
+                    // registry's own, and the art policy does not vet them.
+                    allowAnyHost = true,
                     modifier = Modifier
                         .fillMaxWidth()
                         .aspectRatio(16f / 9f),

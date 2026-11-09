@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import coil.compose.SubcomposeAsyncImage
 import coil.request.ImageRequest
+import com.raddstream.app.data.ServerSettingsRepository
+import com.raddstream.app.images.ArtUrlPolicy
 import com.raddstream.app.images.ImageSizingHolder
 import com.raddstream.app.images.ImageSizingPolicy
 import com.raddstream.app.ui.theme.RaddStreamMark
@@ -55,6 +57,15 @@ import dagger.hilt.components.SingletonComponent
  * screen stays up if the network flips to metered while you scroll; only the next request obeys it.
  * That is the deliberate cost of not parking a live ConnectivityListener on every list.
  *
+ * Phase 7 (M4): the URL itself is gated too, by [ArtUrlPolicy]. The server already
+ * vets catalog art through `/api/v1/art`, and this is the client-side second lock:
+ * a URL that is not our server, a public image CDN, or a neutral upload host never
+ * reaches Coil — the fallback card paints instead, so no upstream domain ever
+ * learns a viewer opened a title. [allowAnyHost] is the one documented exception:
+ * live-TV channel logos come from the operator-curated channel registry, not the
+ * catalog, and their hosts are the registry's own — the caller opts out by name.
+ */
+ *
  * A *failed* load is different from a *gated* one and gets its own art. Nothing about a
  * dead poster URL is the caller's fault — the server sent a link, the CDN did not answer —
  * so instead of leaving a bare surfaceVariant rectangle (which reads as "this title has no
@@ -71,20 +82,29 @@ fun CatalogImage(
     contentScale: ContentScale = ContentScale.Crop,
     fallbackLabel: String? = null,
     onBitmap: ((Bitmap?) -> Unit)? = null,
+    /**
+     * Phase 7 (M4): true only for operator-curated art whose hosts are the
+     * registry's own (live-TV channel logos). Catalog art never passes this.
+     */
+    allowAnyHost: Boolean = false,
 ) {
     val context = LocalContext.current
     val holder = remember(context) { imageSizingHolder(context) }
     val sizing by holder.sizing.collectAsState()
     val metered = holder.isMetered()
+    val settingsRepository = remember(context) { serverSettingsRepository(context) }
+    val serverUrl by settingsRepository.serverUrl.collectAsState(initial = null)
+    val serverHost = remember(serverUrl) { ArtUrlPolicy.hostOf(serverUrl) }
 
-    val request = remember(url, sizing, metered) {
+    val request = remember(url, sizing, metered, serverHost, allowAnyHost) {
         val decision = ImageSizingPolicy.decide(
             widthPx = sizing.posterMaxWidthPx,
             imagesAllowedOnMobileData = sizing.imagesAllowedOnMobileData,
             metered = metered,
         )
         val clean = url?.takeIf { it.isNotBlank() }
-        if (clean != null && decision.shouldLoad) {
+        val allowed = allowAnyHost || ArtUrlPolicy.isAllowed(clean, serverHost)
+        if (clean != null && decision.shouldLoad && allowed) {
             ImageRequest.Builder(context)
                 .data(clean)
                 .size(decision.widthPx, decision.widthPx)
@@ -168,8 +188,16 @@ private fun imageSizingHolder(context: Context): ImageSizingHolder =
         ImageSizingEntryPoint::class.java,
     ).imageSizingHolder()
 
+/** Phase 7 (M4): the server settings, read the same way — the art policy needs the configured host. */
+private fun serverSettingsRepository(context: Context): ServerSettingsRepository =
+    EntryPointAccessors.fromApplication(
+        context.applicationContext,
+        ImageSizingEntryPoint::class.java,
+    ).serverSettingsRepository()
+
 @EntryPoint
 @InstallIn(SingletonComponent::class)
 interface ImageSizingEntryPoint {
     fun imageSizingHolder(): ImageSizingHolder
+    fun serverSettingsRepository(): ServerSettingsRepository
 }

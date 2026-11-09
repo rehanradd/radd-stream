@@ -6,20 +6,25 @@ package com.raddstream.app.network.models
  * Every capability this app is designed against but cannot call from a real install today,
  * listed in one place so no future reader mistakes a target contract for a live endpoint.
  *
- * Read the header carefully: it is about what OUR INSTALL can reach, not about what the
- * server implements. `Fast_Fetch/api_v2.py` is mounted in `viewer.py` and answers
- * `/api/v2/manifest|browse|search|suggest|works|episodes|releases|sync|stats`, plus
- * `POST /play`, `POST /links/{id}/report`, `resolve` and `offset`. None of it is usable yet
- * because every v2 route requires the `cat_*` projection, and the database the public service
- * runs on has none — so the honest answer to a v2 request today is
- * `unavailable` ("The catalog projection has not been built yet", with `Retry-After: 60`).
- * What remains genuinely unimplemented server-side is tracked in `Fast_Fetch/API_V2.md` §17,
- * not here.
+ * Phase 7 (D2): the premise this header was written under is gone. The rev-7 projection
+ * IS built and live (2026-11-10), and v2 IS served: `POST /api/v2/play`,
+ * `GET /api/v2/suggest`, `POST /api/v2/links/`, `POST /api/v2/episodes/` and
+ * `/api/v2/account` are allow-listed in live nginx, and the GET catalog routes
+ * (`/api/v2/browse`, `/api/v2/search`, `/api/v2/works/{id}`) are served by
+ * `catalog_api.py` — the app calls them through `V2CatalogWire.kt`, with v1 as the
+ * fallback until the gate adds the three nginx locations (see the
+ * ORACLE_DEPLOYMENT.md addendum in this branch). The blocker is now migration +
+ * nginx, not server absence. What remains genuinely unimplemented server-side is
+ * tracked in `Fast_Fetch/API_V2.md` §17, not here.
  *
  * The rule for the rest of the app: code that would call one of these must be marked with a
  * [EndpointGaps.require] comment at the call site and must degrade to the v1 path, never
  * fail and never fabricate a response. Dropping an entry here means "this install can now
  * reach it and the call site has been switched over", never "the route file exists".
+ * Phase 7 dropped four on that rule: PLAY (live via `playV2`), MANIFEST (live as
+ * `GET /api/v2/works/{id}` via `getWorkDetailV2` — the `{work_key}` form it named
+ * never existed), PRINT_FIELDS and LINK_FIELDS (both served on the v2 detail and
+ * mapped by `WireDetailPrint`/`WireDetailLink`).
  */
 enum class EndpointGaps(
     /** The endpoint the v2 contract wants. */
@@ -31,15 +36,16 @@ enum class EndpointGaps(
     /** API_V2.md gap id, when the doc already tracks it. */
     val docGap: String? = null,
 ) {
-    PLAY(
-        needed = "/api/v2/play",
-        blockedCapability = "server-ranked play bundle (print quality + link health + " +
-            "entitlement decided in one place)",
-        v1Fallback = "/api/v1/posts/{id} then client-side PrintDescriptor + LinkClassification",
-        docGap = "G-7",
-    ),
     RESOLVE(
-        needed = "/api/v2/links/{link_id}/resolve",
+        // Phase 7 (M3): the route this used to name, `/api/v2/links/{link_id}/resolve`,
+        // does not exist. The real route is GET /api/v2/resolve/{handle} (the
+        // handle is the same opaque stream id the player already carries), served
+        // by `catalog_api.py` and called by `CatalogRepository.resolveV2`. It is
+        // still a gap only because live nginx has no location for it yet — the
+        // gate deploy must add one, or the call 403s at the catch-all. The player
+        // already gets the same facts (size/resumable/expiry) through the v1
+        // `resolveStream`, so nothing blocks on this.
+        needed = "/api/v2/resolve/{handle}",
         blockedCapability = "resolver round-trip for cloud_page/resolve_required links",
         v1Fallback = "/api/v1/stream?id={source_id}&redirect=0",
     ),
@@ -47,24 +53,6 @@ enum class EndpointGaps(
         needed = "/api/v2/sync?since=",
         blockedCapability = "delta sync keyed by work_key (no /api/v1/sync exists)",
         v1Fallback = "re-fetch /api/v1/posts?page=n",
-    ),
-    MANIFEST(
-        needed = "/api/v2/works/{work_key}",
-        blockedCapability = "one stable-keyed manifest for a work (episodes, prints, links)",
-        v1Fallback = "/api/v1/posts/{numericId} — the id churns across re-projections",
-    ),
-    PRINT_FIELDS(
-        needed = "cat_releases print columns on the wire",
-        blockedCapability = "server-authoritative resolution / source_tag / hdr / codec / " +
-            "quality_score / coverage_type",
-        v1Fallback = "client-side ReleaseLabelParsing (this package)",
-        docGap = "G-4",
-    ),
-    LINK_FIELDS(
-        needed = "cat_links rank_score / accepts_ranges / expires_at / speed_mbps on the wire",
-        blockedCapability = "measured link quality, TTL and resumability of a listed link",
-        v1Fallback = "client-side LinkClassification prior; TTL only from /api/v1/stream",
-        docGap = "G-5",
     ),
     SUBTITLES(
         needed = "subtitle track URLs",

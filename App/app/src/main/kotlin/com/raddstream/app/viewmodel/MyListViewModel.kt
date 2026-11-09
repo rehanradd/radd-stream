@@ -149,8 +149,13 @@ class MyListViewModel @Inject constructor(
             uiState.collect { state ->
                 if (!state.isLoading && state.favorites.isEmpty() && !popularLoaded) {
                     popularLoaded = true
+                    // Phase 7 (M1): the v2 trending list first, v1 as the
+                    // fallback — an empty v2 page falls back, so a v2 outage
+                    // never leaves the empty state pointing at nothing.
                     popularFlow.value = runCatching {
-                        catalogRepository.getPosts(sort = "trending", page = 1, limit = 3).results
+                        catalogRepository.browseWorksV2(sort = "trending", limit = 3)?.posts
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: catalogRepository.getPosts(sort = "trending", page = 1, limit = 3).results
                     }.getOrNull() ?: emptyList()
                 }
             }

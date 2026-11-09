@@ -49,8 +49,11 @@ import com.raddstream.app.network.models.EpisodeOffsetRequest
 import com.raddstream.app.network.models.EpisodeOffsetResponse
 import com.raddstream.app.network.models.LinkReportRequest
 import com.raddstream.app.network.models.LinkReportResponse
+import com.raddstream.app.network.models.WireBrowseResponse
 import com.raddstream.app.network.models.WirePlayRequest
 import com.raddstream.app.network.models.WirePlayResponse
+import com.raddstream.app.network.models.WireResolveResponse
+import com.raddstream.app.network.models.WireWorkDetailResponse
 import retrofit2.http.Body
 import retrofit2.http.GET
 import retrofit2.http.Header
@@ -121,6 +124,76 @@ interface RaddStreamApi {
         @Query("q") query: String,
         @Query("limit") limit: Int = 5,
     ): SuggestResponse
+
+    /**
+     * GET /api/v2/browse — the v2 catalog list (Phase 7, M1). One row per WORK,
+     * not one per site-post, keyed by `cat_works.id` with keyset pagination
+     * (`next_cursor`), so a scrape landing mid-walk cannot repeat or skip a
+     * title the way the v1 `page` window could. `type` takes the v2 `work_type`
+     * values AND the four legacy v1 `content_type` strings (`movie`, `series`,
+     * `anime`, `complete_season`, `ongoing_season`); `sort` is one of
+     * `trending | newest | quality | rating | title | updated`.
+     *
+     * The route needs the nginx allow-list (a gate item, like /api/v2/play was):
+     * until the gate adds the `works`/`browse`/`search` locations a 403 here
+     * means "stay on v1", never a failed list — every caller falls back.
+     */
+    @GET("api/v2/browse")
+    suspend fun browseWorks(
+        @Query("type") type: String? = null,
+        @Query("sort") sort: String? = null,
+        @Query("order") order: String? = null,
+        @Query("limit") limit: Int = 20,
+        @Query("cursor") cursor: String? = null,
+        @Query("genre") genres: List<String>? = null,
+        @Query("industry") industries: List<String>? = null,
+    ): WireBrowseResponse
+
+    /**
+     * GET /api/v2/search — title search over the works ledger (Phase 7, M1).
+     * Matches title, original title and aliases — NOT cast: an actor query that
+     * finds nothing here must fall back to the v1 `q=` search, which matches
+     * `cast_names` too. `sort` defaults to `relevance` server-side.
+     */
+    @GET("api/v2/search")
+    suspend fun searchWorks(
+        @Query("q") query: String,
+        @Query("sort") sort: String? = null,
+        @Query("limit") limit: Int = 20,
+        @Query("cursor") cursor: String? = null,
+        @Query("type") type: String? = null,
+        @Query("genre") genres: List<String>? = null,
+        @Query("industry") industries: List<String>? = null,
+        @Query("quality") qualities: List<String>? = null,
+    ): WireBrowseResponse
+
+    /**
+     * GET /api/v2/works/{id} — one work, whole (Phase 7, M1): identity,
+     * seasons with enumerated episodes, every print with its links, and the
+     * availability block. `id` is the `cat_works` id (or a work key). The
+     * projection carries no cast and no season artwork — the caller merges
+     * those from the v1 detail through the `work_ref` bridge, or the detail
+     * screen loses its cast section to the migration.
+     */
+    @GET("api/v2/works/{id}")
+    suspend fun getWorkDetail(
+        @Path("id") workId: Long,
+    ): WireWorkDetailResponse
+
+    /**
+     * GET /api/v2/resolve/{handle} — re-resolve one cat link (Phase 7, M3).
+     * `redirect=0` answers metadata only (`stream_id`, `kind`, `mime_type`,
+     * `file_size_bytes`, `resumable`, `expires_in`) and never a location; the
+     * echoed `stream_id` is the v1-stream handle for the same link, so a
+     * caller that learns the size here can still press the v1 redirector.
+     * The route is the one `EndpointGaps.RESOLVE` used to misname as
+     * `/api/v2/links/{link_id}/resolve`, which never existed.
+     */
+    @GET("api/v2/resolve/{handle}")
+    suspend fun resolveV2(
+        @Path("handle") handle: String,
+        @Query("redirect") redirect: String = "0",
+    ): WireResolveResponse
 
     /** GET /api/v1/posts/{id} — post details with all releases and sources. */
     @GET("api/v1/posts/{id}")

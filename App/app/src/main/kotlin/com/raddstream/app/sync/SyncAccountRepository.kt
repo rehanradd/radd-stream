@@ -425,6 +425,25 @@ class SyncAccountRepository @Inject constructor(
     }
 
     /**
+     * Phase 7 (D1): remove one watched scope — "Start over" / "Remove from
+     * Continue Watching". The endpoint existed (`POST
+     * /api/v2/account/progress/remove`) with zero callers; the server deletes
+     * the row for this work + season + episode. A refusal cannot un-remove it
+     * locally, and does not try to — the callers delete the local rows either
+     * way, so a kept server row can only come back on the next pull, never by
+     * resurrecting a tile the viewer just removed.
+     */
+    suspend fun removeProgress(workRef: String?, season: Int, episode: Int): SyncAck {
+        val ref = workRef?.takeIf { it.isNotBlank() } ?: return SyncAck.NOT_NAMABLE
+        return attempt(hadWorkRef = true) { api, auth ->
+            api.removeProgress(
+                auth,
+                ProgressRequest(workRef = ref, seasonNumber = season, episodeNumber = episode),
+            )
+        }
+    }
+
+    /**
      * The tick loop's cheap question: may a position report be attempted right now? It never
      * suspends, never takes the throttle slot and never builds a request, so a player that
      * asks twice a second costs nothing. [reportProgress] is the only consumer of the slot.

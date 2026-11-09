@@ -53,11 +53,20 @@ sealed class Screen(val route: String) {
         const val ARG_TYPE = "type"
         fun createRoute(type: String?): String = "browse/${type ?: "all"}"
     }
-    object Detail : Screen("detail/{postId}?autoplay={autoplay}") {
+    object Detail : Screen("detail/{postId}?autoplay={autoplay}&workId={workId}") {
         const val ARG_POST_ID = "postId"
         const val ARG_AUTOPLAY = "autoplay"
+        /**
+         * Phase 7 (M1): the v2 work id, when the row came from a v2 list. A v2 row
+         * has no v1 post id — its `id` is the negative work-id sentinel — so the
+         * detail route carries the work id in its own argument and `postId`
+         * stays 0. A v1 row passes no workId and the route behaves as before.
+         */
+        const val ARG_WORK_ID = "workId"
         fun createRoute(postId: Int, autoplay: Boolean = false): String =
-            "detail/$postId?autoplay=$autoplay"
+            "detail/$postId?autoplay=$autoplay&workId=-1"
+        fun createRouteForWork(workId: Long, autoplay: Boolean = false): String =
+            "detail/0?autoplay=$autoplay&workId=$workId"
     }
     /**
      * The player is addressed by the server's OPAQUE STREAM HANDLE, never by a URL: a route

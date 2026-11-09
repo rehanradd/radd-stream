@@ -578,7 +578,14 @@ class BrowseTests(CatalogApiTestCase):
              "rating", "genres", "languages", "country", "industry",
              "site_count", "seasons", "episodes", "prints", "quality_max",
              "best_quality_score", "available", "flags", "identity_suspect",
-             "entitlement", "first_seen_at", "updated_at", "sort_value", "adult"})
+             "entitlement", "first_seen_at", "updated_at", "sort_value", "adult",
+             # Phase 7 (M1): the account handle — the app resolves a v2 work to
+             # its v1 post through it. The shape changed deliberately; the set
+             # stays exact.
+             "work_ref"})
+        self.assertIsNone(item["work_ref"],
+                          "no secret configured in this fixture — the handle is "
+                          "null, never forged with an empty secret")
         self.assertTrue(item["poster"]["src"].startswith("/api/v1/art?"),
                         "art hosted by a site we scrape becomes our own handle")
         self.assertNotIn("cdn", item["poster"]["src"])

@@ -103,7 +103,7 @@ private val typeChips = listOf(
 // to from it, so the top bar carries no back arrow and takes no callback. (The Home
 // search bar navigates to this same tab, not to a pushed copy.)
 fun SearchScreen(
-    onPostClick: (Int) -> Unit = {},
+    onPostClick: (Post) -> Unit = {},
     onPlayDirectUrl: (url: String, title: String) -> Unit = { _, _ -> },
     /** A query to run at once — an actor tap on a detail card lands here with the name filled in. */
     initialQuery: String? = null,
@@ -503,7 +503,7 @@ private fun RecentsSection(state: SearchUiState, viewModel: SearchViewModel) {
 private fun SearchBody(
     state: SearchUiState,
     viewModel: SearchViewModel,
-    onPostClick: (Int) -> Unit,
+    onPostClick: (Post) -> Unit,
     onOpenFilters: () -> Unit,
 ) {
     // Session 121 (P-12): scrolling the results dismisses the keyboard — the open
@@ -605,7 +605,7 @@ private fun SearchBody(
                 }
                 item {
                     MediaRail(items = group.items, key = { it.id }) { post ->
-                        PosterCard(post = post, onClick = { onPostClick(post.id) })
+                        PosterCard(post = post, onClick = { onPostClick(post) })
                     }
                 }
                 item { Spacer(Modifier.height(12.dp)) }

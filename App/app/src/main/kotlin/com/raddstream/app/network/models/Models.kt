@@ -129,6 +129,15 @@ data class Post(
      */
     @SerializedName("work_ref")
     val workRef: String? = null,
+    /**
+     * The v2 work id (`cat_works.id`) for a row that came from a v2 list — null on
+     * every v1 row. The two id spaces are different numbers for the same title, so
+     * this is the ONLY field that may name a v2 work: [id] on a v2 row is the
+     * negative sentinel `-workId` (never a v1 post id), and detail navigation
+     * branches on this field first. A null here means "this row is a v1 post;
+     * open it by [id]".
+     */
+    val workId: Long? = null,
 ) {
     /** Display helper so UI never has to know that `year` is numeric on the wire. */
     val yearLabel: String? get() = year?.toString()

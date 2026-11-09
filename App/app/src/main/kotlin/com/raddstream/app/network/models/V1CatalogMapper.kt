@@ -193,11 +193,13 @@ object V1CatalogMapper {
     /**
      * Builds the play decision for one link from v1 data.
      *
-     * // NOT SERVED YET - needs /api/v2/play (see EndpointGaps.PLAY): the server does not
-     * // rank, so the client ranks with the projection's own formula.
-     * The bundle's `expiresAt` is null on purpose: only `/api/v1/stream` produces a live URL
-     * and it does not report a TTL, so the client must treat every resolved URL as
-     * possibly-rotten — which is what [PlaybackRecovery] exists for.
+     * Phase 7 (D2): the server DOES rank now — `POST /api/v2/play` is live and
+     * `playV2` is the player's first path. This stays as the v1 fallback ranking:
+     * the client ranks with the projection's own formula when the server bundle
+     * is unavailable. The bundle's `expiresAt` is null on purpose: only
+     * `/api/v1/stream` produces a live URL and it does not report a TTL, so the
+     * client must treat every resolved URL as possibly-rotten — which is what
+     * [PlaybackRecovery] exists for.
      */
     fun playBundle(detail: PostDetail, releaseId: Int, streamId: String): PlayBundle {
         val domainWork = work(detail)

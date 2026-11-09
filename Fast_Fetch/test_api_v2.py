@@ -51,6 +51,7 @@ from urllib.parse import parse_qsl, unquote, urlparse
 os.environ.setdefault("RADD_SKIP_LIVE_ENRICH", "1")
 
 import api_v2
+import catalog_api
 import catalog_v2
 import fast_fetch
 import redact
@@ -2348,6 +2349,46 @@ class V2SurfaceTests(V2WireFixture):
         # `fields` narrows the detail without inventing a key.
         thin = self.get(f"/api/v2/works/{self.public_work_id}", {"fields": "title,year"})
         self.assertEqual(thin.status, 200)
+
+    def test_browse_search_and_detail_carry_the_account_handle(self):
+        """Phase 7 (M1): a v2 row names its work the way v1 rows do.
+
+        The app migrates home/search/detail onto these routes, and the sync
+        account only accepts the minted `work_ref` (favorites, progress) — so
+        every browse/search item and the work object of a detail must carry
+        one, minted from the same `work_key` the v1 rows derive, and it must
+        unmint to that key with this mount's secret. Without a secret the handle
+        is null, never forged with an empty one.
+        """
+        browse = self.get("/api/v2/browse", {"limit": 5})
+        self.assertEqual(browse.status, 200)
+        self.assertTrue(browse.json["items"])
+        for item in browse.json["items"]:
+            key = self.conn.execute(
+                "SELECT work_key FROM cat_works WHERE id = ?",
+                (item["id"],)).fetchone()[0]
+            self.assertEqual(redact.parse_text(item.get("work_ref"), self.secret),
+                             key, "a browse item's work_ref must unmint to its work_key")
+        search = self.get("/api/v2/search", {"q": "dune protocol"})
+        self.assertTrue(search.json["items"])
+        self.assertTrue(all(row.get("work_ref") for row in search.json["items"]))
+        detail = self.get(f"/api/v2/works/{self.public_work_id}")
+        self.assertEqual(detail.json["work"]["title"], "Dune Protocol")
+        key = self.conn.execute(
+            "SELECT work_key FROM cat_works WHERE id = ?",
+            (self.public_work_id,)).fetchone()[0]
+        self.assertEqual(redact.parse_text(detail.json["work"]["work_ref"],
+                                           self.secret), key)
+        self.assert_clean(browse.json, label="browse work_ref")
+        self.assert_clean(detail.json, label="detail work_ref")
+        try:
+            catalog_api.configure_public("", "")
+            bare = catalog_api.browse(self.conn, limit=2)
+            self.assertTrue(bare["items"])
+            self.assertTrue(all(item.get("work_ref") is None for item in bare["items"]),
+                            "no secret must mean no handle, never a forgeable one")
+        finally:
+            catalog_api.configure_public(HOST, self.secret)
 
     def test_prefer_moves_the_ladder_on_the_axis_the_client_asked_for(self):
         """§9: the two axes are chosen by the caller, not assumed by the server."""

@@ -119,6 +119,14 @@ interface WatchHistoryDao {
 
     @Query("DELETE FROM watch_history")
     suspend fun clear()
+
+    /**
+     * Phase 7 (D1): forget one scope — the local half of "Remove from Continue
+     * Watching". The server half is `POST /api/v2/account/progress/remove`;
+     * deleting here first would let the next sync pull the row straight back.
+     */
+    @Query("DELETE FROM watch_history WHERE workRef = :workRef AND seasonNumber = :season AND episodeNumber = :episode")
+    suspend fun remove(workRef: String, season: Int, episode: Int)
 }
 
 /**

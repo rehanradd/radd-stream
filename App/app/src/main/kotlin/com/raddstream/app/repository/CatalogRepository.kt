@@ -7,8 +7,10 @@ import kotlinx.coroutines.flow.first
 import com.raddstream.app.network.models.ContactRequest
 import com.raddstream.app.network.models.LiveTvChannelsResponse
 import com.raddstream.app.network.models.PlayBundle
+import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.PostsResponse
+import com.raddstream.app.network.models.SeasonArtwork
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
 import com.raddstream.app.network.models.SuggestItem
@@ -68,8 +70,9 @@ class CatalogRepository @Inject constructor(
 
     /**
      * GET /api/v2/suggest while typing. Never throws: a blocked route (the
-     * nginx allow-list does not cover /api/v2/suggest yet), an old server
-     * or a dead socket all answer the same way — null, which the caller
+     * live nginx allow-list covers it since the rev-7 deploy, so a 403 now
+     * means something else), an old server or a dead socket all answer
+     * the same way — null, which the caller
      * reads as "suggestions unavailable", distinct from an empty list (the
      * server answered and has no matches). A type-ahead that fails must
      * never fail the search it was helping, but the screen must not pretend
@@ -91,6 +94,149 @@ class CatalogRepository @Inject constructor(
     }
 
     /**
+     * GET /api/v2/browse (Phase 7, M1): one page of works. Null on ANY failure —
+     * a 403 until the gate adds the route to nginx (the location ships in
+     * this branch's ORACLE_DEPLOYMENT.md addendum), a 404, a dead socket — because
+     * the caller falls back to the v1 list it already has, and a list that used
+     * to load must never turn into an error for a call that is only an upgrade.
+     * An empty page is NOT null here: the caller decides whether empty means
+     * "fall back" (a type the v2 side cannot serve) or "no titles".
+     */
+    suspend fun browseWorksV2(
+        type: String? = null,
+        sort: String? = null,
+        limit: Int = 20,
+        cursor: String? = null,
+    ): V2BrowsePage? {
+        val response = try {
+            apiProvider.current().browseWorks(type = type, sort = sort, limit = limit, cursor = cursor)
+        } catch (_: HttpException) {
+            return null
+        } catch (_: IOException) {
+            return null
+        }
+        if (!response.ok) return null
+        return V2BrowsePage(
+            posts = response.items.map { it.toPost() },
+            nextCursor = response.nextCursor,
+            hasMore = response.hasMore,
+            totalEstimate = response.totalEstimate,
+        )
+    }
+
+    /**
+     * GET /api/v2/search (Phase 7, M1): title search over the works ledger.
+     * Null on any failure, like [browseWorksV2]. An empty page is NOT null:
+     * the caller falls back to the v1 `q=` search when it is empty, because
+     * only v1 matches cast — an actor query is the one query v2 cannot answer.
+     */
+    suspend fun searchWorksV2(
+        query: String,
+        sort: String? = null,
+        limit: Int = 20,
+        cursor: String? = null,
+        type: String? = null,
+        genres: List<String>? = null,
+        industries: List<String>? = null,
+        qualities: List<String>? = null,
+    ): V2BrowsePage? {
+        val response = try {
+            apiProvider.current().searchWorks(
+                query = query, sort = sort, limit = limit, cursor = cursor, type = type,
+                genres = genres, industries = industries, qualities = qualities,
+            )
+        } catch (_: HttpException) {
+            return null
+        } catch (_: IOException) {
+            return null
+        }
+        if (!response.ok) return null
+        return V2BrowsePage(
+            posts = response.items.map { it.toPost() },
+            nextCursor = response.nextCursor,
+            hasMore = response.hasMore,
+            totalEstimate = response.totalEstimate,
+        )
+    }
+
+    /**
+     * GET /api/v2/works/{id} (Phase 7, M1): one work, whole, mapped to the
+     * [PostDetail] the detail screen already reads. Null on any failure, so the
+     * caller falls back to the v1 detail it already has.
+     *
+     * The v2 projection carries no cast and no season artwork, so those ride in
+     * through the `work_ref` bridge: one `GET /api/v1/posts?work_ref=…` names
+     * the work's v1 post, and one `GET /api/v1/posts/{id}` reads the cast off
+     * it. The bridge also resolves the real v1 post id, which is what Room
+     * favorites/history and the adult ledger key on — the mapped detail's `id`
+     * is that post id, or 0 when the bridge did not resolve, never the work id.
+     * A bridge failure never fails the detail: the cast section simply hides,
+     * exactly as it does on a v1 row with no cast data.
+     */
+    suspend fun getWorkDetailV2(workId: Long): PostDetail? {
+        val response = try {
+            apiProvider.current().getWorkDetail(workId)
+        } catch (_: HttpException) {
+            return null
+        } catch (_: IOException) {
+            return null
+        }
+        if (!response.ok) return null
+        val baseUrl = try {
+            apiProvider.currentBaseUrl()
+        } catch (_: IllegalStateException) {
+            return null
+        }
+        var v1PostId = 0
+        var castNames: String? = null
+        var seasonArtwork: List<SeasonArtwork> = emptyList()
+        val workRef = response.work?.workRef
+        if (!workRef.isNullOrBlank()) {
+            runCatching {
+                val post = apiProvider.current().getPosts(workRef = workRef, page = 1, limit = 1)
+                    .results.firstOrNull()
+                if (post != null && post.id > 0) {
+                    v1PostId = post.id
+                    val detail = apiProvider.current().getPostDetail(post.id)
+                    if (detail.success && detail.data != null) {
+                        castNames = detail.data.castNames
+                        seasonArtwork = detail.data.seasonArtwork
+                    }
+                }
+            }
+        }
+        return response.toPostDetail(baseUrl, v1PostId, castNames, seasonArtwork)
+    }
+
+    /**
+     * GET /api/v2/resolve/{handle} with `redirect=0` (Phase 7, M3): the
+     * re-resolved link's measured facts. Null on any failure; the caller keeps
+     * the v1 redirector metadata it already has. The echoed `stream_id` is the
+     * v1-stream handle for the same link.
+     */
+    suspend fun resolveV2(handle: String): StreamResponse? {
+        if (handle.isBlank()) return null
+        val response = try {
+            apiProvider.current().resolveV2(handle, redirect = "0")
+        } catch (_: HttpException) {
+            return null
+        } catch (_: IOException) {
+            return null
+        }
+        if (!response.ok) return null
+        return StreamResponse(
+            success = true,
+            streamHandle = response.streamId,
+            kind = response.kind,
+            mimeType = response.mimeType,
+            fileSizeBytes = response.fileSizeBytes,
+            resumable = response.resumable,
+            expiresIn = response.expiresIn,
+            refreshed = response.refreshed,
+        )
+    }
+
+    /**
      * Ask OUR OWN redirector about one opaque handle (`redirect=0`): metadata only, never a
      * location. Not needed to play — Media3 follows the 302 — only to learn resumability.
      */
@@ -100,7 +246,7 @@ class CatalogRepository @Inject constructor(
     /**
      * POST /api/v2/play for one print (plan §5 step 13): the server's own ranked
      * bundle, with the coverage the v1 detail never serves. Returns null on ANY
-     * failure — a 403 while nginx still blocks the route, a 404 for a target the
+     * failure — a 403, a 404 for a target the
      * server cannot see, a dead socket, a print with nothing playable — because the
      * caller falls back to the client-side ladder it already has, and a Play tap
      * that used to work must never turn into an error for a call that is only an
@@ -137,7 +283,7 @@ class CatalogRepository @Inject constructor(
     /**
      * POST /api/v2/links/{handle}/report — one playback fact about one link
      * (Session 123). Best-effort by design: true only when the server recorded
-     * it; ANY failure (403 while nginx still blocks the route, a dead socket,
+     * it; ANY failure (a 403, a dead socket,
      * a 400 for a stale handle) answers false and is dropped silently, because
      * a report must never interrupt playback or show the viewer an error.
      * `handle` is our own opaque handle — never a raw row id.
@@ -187,8 +333,8 @@ class CatalogRepository @Inject constructor(
 
     /**
      * POST /api/v1/contact: one message for the operator's inbox. True only
-     * when the server stored it — a 400 (bad category, empty body), a 403
-     * while nginx still blocks the route, a 503 when the inbox is not wired,
+     * when the server stored it — a 400 (bad category, empty body), a 403,
+     * a 503 when the inbox is not wired,
      * or a dead socket all answer false, because the form keeps the text and
      * says "try again" instead of pretending the message went through.
      */
@@ -264,4 +410,17 @@ data class DetailProbe(
 data class V2PlayResult(
     val bundle: PlayBundle,
     val coverage: Coverage,
+)
+
+/**
+ * One page of a v2 list (Phase 7, M1): the mapped rows plus the keyset cursor
+ * for the next page. `hasMore` is the server's own answer; a null cursor with
+ * `hasMore` true means the server withheld the cursor and the caller must stop.
+ */
+data class V2BrowsePage(
+    val posts: List<Post>,
+    val nextCursor: String?,
+    val hasMore: Boolean,
+    /** The server's rough total for this query, or null when it did not say. */
+    val totalEstimate: Int? = null,
 )

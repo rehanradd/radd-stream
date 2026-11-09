@@ -9,6 +9,7 @@ import com.raddstream.app.data.cache.ConnectivityProbe
 import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.WatchHistoryDao
+import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.data.local.WatchHistoryMerge
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.Post
@@ -124,6 +125,14 @@ data class HomeUiState(
     val claimMessage: String? = null,
     /** Session 121 (P-26): the ids on this device's My List, so the hero's toggle reads live. */
     val favoriteIds: Set<Int> = emptySet(),
+    /**
+     * Phase 7 (M1): the same membership by server handle. A v2 row's `id` is
+     * the negative work-id sentinel, never a v1 post id, so the id set alone
+     * cannot say whether a v2 tile is saved — the handle set can.
+     */
+    val favoriteWorkRefs: Set<String> = emptySet(),
+    /** Phase 7 (D1): the title of the Continue Watching tile just removed, until Undo or dismiss. */
+    val removedResumeTitle: String? = null,
 )
 
 /**
@@ -404,20 +413,108 @@ class HomeViewModel @Inject constructor(
     private fun observeFavorites() {
         viewModelScope.launch {
             favoritesRepository.getAllFavorites().collect { favorites ->
-                _uiState.update { it.copy(favoriteIds = favorites.map { fav -> fav.id }.toSet()) }
+                _uiState.update {
+                    it.copy(
+                        favoriteIds = favorites.map { fav -> fav.id }.toSet(),
+                        favoriteWorkRefs = favorites.mapNotNull { fav -> fav.workRef }.toSet(),
+                    )
+                }
             }
         }
     }
 
-    /** Session 121 (P-26): the hero's My List toggle — the same add/remove the details page uses. */
+    /**
+     * Session 121 (P-26): the hero's My List toggle — the same add/remove the details page uses.
+     *
+     * A v2 row has no v1 post id (its `id` is the negative work-id sentinel),
+     * so Room cannot key it: the toggle first resolves the work to its v1 post
+     * through the `work_ref` bridge and toggles THAT row. An unresolvable work
+     * is a no-op here — the detail screen runs the same resolution and is the
+     * place that can say why.
+     */
     fun toggleFavorite(post: Post) {
         viewModelScope.launch {
-            if (favoritesRepository.isFavorite(post.id).first()) {
-                favoritesRepository.removeFavorite(post.id)
+            val target = resolveV1Post(post) ?: return@launch
+            if (favoritesRepository.isFavorite(target.id).first()) {
+                favoritesRepository.removeFavorite(target.id)
             } else {
-                favoritesRepository.addFavorite(post)
+                favoritesRepository.addFavorite(target)
             }
         }
+    }
+
+    /** The v1 post for a row, or the row itself when it already is one. Null when unresolvable. */
+    private suspend fun resolveV1Post(post: Post): Post? {
+        if (post.workId == null) return post
+        val ref = post.workRef?.takeIf { it.isNotBlank() } ?: return null
+        return runCatching {
+            catalogRepository.getPosts(workRef = ref, page = 1, limit = 1).results.firstOrNull()
+        }.getOrNull()
+    }
+
+    /**
+     * Phase 7 (D1): remove one title from Continue Watching. The server row goes
+     * first (the `removeProgress` endpoint the app defined but never called),
+     * then the local rows — the tile disappears either way, because a row the
+     * server kept while the device forgot it would come back on the next sync.
+     * The tile is kept in memory for Undo: the position it held is the one
+     * thing a re-watch cannot give back.
+     */
+    private var lastRemovedTile: ResumeTile? = null
+
+    fun removeFromContinueWatching(tile: ResumeTile) {
+        lastRemovedTile = tile
+        _uiState.update { it.copy(removedResumeTitle = tile.post.title) }
+        viewModelScope.launch {
+            runCatching {
+                syncAccountRepository.removeProgress(
+                    workRef = tile.workRef,
+                    season = tile.season,
+                    episode = tile.episode,
+                )
+            }
+            runCatching { watchHistoryDao.remove(tile.workRef, tile.season, tile.episode) }
+            runCatching { syncedProgressDao.remove(tile.workRef, tile.season, tile.episode) }
+        }
+    }
+
+    /** Put the removed tile back: the local row first, then a forced progress report. */
+    fun undoRemoveFromContinueWatching() {
+        val tile = lastRemovedTile ?: return
+        lastRemovedTile = null
+        _uiState.update { it.copy(removedResumeTitle = null) }
+        viewModelScope.launch {
+            runCatching {
+                watchHistoryDao.insertIfAbsent(
+                    WatchHistoryEntity(
+                        workRef = tile.workRef,
+                        postId = tile.post.id,
+                        title = tile.post.title,
+                        posterUrl = tile.post.posterUrl,
+                        seasonNumber = tile.season,
+                        episodeNumber = tile.episode,
+                        positionMs = tile.positionMs,
+                        durationMs = tile.durationMs,
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+            runCatching {
+                syncAccountRepository.reportProgress(
+                    workRef = tile.workRef,
+                    season = tile.season,
+                    episode = tile.episode,
+                    positionMs = tile.positionMs,
+                    durationMs = tile.durationMs,
+                    forced = true,
+                )
+            }
+        }
+    }
+
+    fun clearRemovedResumeNotice() {
+        lastRemovedTile = null
+        _uiState.update { it.copy(removedResumeTitle = null) }
     }
 
     fun refresh() {
@@ -523,7 +620,15 @@ class HomeViewModel @Inject constructor(
         if (section.panelManaged) return
         markSection(section.key) { it.copy(loading = true, error = null) }
         try {
-            val results = catalogRepository.getPosts(type = section.type, page = 1, limit = 18).results
+            // Phase 7 (M1): the v2 list first — one row per work, keyset-safe —
+            // with the v1 list as the fallback. An empty v2 page falls back too:
+            // a section type the v2 side cannot serve must not read as "no titles".
+            val page = catalogRepository.browseWorksV2(type = section.type, sort = "trending", limit = 18)
+            val results = if (page != null && page.posts.isNotEmpty()) {
+                page.posts
+            } else {
+                catalogRepository.getPosts(type = section.type, page = 1, limit = 18).results
+            }
             markSection(section.key) { it.copy(items = results, loading = false, error = null) }
         } catch (cancelled: CancellationException) {
             throw cancelled

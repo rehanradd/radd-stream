@@ -311,6 +311,11 @@ class SearchViewModel @Inject constructor(
         scheduleSearch(reset = true)
     }
 
+    /** The v2 keyset cursor for the next page, or null once the list is on v1 paging. */
+    private var v2Cursor: String? = null
+    /** True once a search has loaded from v2: the list must never mix sources. */
+    private var onV2: Boolean = false
+
     fun loadMore() {
         val state = _uiState.value
         if (!state.hasMore || state.isLoadingMore || !state.hasSearchIntent) return
@@ -319,6 +324,33 @@ class SearchViewModel @Inject constructor(
             _uiState.update { it.copy(isLoadingMore = true, error = null) }
             val next = state.page + 1
             try {
+                if (onV2) {
+                    val page = catalogRepository.searchWorksV2(
+                        query = state.query.trim(),
+                        sort = state.sort.wireValue,
+                        limit = PAGE_SIZE,
+                        cursor = v2Cursor,
+                        type = state.filters.type,
+                        genres = state.filters.genre.wireValue?.let { listOf(it) },
+                        industries = state.filters.industry.wireValue?.let { listOf(it) },
+                        qualities = state.filters.quality.wireValue?.let { listOf(it) },
+                    )
+                    if (page != null) {
+                        v2Cursor = page.nextCursor
+                        rawResults = (rawResults + page.posts).distinctById()
+                        _uiState.update {
+                            it.copy(
+                                page = next,
+                                serverTotal = page.totalEstimate ?: rawResults.size,
+                                hasMore = page.hasMore,
+                                isFuzzy = false,
+                            )
+                        }
+                        recompute()
+                        return@launch
+                    }
+                    throw IllegalStateException("The catalog could not serve the next page.")
+                }
                 val resp = catalogRepository.getPosts(
                     query = state.query.trim(),
                     type = state.filters.type,
@@ -385,7 +417,46 @@ class SearchViewModel @Inject constructor(
         searchJob = viewModelScope.launch {
             if (!immediate) delay(DEBOUNCE_MS)
             _uiState.update { it.copy(isLoading = true, error = null) }
+            v2Cursor = null
+            onV2 = false
             try {
+                // Phase 7 (M1): v2 search first — one row per work — with v1 as
+                // the fallback. The v2 side has no free-only filter, so a
+                // free-only search stays on v1; and v2 matches titles only, so
+                // an EMPTY v2 page falls back to v1, which is the route that
+                // matches cast names (actor search, per the cast directive).
+                val freeOnly = filters.includedOnly
+                if (!freeOnly) {
+                    val page = catalogRepository.searchWorksV2(
+                        query = query,
+                        sort = state.sort.wireValue,
+                        limit = PAGE_SIZE,
+                        type = filters.type,
+                        genres = filters.genre.wireValue?.let { listOf(it) },
+                        industries = filters.industry.wireValue?.let { listOf(it) },
+                        qualities = filters.quality.wireValue?.let { listOf(it) },
+                    )
+                    if (page != null && page.posts.isNotEmpty()) {
+                        onV2 = true
+                        v2Cursor = page.nextCursor
+                        rawResults = page.posts.distinctById()
+                        _uiState.update {
+                            it.copy(
+                                isLoading = false,
+                                hasSearched = true,
+                                page = 1,
+                                serverTotal = page.totalEstimate ?: rawResults.size,
+                                hasMore = page.hasMore,
+                                error = null,
+                                isFuzzy = false,
+                                showExactOnly = false,
+                            )
+                        }
+                        recompute()
+                        recordRecent(query)
+                        return@launch
+                    }
+                }
                 val resp = catalogRepository.getPosts(
                     query = query,
                     type = filters.type,

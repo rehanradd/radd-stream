@@ -44,7 +44,7 @@ import com.raddstream.app.viewmodel.MyListViewModel
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MyListScreen(
-    onPostClick: (Int) -> Unit,
+    onPostClick: (Post) -> Unit,
     viewModel: MyListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -149,7 +149,7 @@ fun MyListScreen(
                     items(state.favorites, key = { it.id }) { post ->
                         PosterCard(
                             post = post,
-                            onClick = { onPostClick(post.id) },
+                            onClick = { onPostClick(post) },
                             onRemove = { viewModel.remove(post.id) },
                         )
                     }
@@ -165,7 +165,7 @@ fun MyListScreen(
  * title; saving it from there is what fills the list.
  */
 @Composable
-private fun PopularRow(popular: List<Post>, onPostClick: (Int) -> Unit) {
+private fun PopularRow(popular: List<Post>, onPostClick: (Post) -> Unit) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -184,7 +184,7 @@ private fun PopularRow(popular: List<Post>, onPostClick: (Int) -> Unit) {
             popular.take(3).forEach { post ->
                 PosterCard(
                     post = post,
-                    onClick = { onPostClick(post.id) },
+                    onClick = { onPostClick(post) },
                     modifier = Modifier.weight(1f),
                 )
             }

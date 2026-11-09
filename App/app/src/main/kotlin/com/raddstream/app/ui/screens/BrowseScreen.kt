@@ -45,7 +45,7 @@ import com.raddstream.app.viewmodel.BrowseViewModel
 @Composable
 fun BrowseScreen(
     onBackClick: () -> Unit,
-    onPostClick: (Int) -> Unit,
+    onPostClick: (Post) -> Unit,
     viewModel: BrowseViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -101,7 +101,7 @@ fun BrowseScreen(
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
                 items(state.items, key = { it.id }) { post ->
-                    PosterCard(post = post, onClick = { onPostClick(post.id) })
+                    PosterCard(post = post, onClick = { onPostClick(post) })
                 }
                 if (state.loadingMore) {
                     item {

@@ -422,6 +422,65 @@ PWA and only the list/statistics metadata endpoints: `/client`,
 > copies: `/etc/nginx/radd-stream.pre-v2.bak`,
 > `/etc/nginx/radd-stream.pre-bymedia.bak`,
 > `/etc/nginx/radd-stream.pre-download.bak`, `/etc/nginx/nginx.conf.pre-caplog.bak`.
+>
+> ADDENDUM 2026-11-10 (Phase 7, verified live 04:15 PKT — the 27-Oct note above
+> is stale on the v2 surface): live nginx now also allow-lists `= /api/v2/play`
+> (POST-only, capability log), `= /api/v2/suggest` (GET, micro-cache 60s),
+> `^~ /api/v2/links/` (POST-only), `^~ /api/v2/episodes/` (POST-only), plus
+> `/api/v1/art` (302 cache 600s, 404 60s) and `/api/v1/live-tv/` (GET, cache 60s).
+> The four locations below are still MISSING and must be added BEFORE the
+> `^~ /api/` catch-all, at gate deploy (nginx reload by the gate, not by this
+> branch). Until then the app falls back to v1 on every one of them, so nothing
+> breaks — but the v2 migration cannot be verified end to end until they are live.
+> `works` is a PREFIX location, not exact: it must cover `/api/v2/works/{id}`
+> (and `/api/v2/works/{id}/seasons/{n}`, the same GET surface). `resolve` is a
+> prefix for the same reason (`/api/v2/resolve/{handle}`). Style follows the live
+> `suggest` block: `limit_req zone=radd_stream_api burst=30`, GET/HEAD only,
+> micro-cache 60s.
+>
+> ```nginx
+> # Phase 7 (M1): the v2 GET catalog routes the app now calls, v1 as fallback.
+> location /api/v2/works {
+>     limit_req zone=radd_stream_api burst=30;
+>     limit_except GET HEAD { deny all; }
+>     proxy_cache radd_micro;
+>     proxy_cache_valid 200 60s;
+>     include /etc/nginx/proxy_params;
+>     proxy_pass http://127.0.0.1:8080;
+>     proxy_connect_timeout 5s;
+>     proxy_read_timeout 15s;
+> }
+> location = /api/v2/browse {
+>     limit_req zone=radd_stream_api burst=30;
+>     limit_except GET HEAD { deny all; }
+>     proxy_cache radd_micro;
+>     proxy_cache_valid 200 60s;
+>     include /etc/nginx/proxy_params;
+>     proxy_pass http://127.0.0.1:8080;
+>     proxy_connect_timeout 5s;
+>     proxy_read_timeout 15s;
+> }
+> location = /api/v2/search {
+>     limit_req zone=radd_stream_api burst=30;
+>     limit_except GET HEAD { deny all; }
+>     proxy_cache radd_micro;
+>     proxy_cache_valid 200 60s;
+>     include /etc/nginx/proxy_params;
+>     proxy_pass http://127.0.0.1:8080;
+>     proxy_connect_timeout 5s;
+>     proxy_read_timeout 15s;
+> }
+> # Phase 7 (M3): GET /api/v2/resolve/{handle} — the real resolve route
+> # (EndpointGaps.RESOLVE); without this location it 403s at the catch-all.
+> location /api/v2/resolve {
+>     limit_req zone=radd_stream_api burst=30;
+>     limit_except GET HEAD { deny all; }
+>     include /etc/nginx/proxy_params;
+>     proxy_pass http://127.0.0.1:8080;
+>     proxy_connect_timeout 5s;
+>     proxy_read_timeout 15s;
+> }
+> ```
 
 ```nginx
 server {

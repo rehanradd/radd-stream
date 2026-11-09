@@ -11,6 +11,7 @@ import com.raddstream.app.data.cache.KeepIdentity
 import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.downloads.DeviceDownloadResult
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
+import com.raddstream.app.data.local.SyncedProgressDao
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.network.ApiProvider
@@ -175,12 +176,26 @@ class DetailViewModel @Inject constructor(
     private val syncAccountRepository: SyncAccountRepository,
     private val settingsRepository: ServerSettingsRepository,
     private val watchHistoryDao: WatchHistoryDao,
+    private val syncedProgressDao: SyncedProgressDao,
     private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
 
     private val postId: Int = (savedStateHandle[Screen.Detail.ARG_POST_ID] as? String)?.toIntOrNull()
         ?: (savedStateHandle[Screen.Detail.ARG_POST_ID] as? Int)
         ?: -1
+
+    /**
+     * Phase 7 (M1): the v2 work id, when this screen was opened from a v2 list.
+     * -1 means "not a v2 row" — the v1 path below. A nav argument arrives as a
+     * Long from the typed argument, or as a String from a deep link; both read.
+     */
+    private val workId: Long = (savedStateHandle[Screen.Detail.ARG_WORK_ID] as? Long)
+        ?: (savedStateHandle[Screen.Detail.ARG_WORK_ID] as? String)?.toLongOrNull()
+        ?: (savedStateHandle[Screen.Detail.ARG_WORK_ID] as? Int)?.toLong()
+        ?: -1L
+
+    /** The v1 post id the favorite/resume/adoption calls may use — 0 until the v2 bridge resolves. */
+    private var resolvedPostId: Int = postId
 
     private val _uiState = MutableStateFlow(DetailUiState())
     val uiState = _uiState.asStateFlow()
@@ -420,23 +435,33 @@ class DetailViewModel @Inject constructor(
     }
 
     private fun observeFavorite() {
-        if (postId < 0) return
+        if (resolvedPostId <= 0) return
         viewModelScope.launch {
-            favoritesRepository.isFavorite(postId).collect { fav ->
+            favoritesRepository.isFavorite(resolvedPostId).collect { fav ->
                 _uiState.update { it.copy(isFavorite = fav) }
             }
         }
     }
 
     fun loadDetail() {
-        if (postId < 0) {
+        if (postId < 0 && workId < 0) {
             _uiState.update { it.copy(isLoading = false, error = "This title could not be opened.") }
             return
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
             try {
-                val detail = catalogRepository.getPostDetail(postId)
+                // Phase 7 (M1): a v2 row opens through the v2 detail route —
+                // the work id is the only key it has. The repository bridges
+                // the work_ref back to a v1 post for cast + season art, and
+                // the returned detail carries that post id (0 when the bridge
+                // found no post: the title still loads, but nothing may write
+                // a Room row under id 0).
+                val detail = if (workId >= 0) {
+                    catalogRepository.getWorkDetailV2(workId)
+                } else {
+                    catalogRepository.getPostDetail(postId)
+                }
                 if (detail != null) {
                     // Wide art only: a portrait poster cropped into a 16:9 still looks broken,
                     // so it is used just when the catalog has no backdrop at all.
@@ -463,8 +488,16 @@ class DetailViewModel @Inject constructor(
                     publishViewerContent()
                     // A row saved before this app had a handle becomes syncable the moment the
                     // catalog finally names its work. Nothing here fabricates a handle: an absent
-                    // key is a no-op, and a present one is the server's own.
-                    syncAccountRepository.adoptWorkRef(postId, detail.workRef)
+                    // key is a no-op, and a present one is the server's own. On the v2 path the
+                    // bridge's post id is the only id these calls may use — a 0 must never
+                    // reach Room or the sync account.
+                    if (detail.id > 0) {
+                        if (workId >= 0) {
+                            resolvedPostId = detail.id
+                            observeFavorite()
+                        }
+                        syncAccountRepository.adoptWorkRef(detail.id, detail.workRef)
+                    }
                 } else {
                     _uiState.update {
                         it.copy(isLoading = false, error = "This title is not available on the connected server.")
@@ -487,12 +520,47 @@ class DetailViewModel @Inject constructor(
 
     fun toggleFavorite() {
         val currentPost = _uiState.value.post ?: return
+        // Phase 7 (M1): a v2 detail whose work_ref bridge found no v1 post
+        // carries id 0 — toggling it would write a junk Room row under 0.
+        // The title is still viewable; only saving is refused, honestly.
+        if (currentPost.id <= 0) {
+            _uiState.update { it.copy(actionMessage = "Could not save this title right now.") }
+            return
+        }
         viewModelScope.launch {
             val isNowFav = favoritesRepository.toggleFavorite(currentPost)
             _uiState.update {
                 it.copy(
                     isFavorite = isNowFav,
                     actionMessage = if (isNowFav) "Added to My List" else "Removed from My List",
+                )
+            }
+        }
+    }
+
+    /**
+     * Phase 7 (D1): "Start over" — forget where viewing stopped for the scope
+     * the Resume button would play. The server row goes first (the
+     * `removeProgress` endpoint the app defined but never called), then the
+     * local rows; the resume state clears either way, so a refused server
+     * delete can only bring the row back on the next sync, never by keeping
+     * a button the viewer just removed.
+     */
+    fun removeProgress() {
+        val detail = _uiState.value.post ?: return
+        val ref = detail.workRef?.takeIf { it.isNotBlank() } ?: return
+        val resume = _uiState.value.resume
+        val season = resume?.season ?: 0
+        val episode = resume?.episode ?: 0
+        viewModelScope.launch {
+            runCatching { syncAccountRepository.removeProgress(workRef = ref, season = season, episode = episode) }
+            runCatching { watchHistoryDao.remove(ref, season, episode) }
+            runCatching { syncedProgressDao.remove(ref, season, episode) }
+            _uiState.update {
+                it.copy(
+                    resume = null,
+                    resumePlayable = false,
+                    actionMessage = "Removed from Continue Watching",
                 )
             }
         }

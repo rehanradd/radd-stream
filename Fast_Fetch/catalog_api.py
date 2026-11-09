@@ -564,12 +564,30 @@ def _available_view(work: dict) -> dict:
     }
 
 
+def _work_ref_for(work: dict) -> str | None:
+    """The account handle for a work, minted like the v1 list rows.
+
+    `viewer._work_ref` puts this same token on every v1 row: it is the only name
+    the sync account accepts (favorites, progress), and it is the v1 bridge —
+    `GET /api/v1/posts?work_ref=…` turns a v2 work back into its v1 post, which is
+    how a v2 detail still reaches cast (the projection carries none). Minted only
+    when a secret is configured: `mint_text` with an empty secret would mint a
+    token anyone could forge, so an unconfigured mount emits null instead.
+    """
+    key = work.get("work_key")
+    secret = _PUBLIC_CONTEXT.get("secret") or ""
+    if not key or not secret:
+        return None
+    return redact.mint_text(str(key), secret)
+
+
 def _browse_item(row) -> dict:
     work = _as_dict(row)
     seasons = work.get("season_count")
     return {
         "id": work["id"],
         "title": work["title"],
+        "work_ref": _work_ref_for(work),
         "year": work.get("year"),
         "work_type": work.get("work_type"),
         "animated": bool(work.get("is_animated")),
@@ -1543,6 +1561,7 @@ def work_detail(conn, *, work_id=None, work_key=None, slug=None, url=None,
         "ok": True,
         "work": {
             "id": work["id"],
+            "work_ref": _work_ref_for(work),
             "title": redact.scrub_text(work["title"]),
             "original_title": _text(work.get("original_title")),
             "year": work.get("year"),

@@ -20,6 +20,13 @@ data class ResumeTile(
     val episode: Int,
     val positionMs: Long,
     val durationMs: Long,
+    /**
+     * Phase 7 (D1): the server handle for this scope. The tile's [Post] is built
+     * from a local row and carries no `workRef` of its own, but "Remove from
+     * Continue Watching" must name the scope to the server — and the local rows
+     * are keyed by this handle, not by the post id.
+     */
+    val workRef: String,
 ) {
     val progressFraction: Float? get() = ContinueWatchingTile.progressFraction(positionMs, durationMs)
     val progressLabel: String? get() = ContinueWatchingTile.progressLabel(positionMs, durationMs)
@@ -45,6 +52,7 @@ data class ResumeTile(
                 episode = row.episodeNumber,
                 positionMs = row.positionMs,
                 durationMs = row.durationMs,
+                workRef = row.workRef,
             )
         }
     }

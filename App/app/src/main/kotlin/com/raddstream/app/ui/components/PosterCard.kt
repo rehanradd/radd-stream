@@ -66,8 +66,9 @@ fun PosterCard(
     progressLabel: String? = null,
     /**
      * One-tap remove, shown as a small × on the poster's corner. Only My List
-     * passes it: everywhere else the tile is a doorway, not a list to edit,
-     * and a remove badge there would be a trap for a slipping thumb.
+     * and Continue Watching pass it: everywhere else the tile is a doorway,
+     * not a list to edit, and a remove badge there would be a trap for a
+     * slipping thumb.
      */
     onRemove: (() -> Unit)? = null,
 ) {

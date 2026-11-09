@@ -26,7 +26,11 @@ import kotlinx.coroutines.launch
 internal fun List<Post>.distinctById(): List<Post> = distinctBy { post -> post.id }
 
 /** A paged, single-content-type grid — the destination behind Home's rails and
- *  type jump-off tiles. Uses only `GET /api/v1/posts` (`type` + `page` + `limit`). */
+ *  type jump-off tiles. Phase 7 (M1): the v2 list first, the v1 list as the
+ *  fallback — but only on the FIRST page, so a v2 page and a v1 page can never
+ *  mix in one list (one row per work vs one row per site-post would show the
+ *  same title twice). A later v2 page that fails keeps the load-more error
+ *  instead of silently switching sources mid-scroll. */
 data class BrowseUiState(
     val items: List<Post> = emptyList(),
     val title: String = "Catalog",
@@ -49,6 +53,10 @@ class BrowseViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(BrowseUiState(title = titleFor(type)))
     val uiState = _uiState.asStateFlow()
     private var loadJob: Job? = null
+    /** The v2 keyset cursor for the next page, or null once the list is on v1 paging. */
+    private var v2Cursor: String? = null
+    /** True once a page has loaded from v2: the list must never mix sources. */
+    private var onV2: Boolean = false
 
     init {
         load()
@@ -77,7 +85,25 @@ class BrowseViewModel @Inject constructor(
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             _uiState.update { it.copy(loading = true, error = null, page = 1) }
+            v2Cursor = null
+            onV2 = false
             try {
+                // Phase 7 (M1): v2 first; an empty v2 page falls back to v1, so a
+                // type the v2 side cannot serve reads as its v1 list, not as empty.
+                val page = catalogRepository.browseWorksV2(type = type, sort = "trending", limit = PAGE)
+                if (page != null && page.posts.isNotEmpty()) {
+                    onV2 = true
+                    v2Cursor = page.nextCursor
+                    _uiState.update {
+                        it.copy(
+                            items = page.posts.distinctById(),
+                            loading = false,
+                            page = 1,
+                            hasMore = page.hasMore,
+                        )
+                    }
+                    return@launch
+                }
                 val resp = catalogRepository.getPosts(type = type, page = 1, limit = PAGE)
                 _uiState.update {
                     it.copy(
@@ -102,6 +128,24 @@ class BrowseViewModel @Inject constructor(
             _uiState.update { it.copy(loadingMore = true, error = null) }
             val next = state.page + 1
             try {
+                if (onV2) {
+                    val page = catalogRepository.browseWorksV2(
+                        type = type, sort = "trending", limit = PAGE, cursor = v2Cursor,
+                    )
+                    if (page != null) {
+                        v2Cursor = page.nextCursor
+                        _uiState.update {
+                            it.copy(
+                                items = (it.items + page.posts).distinctById(),
+                                page = next,
+                                hasMore = page.hasMore,
+                                loadingMore = false,
+                            )
+                        }
+                        return@launch
+                    }
+                    throw IllegalStateException("The catalog could not serve the next page.")
+                }
                 val resp = catalogRepository.getPosts(type = type, page = next, limit = PAGE)
                 _uiState.update {
                     it.copy(

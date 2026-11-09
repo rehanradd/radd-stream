@@ -287,6 +287,8 @@ fun DetailScreen(
                 isSeries = state.layout?.isSeriesLike ?: false,
                 resume = state.resume.takeIf { state.resumePlayable },
                 onPlayResume = viewModel::playResume,
+                /** Phase 7 (D1): "Start over" — forget where viewing stopped. */
+                onStartOver = viewModel::removeProgress,
                 episodeProgress = state.episodeProgress,
                 includedLine = state.includedLine,
                 selectedSeason = state.selectedSeason,
@@ -442,6 +444,8 @@ private fun DetailContent(
     /** The latest scope this device stopped in, if it has a print to play — else null. */
     resume: ResumePoint?,
     onPlayResume: () -> Unit,
+    /** Phase 7 (D1): "Start over" — forget where viewing stopped, on the server and locally. */
+    onStartOver: () -> Unit = {},
     /** Per-episode progress, keyed by (season, episode). */
     episodeProgress: Map<Pair<Int, Int>, EpisodeProgress>,
     /** What this viewer can watch of this title, in one line — null when it has no prints. */
@@ -514,6 +518,7 @@ private fun DetailContent(
                 onPlayResume = onPlayResume,
                 onPlay = { bestPrint?.let(onPlayPrint) },
                 onKeep = { bestPrint?.let(onKeep) },
+                onStartOver = onStartOver,
             )
         }
 
@@ -742,41 +747,52 @@ private fun PrimaryActions(
     onPlayResume: () -> Unit,
     onPlay: () -> Unit,
     onKeep: () -> Unit,
+    /** Phase 7 (D1): forget where viewing stopped — only offered while a resume exists. */
+    onStartOver: () -> Unit,
 ) {
-    Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-        Button(
-            onClick = if (resume != null) onPlayResume else onPlay,
-            enabled = if (resume != null) true else bestPrint?.canStart == true,
-            modifier = Modifier.weight(1f).height(52.dp),
-            // D-29: a disabled Play keeps the same shape and language as the
-            // enabled one — a tonal fill, not a dead grey slab. The reason it
-            // cannot start rides right under the button, so the tonal state
-            // is never mistaken for a working one.
-            colors = ButtonDefaults.buttonColors(
-                containerColor = MaterialTheme.colorScheme.primary,
-                disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-            ),
-        ) {
-            Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text(
-                text = resume?.label ?: (bestPrint?.playLabel() ?: "Play"),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+            Button(
+                onClick = if (resume != null) onPlayResume else onPlay,
+                enabled = if (resume != null) true else bestPrint?.canStart == true,
+                modifier = Modifier.weight(1f).height(52.dp),
+                // D-29: a disabled Play keeps the same shape and language as the
+                // enabled one — a tonal fill, not a dead grey slab. The reason it
+                // cannot start rides right under the button, so the tonal state
+                // is never mistaken for a working one.
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = resume?.label ?: (bestPrint?.playLabel() ?: "Play"),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            // D-29: the download action is a proper secondary button in the same
+            // row language — same height, same shape, icon + label — not a bare
+            // circle beside a pill.
+            OutlinedButton(
+                onClick = onKeep,
+                enabled = hasAnyPrint,
+                modifier = Modifier.height(52.dp),
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Download", maxLines = 1)
+            }
         }
-        // D-29: the download action is a proper secondary button in the same
-        // row language — same height, same shape, icon + label — not a bare
-        // circle beside a pill.
-        OutlinedButton(
-            onClick = onKeep,
-            enabled = hasAnyPrint,
-            modifier = Modifier.height(52.dp),
-        ) {
-            Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
-            Spacer(Modifier.width(8.dp))
-            Text("Download", maxLines = 1)
+        // Phase 7 (D1): only while a resume exists — after "Start over" the
+        // button above reads plain Play again, so this row must not linger.
+        if (resume != null) {
+            TextButton(onClick = onStartOver) {
+                Text("Start over")
+            }
         }
     }
 }

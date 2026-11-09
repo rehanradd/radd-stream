@@ -5,6 +5,17 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-10 — Muse [PHASE7-BACKEND-WORK-REF]: `work_ref` on the v2 grid and
+  detail — `_work_ref_for()` mints the account handle on `_browse_item` and the
+  `work_detail` work object (None without key/secret, never forged); `test_api_v2`
+  +1 test (handle unmints to the work key, `assert_clean`; no-secret is null);
+  the exact-shape pin in `test_catalog_api` lists `work_ref` deliberately. The
+  app half (V2CatalogWire, M1/D1/M4/D2/M3) is Session 127 in
+  `App/docs/SESSION_HISTORY.md`. Gate deploy must still add the four nginx
+  locations (`/api/v2/works`, `= /api/v2/browse`, `= /api/v2/search`,
+  `/api/v2/resolve`) —
+  [20261110-muse-phase7-backend-work-ref.md](20261110-muse-phase7-backend-work-ref.md)
+
 - 2026-11-10 — Muse [NEWSITES-BATCH1]: DramaDog + MegaCartoons + Castle
   importers — DramaDog sitemap enumeration (30 platform sitemaps, direct
   .m3u8 per episode, ep1 + last probed per title, middle episodes

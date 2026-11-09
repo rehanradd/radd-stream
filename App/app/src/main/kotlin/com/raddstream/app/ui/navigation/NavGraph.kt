@@ -26,6 +26,7 @@ import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.network.models.PanelTheme
+import com.raddstream.app.network.models.Post
 import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.CheckInScreen
@@ -81,6 +82,22 @@ private data class BottomNavItem(
  * [unknownDeepLink] is one it could not read, routed to the dead-link destination instead of
  * silently opening Home.
  */
+
+/**
+ * Phase 7 (M1): open a row from any list. A v2 row has no v1 post id — its `id`
+ * is the negative work-id sentinel — so it opens by work id; a v1 row opens by
+ * post id, exactly as before. The sentinel itself must never be navigated to:
+ * the detail screen reads it as "no post".
+ */
+private fun NavHostController.navigateToPost(post: Post, autoplay: Boolean = false) {
+    val route = if (post.workId != null) {
+        Screen.Detail.createRouteForWork(post.workId, autoplay)
+    } else {
+        Screen.Detail.createRoute(post.id, autoplay)
+    }
+    navigate(route)
+}
+
 @Composable
 fun RaddStreamNavGraph(
     navController: NavHostController = rememberNavController(),
@@ -245,11 +262,11 @@ fun RaddStreamNavGraph(
                 HomeScreen(
                     onSearchClick = { navController.navigate(Screen.Search.PLAIN_ROUTE) },
                     searchEnabled = features.search,
-                    onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onPostClick = { post -> navController.navigateToPost(post) },
                     // Session 121 (P-26): the hero's Watch Now opens the title and
                     // starts it, instead of only opening the title.
-                    onWatchNowClick = { postId ->
-                        navController.navigate(Screen.Detail.createRoute(postId, autoplay = true))
+                    onWatchNowClick = { post ->
+                        navController.navigateToPost(post, autoplay = true)
                     },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
@@ -281,7 +298,7 @@ fun RaddStreamNavGraph(
             ) {
                 BrowseScreen(
                     onBackClick = { navController.popBackStack() },
-                    onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onPostClick = { post -> navController.navigateToPost(post) },
                 )
             }
 
@@ -299,7 +316,7 @@ fun RaddStreamNavGraph(
             ) { backStackEntry ->
                 SearchScreen(
                     initialQuery = backStackEntry.arguments?.getString(Screen.Search.ARG_QUERY)?.takeIf { it.isNotBlank() },
-                    onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onPostClick = { post -> navController.navigateToPost(post) },
                     onPlayDirectUrl = { url, title ->
                         // The address is staged, never routed: the player
                         // opens the opaque key and reads the address from
@@ -318,7 +335,7 @@ fun RaddStreamNavGraph(
 
             composable(Screen.MyList.route) {
                 MyListScreen(
-                    onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    onPostClick = { post -> navController.navigateToPost(post) },
                 )
             }
 
@@ -418,6 +435,12 @@ fun RaddStreamNavGraph(
                 route = Screen.Detail.route,
                 arguments = listOf(
                     navArgument(Screen.Detail.ARG_POST_ID) { type = NavType.IntType },
+                    // Phase 7 (M1): the v2 work id — a default of -1 keeps every
+                    // existing detail link (deep links included) working.
+                    navArgument(Screen.Detail.ARG_WORK_ID) {
+                        type = NavType.LongType
+                        defaultValue = -1L
+                    },
                     // Session 121 (P-26): the hero's Watch Now opens the title and starts
                     // it — an optional flag, so every existing detail link still works.
                     navArgument(Screen.Detail.ARG_AUTOPLAY) {

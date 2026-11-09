@@ -4,14 +4,21 @@ import com.google.gson.annotations.SerializedName
 import com.raddstream.app.network.streamRedirectUrl
 
 /*
- * v2 WIRE DTOs — the JSON the v2 contract says the server WILL send (API_V2.md §14, §8.1,
+ * v2 WIRE DTOs — the JSON the v2 contract said the server WOULD send (API_V2.md §14, §8.1,
  * §16.4), written down so the mapping layer is real code and not a wish.
  *
- * // NOT SERVED YET - needs /api/v2/works (see EndpointGaps.MANIFEST, EndpointGaps.PLAY)
- * `viewer.py` has no route that returns any of these objects, and no `do_POST`. NOTHING in
- * this file is reachable from `RaddStreamApi`. It exists so that when the v2 surface lands,
- * the client change is "add four @GET lines" instead of a rewrite — and so the review
- * discussion about the contract happens against code, not prose.
+ * Phase 7 (D2): the premise this header was written under is gone — v2 IS served now
+ * (rev-7 projection live since 2026-11-10; `POST /api/v2/play`, `GET /api/v2/suggest`,
+ * `POST /api/v2/links/`, `POST /api/v2/episodes/`, `/api/v2/account` all allow-listed
+ * in live nginx, and the GET catalog routes `browse`/`search`/`works/{id}` are served
+ * by `catalog_api.py`). What is NOT true is that the server sends THESE shapes: the
+ * real wire carries a structured `poster` object, `images:{poster,backdrops}`, prints
+ * under `prints[]` with nested `audio`/`subtitles`/`coverage`, and links keyed by
+ * `link_id` with no `play_url` — so `WireWork`/`WireSeason`/`WirePrint`/`WireLink`
+ * have ZERO callers and no tests, and wiring them would repeat the
+ * `WirePlayBundle` parses-everything-to-null mistake this file itself documents.
+ * The live shapes are `V2CatalogWire.kt`, which the app actually calls; this file
+ * stays as the contract record, not the mapping layer.
  *
  * Two decode-safety rules that are load-bearing here and nowhere else:
  *  1. NO field is typed as an enum. Gson would throw on a value added later; every enum is

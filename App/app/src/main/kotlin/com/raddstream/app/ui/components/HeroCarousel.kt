@@ -92,14 +92,14 @@ import kotlinx.coroutines.launch
 @Composable
 fun HeroCarousel(
     posts: List<Post>,
-    onPostClick: (Int) -> Unit,
+    onPostClick: (Post) -> Unit,
     modifier: Modifier = Modifier,
     backdropFor: (Post) -> String? = { it.heroArtUrl },
     /** The operator's theme: false pauses the auto-advance, the interval is in ms. */
     autoplay: Boolean = true,
     intervalMs: Long = AUTO_ADVANCE_MS,
     /** Session 121 (P-26): Watch Now starts the title instead of only opening it. */
-    onWatchNow: (Post) -> Unit = { post -> onPostClick(post.id) },
+    onWatchNow: (Post) -> Unit = onPostClick,
     isFavorite: (Post) -> Boolean = { false },
     onToggleFavorite: (Post) -> Unit = {},
 ) {
@@ -132,7 +132,7 @@ fun HeroCarousel(
             HeroSlide(
                 post = post,
                 backdropUrl = backdropFor(post),
-                onClick = { onPostClick(post.id) },
+                onClick = { onPostClick(post) },
                 onWatchNow = { onWatchNow(post) },
                 isFavorite = isFavorite(post),
                 onToggleFavorite = { onToggleFavorite(post) },

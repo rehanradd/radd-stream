@@ -42,6 +42,10 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -94,9 +98,9 @@ fun HomeScreen(
     onSearchClick: () -> Unit,
     /** False when the operator's `feature_flags.search` is off: the entry point disappears. */
     searchEnabled: Boolean = true,
-    onPostClick: (Int) -> Unit = {},
+    onPostClick: (Post) -> Unit = {},
     /** Session 121 (P-26): the hero's Watch Now — opens the title and starts it. */
-    onWatchNowClick: (Int) -> Unit = onPostClick,
+    onWatchNowClick: (Post) -> Unit = onPostClick,
     onBrowseType: (String?) -> Unit = {},
     onSetupServerClick: () -> Unit = {},
     /** The phone's own videos (Movies/ and Download/), listed from MediaStore. */
@@ -115,6 +119,24 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    // Phase 7 (D1): one tap removes a Continue Watching tile; the way back is
+    // the snackbar, not a dialog the viewer had to answer first. Dismissing
+    // the snackbar without tapping Undo lets the removal stand.
+    LaunchedEffect(state.removedResumeTitle) {
+        val title = state.removedResumeTitle ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Removed $title from Continue Watching",
+            actionLabel = "Undo",
+            duration = SnackbarDuration.Long,
+        )
+        if (result == SnackbarResult.ActionPerformed) {
+            viewModel.undoRemoveFromContinueWatching()
+        } else {
+            viewModel.clearRemovedResumeNotice()
+        }
+    }
 
     // Play Core in-app updates: the launcher the update flow returns
     // through. `pendingFlexibleUpdateUrl` holds the URL of a flexible flow
@@ -135,6 +157,7 @@ fun HomeScreen(
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(Brand.copy("home_title", Brand.name), fontWeight = FontWeight.Bold) },
@@ -248,9 +271,13 @@ fun HomeScreen(
                         ) { tile ->
                             PosterCard(
                                 post = tile.post,
-                                onClick = { onPostClick(tile.post.id) },
+                                onClick = { onPostClick(tile.post) },
                                 progressFraction = tile.progressFraction,
                                 progressLabel = tile.resumeLabel,
+                                // Phase 7 (D1): the × removes this scope from
+                                // Continue Watching — server row first, then
+                                // the local rows, with Undo on the snackbar.
+                                onRemove = { viewModel.removeFromContinueWatching(tile) },
                             )
                         }
                         Spacer(Modifier.height(8.dp))
@@ -271,8 +298,11 @@ fun HomeScreen(
                         HeroCarousel(
                             posts = heroItems,
                             onPostClick = onPostClick,
-                            onWatchNow = { post -> onWatchNowClick(post.id) },
-                            isFavorite = { post -> post.id in state.favoriteIds },
+                            onWatchNow = { post -> onWatchNowClick(post) },
+                            isFavorite = { post ->
+                                post.id in state.favoriteIds ||
+                                    (post.workRef != null && post.workRef in state.favoriteWorkRefs)
+                            },
                             onToggleFavorite = { post -> viewModel.toggleFavorite(post) },
                             autoplay = heroAutoplay,
                             intervalMs = heroIntervalMs,
@@ -795,7 +825,7 @@ private fun Modifier.horizontalScrollPadding(): Modifier = this.padding(horizont
 @Composable
 private fun HomeRailSection(
     section: HomeSection,
-    onPostClick: (Int) -> Unit,
+    onPostClick: (Post) -> Unit,
     onSeeAll: () -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -831,7 +861,7 @@ private fun HomeRailSection(
                     action = { SeeAllButton(onClick = onSeeAll) },
                 )
                 MediaRail(items = section.items, key = { it.id }) { post ->
-                    PosterCard(post = post, onClick = { onPostClick(post.id) })
+                    PosterCard(post = post, onClick = { onPostClick(post) })
                 }
                 // The rows here are real and from this page; the refresh that failed is a
                 // separate fact and has to be said, or the screen claims a freshness it
