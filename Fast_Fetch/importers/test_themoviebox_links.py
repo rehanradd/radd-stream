@@ -114,7 +114,7 @@ class DeclaredRenditionTests(unittest.TestCase):
 
     def test_a_playable_url_still_wins_over_declared_tiers(self):
         payload = dict(SERIES, videoAddress={
-            "url": "https://macdn.aoneroom.com/media/vone/x-1080.mp4"})
+            "url": "https://pbcdnw.aoneroom.com/media/vone/x-1080.mp4"})
         releases = record_for(payload)["releases"]
         self.assertEqual(len(releases), 1)
         self.assertEqual(len(releases[0]["sources"]), 1,

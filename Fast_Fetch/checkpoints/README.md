@@ -23,6 +23,20 @@ trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line rang
   minSdk 21 → 23 — owner decision); not done: push + CI + device retest —
   [20261109-muse-session126-player-complete.md](20261109-muse-session126-player-complete.md)
 
+- 2026-11-09 — Muse [MUSE-SESSION126-MOVIEBOX-IMPORTER]: MovieBox
+  importer — feed filters + trailer-CDN drop (map + full harvest in
+  `~/workspace/goals/radd-stream-on-oracle-vm/hidden_files/moviebox-full-catalog-map-20261109.md`):
+  `_walk_feed` takes `filters` (year as a STRING, genre, sort, country,
+  classify) threaded through `sync_catalog`/`harvest_catalog` and CLI
+  `--year/--genre/--sort/--country/--classify`; only `sort=Latest`
+  enumerates works; year cells cover 2019–2026, capped at 100 pages.
+  `_direct_media_urls` drops `macdn.aoneroom.com` outright (the trailer
+  CDN — measured on two live movies; the proof crawl had staged two
+  trailers as `-sd` prints); new regression test
+  `test_a_macdn_url_is_dropped_wherever_it_sits`; test counts 18/54/7.
+  Staging verified on the VM: 3,411 posts (2,687 movies, 724 series),
+  8,849 releases / 8,849 sources, 0 direct, 16 adult, 43 metadata-only.
+  Data merge is a separate parent gate job — [20261109-muse-session126-moviebox-importer.md](20261109-muse-session126-moviebox-importer.md)
 - 2026-11-09 — Muse [MUSE-SESSION125-SCALE-QUICK-WINS]: scale quick
   wins A1/A2/A6 — reconcile build after a collision (a self-check worker
   built the same pragmas inline `-131072` in the same clone, then reverted

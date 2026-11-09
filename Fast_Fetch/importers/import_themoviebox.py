@@ -61,6 +61,19 @@ server-side, it cannot be enumerated either: 100 items over 2 pages against a
 fiction. The endpoint that *does* filter (``/subject/search``) is authenticated,
 and its client-side token is not reverse-engineered here.
 
+CORRECTION (measured 2026-11-09, Session 126 map): the "cannot be filtered"
+claim is wrong for two keys. ``{"year": "2024"}`` (a STRING — an integer 2024
+answers 400 "body unmarshal proto ... invalid value for string") returned
+50/50 items with releaseDate in 2024, and ``{"genre": "Action"}`` returned
+44/44 items carrying Action in their genres. ``subjectType`` remains
+decoration. So the feed IS enumerable: walk it year by year (and, if a year
+ever caps out, genre by genre inside the year). The search endpoint is
+unlocked the same day: any API call made with the ``X-Client-Token`` header
+(``<unix-seconds>,<md5(reversed seconds)>`` — the site's own YC() from its JS
+bundle) answers with an ``x-user`` response header carrying a Bearer token;
+``/subject/search`` then works with ``Authorization: Bearer <token>`` alone
+(sending both headers answers 400 'invalid token').
+
 Finally, the edge reset roughly two thirds of TLS handshakes from this host
 (8/24 successes, independent of IP and of HTTP version — four CloudFront
 addresses all flap). **That measurement was taken under heavy local load and is
@@ -461,6 +474,15 @@ def _direct_media_urls(node: dict) -> list[str]:
     Nested containers are skipped on purpose: the graph walk visits them anyway,
     so a parent never claims a child's streams. Non-CDN video URLs are dropped so
     a stray ad/trailer in the payload cannot be staged as this work's media.
+
+    ``macdn.aoneroom.com`` is dropped unconditionally, even though it is on the
+    site's own edge: it is the *trailer* CDN. Measured 2026-11-09 on
+    "A Beautiful Curse" and "Delusion" (detail API): the only macdn mp4 in the
+    payload is ``trailer.videoAddress.url`` (82 s / 117 s, 2.7 MB / 4.6 MB),
+    mirrored once more in a sibling ``video`` array outside the ``trailer``
+    subtree — which is how the crawl staged two trailers as ``-sd`` prints
+    before this filter existed. The work's own print is never on macdn: it is
+    resolved client-side through the play API to a signed URL on another host.
     """
     found: list[str] = []
 
@@ -481,6 +503,10 @@ def _direct_media_urls(node: dict) -> list[str]:
     # least one URL was on the edge, so a page whose *only* mp4 was an ad or a
     # studio trailer kept that foreign URL as the work's playable print.
     found = [url for url in found if any(host in url for host in MEDIA_HOST_HINTS)]
+    # The trailer CDN is on the same edge, so the host filter above cannot tell
+    # a trailer from a print — and nothing about the URL can either (same
+    # ``/media/vone/…-sd.mp4`` shape). Only the host does: drop it outright.
+    found = [url for url in found if "macdn.aoneroom.com" not in url]
     seen, ordered = set(), []
     for url in found:
         if url not in seen:
@@ -1608,13 +1634,20 @@ def _queued_subject_id(row) -> str | None:
 
 def _walk_feed(subject_types=ACCEPTED_SUBJECT_TYPES, pages: int = API_MAX_PAGES,
                per_page: int = API_PAGE_SIZE, delay: float = DEFAULT_DELAY,
-               state: dict | None = None):
+               state: dict | None = None, filters: dict | None = None):
     """Yield ``(item, detail_url)`` for every work the feed names.
 
     ``state`` receives ``stopped_for_memory``/``stop_reason`` when the memory
     floor ends the walk. A generator cannot return a value to its caller, and a
     refusal that reports nothing is how a run that made zero requests once looked
     exactly like a completed one.
+
+    ``filters`` are extra keys merged into the filter POST body. Measured
+    2026-11-09: ``{"year": "2024"}`` (string, never an int) and
+    ``{"genre": "Action"}`` are honored server-side — every returned item
+    matches — so the feed is enumerable year by year. ``subjectType`` is NOT
+    honored (see below) and must not be relied on to split movies from series;
+    the item's own ``subjectType`` field is the only classifier.
 
     Paginated instead of page-scraped: one request here describes 50 works with
     the same fields the SSR payload carries, which on a one-core box behind an
@@ -1633,6 +1666,7 @@ def _walk_feed(subject_types=ACCEPTED_SUBJECT_TYPES, pages: int = API_MAX_PAGES,
     One pass over the pages, whitelist applied where the data actually is.
     """
     page = 1
+    body_extra = dict(filters or {})
     while page <= max(1, pages):
         if STOP_REQUESTED:
             return
@@ -1644,7 +1678,7 @@ def _walk_feed(subject_types=ACCEPTED_SUBJECT_TYPES, pages: int = API_MAX_PAGES,
                 state.setdefault("stop_reason", reason)
             return
         status, body = _api_request(API_FILTER_PATH, {
-            "page": page, "perPage": per_page}, delay=delay)
+            "page": page, "perPage": per_page, **body_extra}, delay=delay)
         if status == RATE_LIMIT_STATUS:
             log(f"[!] [{SITE}] feed HTTP 429 at page {page}")
             return
@@ -1679,7 +1713,8 @@ def _existing_keys(conn: sqlite3.Connection) -> set:
 
 def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
                  seeds=(), pages: int = API_MAX_PAGES,
-                 per_page: int = API_PAGE_SIZE, verbose: bool = True) -> dict:
+                 per_page: int = API_PAGE_SIZE, verbose: bool = True,
+                 filters: dict | None = None) -> dict:
     """Queue detail pages from the catalog feed (plus any explicitly seeded URL).
 
     The old version of this function read ``/sitemap.xml``. That path answers HTTP
@@ -1718,7 +1753,7 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
                 queue(seed)
 
         for item, url in _walk_feed(pages=pages, per_page=per_page,
-                                    state=feed_state):
+                                    state=feed_state, filters=filters):
             if STOP_REQUESTED:
                 break
             totals["items"] += 1
@@ -1756,7 +1791,7 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
 
 def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
                     pages: int = API_MAX_PAGES, per_page: int = API_PAGE_SIZE,
-                    verbose: bool = True) -> dict:
+                    verbose: bool = True, filters: dict | None = None) -> dict:
     """Write catalog rows straight from the feed, and queue each page for enrichment.
 
     This is the ingest that MovieBox can honestly support today: the feed carries
@@ -1779,7 +1814,7 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
         ensure_schema(conn)
         known = _existing_keys(conn)
         for item, url in _walk_feed(pages=pages, per_page=per_page,
-                                    state=feed_state):
+                                    state=feed_state, filters=filters):
             if STOP_REQUESTED:
                 break
             totals["items"] += 1
@@ -2443,6 +2478,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                       help=f"feed pages to walk per subject type (default {API_MAX_PAGES})")
     sync.add_argument("--per-page", type=int, default=API_PAGE_SIZE,
                       help="works per feed request (default 50)")
+    sync.add_argument("--year", help="filter the feed to one release year (string, e.g. 2024)")
+    sync.add_argument("--genre", help="filter the feed to one genre (e.g. Action)")
+    sync.add_argument("--sort", help="sort the feed (Latest/Hot/newest: sorted pages are disjoint, unlike the default shuffle)")
+    sync.add_argument("--country", help="filter the feed to one country (e.g. India)")
+    sync.add_argument("--classify", help="filter the feed to one classify value (e.g. Hindi dub)")
     sync.add_argument("--seed", action="append", default=[],
                       help="an explicit page URL to queue (repeatable)")
 
@@ -2452,6 +2492,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     harvest.add_argument("--limit", type=int)
     harvest.add_argument("--pages", type=int, default=API_MAX_PAGES)
     harvest.add_argument("--per-page", type=int, default=API_PAGE_SIZE)
+    harvest.add_argument("--year", help="filter the feed to one release year (string, e.g. 2024)")
+    harvest.add_argument("--genre", help="filter the feed to one genre (e.g. Action)")
+    harvest.add_argument("--sort", help="sort the feed (Latest/Hot/newest: sorted pages are disjoint, unlike the default shuffle)")
+    harvest.add_argument("--country", help="filter the feed to one country (e.g. India)")
+    harvest.add_argument("--classify", help="filter the feed to one classify value (e.g. Hindi dub)")
 
     crawl = sub.add_parser("crawl", help="fetch queued pages")
     crawl.add_argument("--db", default=str(DEFAULT_DB_PATH))
@@ -2473,12 +2518,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     _install_signals()
+    filters = {}
+    if getattr(args, "year", None):
+        filters["year"] = str(args.year)
+    if getattr(args, "genre", None):
+        filters["genre"] = args.genre
+    if getattr(args, "sort", None):
+        filters["sort"] = args.sort
+    if getattr(args, "country", None):
+        filters["country"] = args.country
+    if getattr(args, "classify", None):
+        filters["classify"] = args.classify
     if args.command == "sync":
         totals = sync_catalog(args.db, limit=args.limit, seeds=args.seed,
-                              pages=args.pages, per_page=args.per_page)
+                              pages=args.pages, per_page=args.per_page,
+                              filters=filters or None)
     elif args.command == "harvest":
         totals = harvest_catalog(args.db, limit=args.limit, pages=args.pages,
-                                 per_page=args.per_page)
+                                 per_page=args.per_page, filters=filters or None)
     elif args.command == "crawl":
         totals = crawl_pending(limit=args.limit, db_path=args.db,
                                workers=args.workers, delay=args.delay,

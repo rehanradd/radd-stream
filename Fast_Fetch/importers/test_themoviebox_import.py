@@ -7,10 +7,16 @@ from pages measured on this host on 2026-10-29. The rules this suite keeps, and
 the measured defect each one exists because of:
 
 * a trailer is never a playable print. The site serves ``trailer.videoAddress``
-  from the same ``macdn.aoneroom.com`` edge, in the same ``…-ld.mp4`` shape as a
-  real print, so only its position in the graph distinguishes them. Before this
-  rule, a live movie page parsed into 2 releases whose only URL was a 169-second
-  640x360 preview.
+  from the ``macdn.aoneroom.com`` edge, and measured 2026-11-09 the macdn host
+  itself is the trailer CDN: the only macdn mp4 in a detail payload is the
+  trailer (82 s / 117 s, 2.7 MB / 4.6 MB on two live movies), mirrored once
+  more in a sibling ``video`` array outside the ``trailer`` subtree — which is
+  how the crawl staged two trailers as ``-sd`` prints. So a macdn URL is
+  dropped whatever its position in the graph; a real print is resolved
+  client-side through the play API and never appears in a payload at all.
+  The graph-position rule still applies to a non-macdn host: a playable URL
+  under a playable key is collected, one under ``trailer``/``stills``/``gif``/
+  ``preview`` is evidence only.
 * a work with no print is a valid row, recorded metadata-only and marked crawled.
   The play URL is resolved client-side (``detailUrl``/``sniffUrl``/``sourceUrl``
   are all empty strings in the payload), so treating "no media" as a scrape
@@ -47,7 +53,7 @@ import import_themoviebox as mb  # noqa: E402
 DETAIL_URL = "https://themoviebox.xyz/detail/matchbox-the-movie-S5hfykcX3Z4"
 TRAILER_URL = ("https://macdn.aoneroom.com/media/vone/2026-09-22/"
                "963d1683d5c57143436f2dfa070972bf-ld.mp4")
-PRINT_URL = ("https://macdn.aoneroom.com/media/vone/2026-09-22/"
+PRINT_URL = ("https://pbcdnw.aoneroom.com/media/vone/2026-09-22/"
              "abcdef0123456789abcdef0123456789-hd.mp4")
 
 
@@ -199,6 +205,17 @@ class ParsePageTests(unittest.TestCase):
         self.assertEqual(record["releases"][0]["sources"][0]["source_url"],
                          PRINT_URL)
         self.assertEqual(record["releases"][0]["quality"], "HD")
+
+    def test_a_macdn_url_is_dropped_wherever_it_sits(self):
+        """Measured 2026-11-09: the trailer is mirrored in a sibling ``video``
+        array outside the ``trailer`` subtree, so position alone cannot save
+        it — the macdn host is the trailer CDN and is never a print."""
+        subject = dict(MATCHBOX, video=[{"url": TRAILER_URL, "size": 2656490}])
+        record = mb.parse_page(nuxt_script(devalue(subject)), DETAIL_URL)[0]
+        self.assertEqual(record["releases"], [],
+                         "a macdn trailer must not become a release")
+        self.assertEqual(record["raw_meta"]["trailer_url"], TRAILER_URL,
+                         "and must still be recorded as evidence")
 
     def test_duplicate_media_urls_do_not_duplicate_releases(self):
         subject = dict(MATCHBOX, videoAddress={"url": PRINT_URL},
