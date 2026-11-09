@@ -144,3 +144,5 @@ countdown, DE-1 resume, new screens, Wi-Fi gates, binge bytes, series
 auto-delete, quality-gate refusal, VIP pass on URLs, HO-1…HO-8, search pill,
 rung/dialog changes); strings-map; D-35 poster plumbing; the remaining
 audit surface listed above.
+
+**Parent fixup 3 (2026-11-09, after Android CI 42565314434 failed on 358b26f):** 3 test failures + 6 lint errors. (1) `claimedTodayFor` java.time (API 26) → java.util rewrite, minSdk 21, no desugaring; AccountStreakTest pins re-verified by JVM repro (9 checks pass). (2) JUnit 4.13.2 2-arg double assertEquals always fails by design — ModelsTest two asserts gained `, 0.001` (decode proven exact by Gson 2.10.1 repro). (3) AdCadenceGuardTest guard string `= action` → `= held` (PL-1 rename; hold invariant intact).

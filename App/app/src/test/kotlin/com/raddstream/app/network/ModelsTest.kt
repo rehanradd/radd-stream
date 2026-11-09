@@ -617,7 +617,7 @@ class ModelsTest {
         assertEquals(-500, response.entries[0].delta)
         assertEquals("redeem_pass", response.entries[0].reason)
         assertEquals("day", response.entries[0].ref)
-        assertEquals(1790000000.0, response.entries[0].createdAt)
+        assertEquals(1790000000.0, response.entries[0].createdAt, 0.001)
         assertEquals(20, response.entries[1].delta)
         assertEquals("streak_day", response.entries[1].reason)
     }
@@ -635,7 +635,7 @@ class ModelsTest {
         assertEquals("2026-11-09", response.streak.lastCountedDay)
         assertEquals("Asia/Karachi", response.streak.tz)
         assertEquals(4, response.streak.dayBoundaryHour)
-        assertEquals(1790000000.0, response.cadence.lastAppOpenAt)
+        assertEquals(1790000000.0, response.cadence.lastAppOpenAt, 0.001)
         assertEquals(2, response.cadence.nativePosterCursor)
     }
 

@@ -220,7 +220,7 @@ class AdCadenceGuardTest {
         )
         assertTrue(
             "a granted break holds the successor instead of dropping it",
-            player.any { "pendingCrossEpisode = action" in it },
+            player.any { "pendingCrossEpisode = held" in it },
         )
         val dismiss = player.expressionBlock("fun dismissAdBreak()")
         assertTrue("dismissal plays the held hand-off", dismiss.any { "advanceCrossEpisode(held)" in it })

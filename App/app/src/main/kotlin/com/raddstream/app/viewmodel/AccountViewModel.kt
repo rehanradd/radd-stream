@@ -7,9 +7,9 @@ import com.raddstream.app.network.models.CoinLedgerEntry
 import com.raddstream.app.network.models.PassTier
 import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
-import java.time.Instant
-import java.time.LocalDateTime
-import java.time.ZoneId
+import java.util.Calendar
+import java.util.Locale
+import java.util.TimeZone
 import javax.inject.Inject
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,15 +33,24 @@ fun claimedTodayFor(
     nowMillis: Long,
 ): Boolean {
     if (lastCountedDay.isNullOrBlank()) return false
-    val zone = try {
-        ZoneId.of(tz)
-    } catch (_: Exception) {
-        ZoneId.of("Asia/Karachi")
+    // java.time needs API 26 and this app's minSdk is 21 with no desugaring,
+    // so the same civil-day math runs on java.util: TimeZone returns GMT for
+    // an unknown id, which is the unreadable-timezone fallback's signal.
+    val zone = TimeZone.getTimeZone(tz).let {
+        if (it.id == "GMT" && tz != "GMT") TimeZone.getTimeZone("Asia/Karachi") else it
     }
     val hour = boundaryHour.coerceIn(0, 23)
-    val today = LocalDateTime.ofInstant(Instant.ofEpochMilli(nowMillis), zone)
-        .minusHours(hour.toLong()).toLocalDate()
-    return lastCountedDay == today.toString()
+    val cal = Calendar.getInstance(zone)
+    cal.timeInMillis = nowMillis
+    cal.add(Calendar.HOUR_OF_DAY, -hour)
+    val today = String.format(
+        Locale.US,
+        "%04d-%02d-%02d",
+        cal.get(Calendar.YEAR),
+        cal.get(Calendar.MONTH) + 1,
+        cal.get(Calendar.DAY_OF_MONTH),
+    )
+    return lastCountedDay == today
 }
 
 /**
