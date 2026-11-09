@@ -5,6 +5,21 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-09 — Muse [MUSE-SESSION-LEGAL-CATALOG]: Archive.org legal
+  catalog importer (Archive-only, no TMDb key): license gate (PD Mark /
+  old public-domain dedication / CC0 / CC BY / CC BY-SA in; BY-NC / BY-ND
+  / sampling out — deny markers checked first), dark + no-mp4 + Range-206
+  + ffprobe gates (both probes must pass, missing ffprobe fails closed),
+  quality band from ffprobe HEIGHT (the build note's width rule mislabels
+  1280x720 as 1080p, a VIP-gated band — measured on Sita Sings the
+  Blues), review-flag wordlist (titles word-boundary, identifiers
+  substring on long tokens only; `nudist` added after the live batch
+  caught the Diary of a Nudist miss). New `import_archive.py` + 64 offline
+  tests, gate step 66. Live batch on the VM: 20 posts / 40 releases / 40
+  sources, verify OK, 2 flagged for manual review (Sex Madness, Diary of
+  a Nudist), licenses publicdomain 17 / cc0 1 / pd_mark 2. Data merge is a
+  separate parent gate job — [20261109-muse-session-legal-catalog.md](20261109-muse-session-legal-catalog.md)
+
 - 2026-11-09 — Muse [PHASE-E-LINKHEALTH-DRIFT-WARM]: link-health wiring +
   coin drift-guard test + pre-warming — new `link_sweep.py` (stratified
   1,000-link sample, plan/run/status/merge, staging first, merge through
