@@ -76,6 +76,13 @@ data class DetailUiState(
     val resume: ResumePoint? = null,
     /** True when the Resume button has a print to play; false shows plain Play. */
     val resumePlayable: Boolean = false,
+    /**
+     * True once the resume lookup has answered — including "never watched".
+     * Session 123 (DE-1): `resume` being null is ambiguous (not loaded yet,
+     * or never watched), and autoplay must not decide until it knows which.
+     * False until [loadResume] settles, on every path out of it.
+     */
+    val resumeLoaded: Boolean = false,
     /** Per-episode progress, keyed by (season, episode) — the marks on episode rows. */
     val episodeProgress: Map<Pair<Int, Int>, EpisodeProgress> = emptyMap(),
     /**
@@ -375,9 +382,19 @@ class DetailViewModel @Inject constructor(
      * shows a plain Play button instead of a Resume one.
      */
     private fun loadResume() {
-        val workRef = _uiState.value.post?.workRef?.takeIf { it.isNotBlank() } ?: return
+        val workRef = _uiState.value.post?.workRef?.takeIf { it.isNotBlank() }
+        if (workRef == null) {
+            // No work identity, so no history to look up — the lookup is
+            // settled with "never watched", not left hanging.
+            _uiState.update { it.copy(resumeLoaded = true) }
+            return
+        }
         viewModelScope.launch {
-            val rows = runCatching { watchHistoryDao.findWork(workRef) }.getOrNull() ?: return@launch
+            val rows = runCatching { watchHistoryDao.findWork(workRef) }.getOrNull()
+            if (rows == null) {
+                _uiState.update { it.copy(resumeLoaded = true) }
+                return@launch
+            }
             val resume = resumePointFor(rows)
             // The button only shows when its print is still on the page:
             // a resume whose episode lost every print is a dead button.
@@ -386,6 +403,7 @@ class DetailViewModel @Inject constructor(
                 it.copy(
                     resume = resume,
                     resumePlayable = playable,
+                    resumeLoaded = true,
                     episodeProgress = episodeProgressFor(rows),
                 )
             }

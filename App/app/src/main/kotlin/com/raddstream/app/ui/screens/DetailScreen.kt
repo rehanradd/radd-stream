@@ -210,12 +210,20 @@ fun DetailScreen(
     // loaded: the best print starts, and a title with nothing playable (or a locked
     // print) simply stays here with the reason in front of the viewer — `playBest`
     // never navigates, so there is nothing to unwind.
+    // Session 123 (DE-1): autoplay respects Resume — a title the viewer left
+    // halfway through restarts from where they left off, not from the
+    // beginning. `playResume` is the same path the Resume card's own button
+    // takes, so the behaviour is identical either way in. The effect waits
+    // for `resumeLoaded`: the resume lookup reads the local history in its
+    // own coroutine and lands after the title does, so deciding on `post`
+    // alone would almost always decide before the answer existed and play
+    // from the beginning anyway.
     var autoPlayedFor by remember { mutableStateOf<Int?>(null) }
-    LaunchedEffect(state.post?.id, autoplay) {
+    LaunchedEffect(state.post?.id, state.resumeLoaded, autoplay) {
         val post = state.post ?: return@LaunchedEffect
-        if (autoplay && autoPlayedFor != post.id) {
+        if (autoplay && state.resumeLoaded && autoPlayedFor != post.id) {
             autoPlayedFor = post.id
-            viewModel.playBest()
+            if (state.resume != null && state.resumePlayable) viewModel.playResume() else viewModel.playBest()
         }
     }
 
