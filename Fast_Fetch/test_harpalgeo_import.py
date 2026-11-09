@@ -10,7 +10,8 @@ Tests:
   5. Program data: one series post, one release per full episode, direct HLS.
   6. No playable episode -> None.
   7. Save path: a saved program in a temp staging DB (posts/releases/sources).
-  8. Program sync: mocked homepage -> sitemap_cache rows.
+  8. Program sync: mocked homepage -> sitemap_cache rows; mocked homepage +
+     /programs pages -> union rows, dedup-stop at the first no-new page.
   9. Registry: the harpalgeo entry exists with the live base.
 
 100% Python Standard Library. Zero external dependencies. Offline — temp SQLite
@@ -35,6 +36,23 @@ SAMPLE_HG_HOME_HTML = """
 <a href="https://harpalgeo.tv/program/Aik-Thi-Rania">Aik Thi Rania</a>
 <a href="https://harpalgeo.tv/program/Bano/26866">Bano Episode 26</a>
 <a href="https://harpalgeo.tv/program/Bano">Bano</a>
+</body></html>
+"""
+
+SAMPLE_HG_PROGRAMS_HTML = """
+<!DOCTYPE html>
+<html><head><title>Programs - Har Pal Geo</title></head><body>
+<a href="https://harpalgeo.tv/program/Bano">Bano</a>
+<a href="https://harpalgeo.tv/program/Zombeid">Zombeid</a>
+<a href="https://harpalgeo.tv/programs/2">2</a>
+</body></html>
+"""
+
+SAMPLE_HG_PROGRAMS_P2_HTML = """
+<!DOCTYPE html>
+<html><head><title>Programs - Har Pal Geo</title></head><body>
+<a href="https://harpalgeo.tv/program/Bano">Bano</a>
+<a href="https://harpalgeo.tv/program/Zombeid">Zombeid</a>
 </body></html>
 """
 
@@ -182,6 +200,34 @@ class TestHarPalGeoSync(unittest.TestCase):
                     "SELECT loc, site FROM sitemap_cache WHERE site = 'harpalgeo'"
                 ).fetchall()
             self.assertEqual(len(rows), 2)
+
+    def test_sync_unions_homepage_and_programs_index(self):
+        """Homepage (Bano, Aik-Thi-Rania) + /programs p1 (Bano, Zombeid) +
+        /programs/2 (same two, no new) -> 3 rows, and the loop stops."""
+        def _fake_get_text(url, referer=None, timeout=15):
+            if url.endswith("/programs/2"):
+                return (200, url, SAMPLE_HG_PROGRAMS_P2_HTML)
+            if url.endswith("/programs"):
+                return (200, url, SAMPLE_HG_PROGRAMS_HTML)
+            return (200, url, SAMPLE_HG_HOME_HTML)
+
+        client = MagicMock()
+        client.base_url = "https://www.harpalgeo.tv"
+        client.get_text.side_effect = _fake_get_text
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "harpalgeo.db"
+            n = import_harpalgeo.sync_programs_to_db(client, db_path)
+            self.assertEqual(n, 3)
+            with sqlite3.connect(str(db_path)) as conn:
+                rows = conn.execute(
+                    "SELECT loc, site FROM sitemap_cache WHERE site = 'harpalgeo'"
+                ).fetchall()
+            self.assertEqual(len(rows), 3)
+            locs = [r[0] for r in rows]
+            self.assertIn("https://harpalgeo.tv/program/Zombeid", locs)
+            self.assertIn("https://harpalgeo.tv/program/Aik-Thi-Rania", locs)
+            # The dedup-stop fired at /programs/2: exactly 3 fetches.
+            self.assertEqual(client.get_text.call_count, 3)
 
 
 class TestHarPalGeoRegistry(unittest.TestCase):

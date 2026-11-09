@@ -5,6 +5,15 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-10 — Muse [SESSION-118-SWEEPS]: fuller 118 sweeps — MovieNestBD
+  letter sweep (count 16,353 for "a", 909 pages), HarPal /programs 30-page
+  index (509 programs, not the homepage's 11 — sync now walks homepage +
+  /programs with dedup-stop), MoviesDrive domain rotated new1 → new2
+  (new1 302s and drops the query string; registry + fallback + test
+  updated). Staging before: movienestbd 20/20/54, harpalgeo 5/42/42,
+  moviesdrive 10/49/457 (9,638 pending). Sweeps run detached on the VM;
+  data merge is a separate parent gate job —
+  [20261110-muse-session118-sweeps.md](20261110-muse-session118-sweeps.md)
 - 2026-11-10 — Muse [PHASE-E-MOVIEBOX-FOLLOWUPS]: MovieBox search
   recovery + year+genre gap-fill + resolver transport retry — search flow
   implemented (`client_token` / `fetch_bearer_token` / `search_subjects`,
