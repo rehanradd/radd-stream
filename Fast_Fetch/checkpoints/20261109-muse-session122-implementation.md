@@ -199,3 +199,21 @@ scan: zero offenders. Raw-Color(0x) scan also clean (test 2's check). No test
 pins the Toast text. Pre-push checks: diff is exactly 1 line, @Composable
 0/0, comment balance 8/8, no import change. No local Gradle (owner order) —
 Android CI is the verdict.
+
+## Landed (07:27–07:29 PKT 2026-11-09)
+
+- CI on 310dfb0: BOTH GREEN — Backend 42550060579 SUCCESS, Android
+  42550060391 SUCCESS. APK app-debug-294 verified (artifact 13645500522,
+  24,436,379 bytes, 510 entries, manifest present, zip intact) at
+  ~/workspace/app-debug-294/app-debug.apk.
+- Merged to main (fast-forward, no conflicts): main 923656a → 310dfb0,
+  42 files +1835/−283. Pushed via bundle route; GitHub main @ 310dfb0a2c.
+  VM clone /tmp/muse-panel-push main @ 310dfb0a2c (fast-forwarded via
+  `git merge --ff-only origin/main` — the fetch-into-branch form refuses
+  on the checked-out branch; that is the fix when the clone's checked-out
+  branch is the target).
+- Gate-deploy started: backup 0729 running (PID 1313557, script from
+  backup-0549 with HHMM replaced; TS 20261109-0729). Next: verify backup
+  (BACKUP-DONE + integrity ok/ok), live-tree ff, service restart, proofs.
+  The rev-5 rebuild (PID 1304855) is still running on its own copy file —
+  the gate does not touch it; the swap follows after both finish.
