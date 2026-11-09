@@ -324,6 +324,12 @@ jobs:
       - name: 🧪 test_link_sweep_budget.py
         run: python3 -S Fast_Fetch/test_link_sweep_budget.py
 
+      # The sweep runner itself (link_sweep.py: plan/run/status/merge). Offline:
+      # a fake prober stands in for the network, temp DBs for the catalog — the
+      # real run is an operator CLI, never a CI job.
+      - name: 🧪 test_link_sweep.py
+        run: python3 -S Fast_Fetch/test_link_sweep.py
+
       # MovieBox's rendition rules: the site declares 360/480/720/1080 per season and
       # publishes none of their URLs (measured on one captured detail page), so each
       # tier is a release sourced at the detail page (Session 107 — the detail URL

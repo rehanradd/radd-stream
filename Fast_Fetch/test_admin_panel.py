@@ -27,6 +27,7 @@ import api_v2               # noqa: E402
 import catalog_v2           # noqa: E402
 import engagement           # noqa: E402
 import fast_fetch           # noqa: E402
+import link_state           # noqa: E402
 import redact               # noqa: E402
 import viewer               # noqa: E402
 
@@ -225,6 +226,95 @@ class Screens(Fixture):
         self.ingest()
         data = self.payload("link-health")
         self.assertEqual(sum(data["by_state"].values()), 1, data)
+
+    def test_link_health_reads_the_stamped_counts_not_a_live_scan(self):
+        """The stamp wins: the screen must publish the stored number even
+        when the live tables disagree with it."""
+        self.ingest()
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_projection_meta (key, value)"
+            " VALUES ('links_by_state', ?)",
+            (json.dumps({"active": 5, "dead": 2}),))
+        self.conn.commit()
+        data = self.payload("link-health")
+        self.assertEqual(data["by_state"], {"active": 5, "dead": 2})
+
+    def test_link_health_without_a_stamp_falls_back_to_live_counts(self):
+        self.ingest()
+        self.conn.execute(
+            "DELETE FROM cat_projection_meta WHERE key = 'links_by_state'")
+        self.conn.commit()
+        data = self.payload("link-health")
+        self.assertEqual(sum(data["by_state"].values()), 1, data)
+
+    def test_link_health_reports_the_stamped_coverage(self):
+        self.ingest()
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_projection_meta (key, value)"
+            " VALUES ('link_coverage', '0.25')")
+        self.conn.commit()
+        data = self.payload("link-health")
+        self.assertEqual(data["coverage"], 0.25)
+
+    def test_link_health_surfaces_the_last_sweep_stamp(self):
+        self.ingest()
+        stamp = {"started_at": 1700000000.0, "finished_at": 1700000600.0,
+                 "sample_limit": 1000, "links_done": 1000, "alive": 700,
+                 "dead": 200, "expired": 50, "blocked": 10, "no_verdict": 40,
+                 "host_parked": 3, "alive_share": 0.7368, "margin_95": 0.031,
+                 "merged_links": 1000, "applied_at": 1700000600.0}
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_projection_meta (key, value)"
+            " VALUES ('link_sweep_last_run', ?)", (json.dumps(stamp),))
+        self.conn.commit()
+        data = self.payload("link-health")
+        self.assertEqual(data["sweep"], stamp)
+        # The stamp carries counts only — no URL, no site, no provenance.
+        self.assertNotIn("url", json.dumps(data["sweep"]))
+
+    def test_link_health_surfaces_the_latest_propagate_run(self):
+        self.ingest()
+        link_state.ensure_schema(self.conn)
+        self.conn.execute(
+            "INSERT INTO link_state_runs (run_id, scope, started_at,"
+            " finished_at, rows_checked, rows_updated, by_status)"
+            " VALUES ('1700000000000-serve', 'serve', 1700000000.0,"
+            " 1700000600.0, 400, 12, ?)",
+            (json.dumps({"active": 10, "dead": 2}),))
+        self.conn.execute(
+            "INSERT INTO link_state_cursor (scope, last_id, rows_checked,"
+            " rows_updated, rows_probed, state, run_id, started_at,"
+            " updated_at, detail) VALUES ('serve', 12345, 400, 12, 12,"
+            " 'running', '1700000000000-serve', 1700000000.0, 1700000600.0, '')")
+        self.conn.commit()
+        data = self.payload("link-health")
+        propagate = data["propagate"]
+        self.assertEqual(propagate["run_id"], "1700000000000-serve")
+        self.assertEqual(propagate["scope"], "serve")
+        self.assertEqual(propagate["rows_checked"], 400)
+        self.assertEqual(propagate["rows_updated"], 12)
+        self.assertEqual(propagate["by_status"], {"active": 10, "dead": 2})
+        self.assertEqual(propagate["cursor_last_id"], 12345)
+        self.assertEqual(propagate["cursor_state"], "running")
+
+    def test_link_health_renders_the_sweep_on_the_admin_page(self):
+        self.ingest()
+        stamp = {"started_at": 1700000000.0, "finished_at": 1700000600.0,
+                 "sample_limit": 1000, "links_done": 1000, "alive": 700,
+                 "dead": 200, "expired": 50, "blocked": 10, "no_verdict": 40,
+                 "host_parked": 3, "alive_share": 0.7368, "margin_95": 0.031,
+                 "merged_links": 1000, "applied_at": 1700000600.0}
+        self.conn.execute(
+            "INSERT OR REPLACE INTO cat_projection_meta (key, value)"
+            " VALUES ('link_sweep_last_run', ?)", (json.dumps(stamp),))
+        self.conn.commit()
+        answered = admin_panel.route_get(
+            "/admin", {}, db_path=self.db_path, peer_address="127.0.0.1",
+            token_header=f"Bearer {TOKEN}")
+        self.assertEqual(answered[0], 200)
+        body = answered[2].decode()
+        self.assertIn("last sweep", body)
+        self.assertIn("host_parked", body)
 
     # ── provenance ───────────────────────────────────────────────────────
     def test_a_screen_that_names_a_forbidden_column_is_refused_whole(self):

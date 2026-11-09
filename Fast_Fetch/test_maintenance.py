@@ -103,6 +103,32 @@ class TickTests(unittest.TestCase):
         self.assertFalse(summary["skipped_for_memory"])
 
 
+    def test_a_warm_limit_of_200_reaches_the_warm_job(self):
+        summary, calls = self._tick(warm_limit=200)
+        self.assertEqual(calls[1], ("warm", {"limit": 200}))
+        self.assertEqual(summary["warm"], {"refreshed": 3})
+
+
+class FirstTickWarmTests(unittest.TestCase):
+    def test_first_tick_warms_the_eager_set_not_the_top_up_slice(self):
+        self.assertEqual(
+            maintenance._first_tick_kwargs(200), {"warm_limit": 200})
+
+    def test_first_tick_keeps_the_other_slices(self):
+        self.assertEqual(
+            maintenance._first_tick_kwargs(200, propagate_batches=1,
+                                           heal_limit=5),
+            {"warm_limit": 200, "propagate_batches": 1, "heal_limit": 5})
+
+    def test_first_tick_overrides_an_explicit_warm_limit(self):
+        self.assertEqual(
+            maintenance._first_tick_kwargs(200, warm_limit=7)["warm_limit"],
+            200)
+
+    def test_the_eager_set_is_the_scale_plans_two_hundred(self):
+        self.assertEqual(maintenance.FIRST_TICK_WARM_LIMIT, 200)
+
+
 class StartThreadTests(unittest.TestCase):
     def test_disabled_returns_none_and_starts_nothing(self):
         with mock.patch.dict(os.environ, {"RADD_MAINTENANCE": "off"}):

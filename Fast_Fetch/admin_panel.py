@@ -1158,15 +1158,105 @@ def screen_projection(conn):
         return _unavailable()
 
 
+def _meta_json(conn, key):
+    """One cat_projection_meta value, parsed as a JSON object, or None.
+
+    A missing key, a non-object value, or an unreadable row all mean "no
+    stamp" — the caller falls back, never crashes.
+    """
+    try:
+        row = conn.execute(
+            "SELECT value FROM cat_projection_meta WHERE key = ?",
+            (key,)).fetchone()
+        if row is None:
+            return None
+        parsed = json.loads(row[0])
+        return parsed if isinstance(parsed, dict) else None
+    except (sqlite3.Error, ValueError, TypeError):
+        return None
+
+
+def _meta_number(conn, key):
+    """One cat_projection_meta value as a float, or None when there is none."""
+    try:
+        row = conn.execute(
+            "SELECT value FROM cat_projection_meta WHERE key = ?",
+            (key,)).fetchone()
+        if row is None:
+            return None
+        return float(row[0])
+    except (sqlite3.Error, ValueError, TypeError):
+        return None
+
+
+def _screen_propagate(conn):
+    """The maintenance tick's latest propagate run, as stored numbers.
+
+    Reads `link_state_runs` (one row, newest first) plus the `serve` cursor —
+    both written by `link_state.propagate`, never scanned. A catalog without
+    the tables reports None, not an error.
+    """
+    try:
+        row = conn.execute(
+            "SELECT run_id, scope, started_at, finished_at, rows_checked,"
+            " rows_updated, by_status FROM link_state_runs"
+            " ORDER BY id DESC LIMIT 1").fetchone()
+        if row is None:
+            return None
+        by_status = {}
+        if row["by_status"]:
+            try:
+                parsed = json.loads(row["by_status"])
+                if isinstance(parsed, dict):
+                    by_status = {str(k): int(v)
+                                 for k, v in parsed.items()}
+            except (ValueError, TypeError):
+                by_status = {}
+        out = {"run_id": row["run_id"], "scope": row["scope"],
+               "started_at": row["started_at"],
+               "finished_at": row["finished_at"],
+               "rows_checked": int(row["rows_checked"] or 0),
+               "rows_updated": int(row["rows_updated"] or 0),
+               "by_status": by_status}
+        try:
+            cursor = conn.execute(
+                "SELECT last_id, state FROM link_state_cursor"
+                " WHERE scope = 'serve'").fetchone()
+        except sqlite3.Error:
+            cursor = None
+        if cursor is not None:
+            out["cursor_last_id"] = int(cursor["last_id"] or 0)
+            out["cursor_state"] = cursor["state"]
+        return out
+    except sqlite3.Error:
+        return None
+
+
 def screen_link_health(conn, n):
-    """Counts by state, the N links with the oldest evidence, and dead links per
-    quality band. SELECT lists never touch url/final_url/source_site."""
+    """Counts by state, the N links with the oldest evidence, dead links per
+    quality band, and the last sweep / maintenance runs.
+
+    `by_state` is read from the stamped `links_by_state` in
+    cat_projection_meta when the projection wrote one (catalog_v2 stamps it
+    at _finalize and apply_evidence refreshes it) — the dashboard's rule
+    (docs/LINK_HEALTH_SWEEP.md §6) is that no coverage figure is ever
+    computed by scanning; the live GROUP BY below is only the fallback for a
+    catalog whose stamp predates the key. `sweep` is the stamped
+    `link_sweep_last_run` (written by link_sweep.merge); `propagate` is the
+    maintenance tick's latest link_state_runs row. SELECT lists never touch
+    url/final_url/source_site.
+    """
     if not _has_projection(conn):
         return _unavailable()
     try:
-        by_state = {row["state"]: row["n"] for row in conn.execute(
-            "SELECT COALESCE(state, 'unknown') AS state, COUNT(*) AS n"
-            " FROM cat_links GROUP BY COALESCE(state, 'unknown')")}
+        stamped = _meta_json(conn, "links_by_state")
+        if stamped:
+            by_state = {str(key): int(value)
+                        for key, value in stamped.items()}
+        else:
+            by_state = {row["state"]: row["n"] for row in conn.execute(
+                "SELECT COALESCE(state, 'unknown') AS state, COUNT(*) AS n"
+                " FROM cat_links GROUP BY COALESCE(state, 'unknown')")}
         oldest = []
         for row in conn.execute(
             "SELECT id, work_id, state, playability, latency_ms, speed_mbps,"
@@ -1186,8 +1276,11 @@ def screen_link_health(conn, n):
         return {
             "available": True,
             "by_state": by_state,
+            "coverage": _meta_number(conn, "link_coverage"),
             "oldest_evidence": oldest,
             "dead_by_band": dead_by_band,
+            "sweep": _meta_json(conn, "link_sweep_last_run"),
+            "propagate": _screen_propagate(conn),
         }
     except sqlite3.Error:
         return _unavailable()
@@ -3634,6 +3727,31 @@ def render_admin_page(conn, q):
         card("Link health", '<div class="empty">' + _e(NOT_BUILT) + '</div>')
     else:
         lh = _table(("state", "links"), _map_rows(link_health.get("by_state")))
+        if link_health.get("coverage") is not None:
+            lh = _kv([("coverage (measured links)",
+                       _num(link_health.get("coverage")))]) + lh
+        sweep = link_health.get("sweep")
+        if sweep:
+            shown = {key: sweep[key] for key in (
+                "sample_limit", "links_done", "alive", "dead", "expired",
+                "blocked", "no_verdict", "host_parked", "alive_share",
+                "margin_95", "merged_links")
+                if sweep.get(key) is not None}
+            if sweep.get("started_at") is not None:
+                shown["started"] = _ts(sweep.get("started_at"))
+            if sweep.get("finished_at") is not None:
+                shown["finished"] = _ts(sweep.get("finished_at"))
+            lh += _table(("last sweep", "value"), _map_rows(shown))
+        propagate = link_health.get("propagate")
+        if propagate:
+            shown = {key: propagate[key] for key in (
+                "run_id", "scope", "rows_checked", "rows_updated",
+                "cursor_last_id", "cursor_state")
+                if propagate.get(key) is not None}
+            if propagate.get("started_at") is not None:
+                shown["started"] = _ts(propagate.get("started_at"))
+            lh += _table(("maintenance propagate", "value"),
+                         _map_rows(shown))
         lh += _table(("band", "dead links"), _map_rows(link_health.get("dead_by_band")))
         oldest = [[_num(row["link_id"]), _num(row["work_id"]), _e(row["state"]),
                    _e(row["playability"]), _num(row["last_evidence_at"])]
