@@ -79,6 +79,10 @@ class FailoverHumanMessageTest {
             ),
             PlaybackFailurePolicy(retrySame = 0, maxRanks = 3, backoffMs = 0),
         )
+        // The machine starts with no active rendition (activeIndex = -1) until
+        // selectInitial() picks one — without it onFailure takes the
+        // no-current path and the Handoff carries no record at all.
+        assertEquals(0, machine.selectInitial())
         val decision = machine.onFailure("ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT Read timed out")
         assertTrue(decision is FailoverDecision.Handoff)
         decision as FailoverDecision.Handoff
