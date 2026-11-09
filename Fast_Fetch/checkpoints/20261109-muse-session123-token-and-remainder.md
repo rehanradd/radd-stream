@@ -72,7 +72,7 @@ device session started. Commits A–L below, all by rehanradd <rehanradd@gmail.c
   that name collided with qoder12's unlanded Phase-1 module — `test_host_classifier.py`
   guards `import resolved_cache` and calls `init_resolved_cache` /
   `record_resolved_cache` on it, so the new file made 31 of its tests error
-  instead of skip (first full gate: 63/64 PASS, FAILED MODULES: 1). Renamed
+  instead of skip (first full gate: 59/60 PASS, FAILED MODULES: 1). Renamed
   to `resolved_link_cache.py` (module, test, `maintenance.py` import, CI step,
   docs); the old name stays free for qoder12's module if it ever lands.
 - **K `757f56f` — Home HO-1…HO-8.** Hero posters de-duplicated out of their
@@ -128,8 +128,12 @@ test_maintenance 11 OK, test_fts_search 9 OK. Pre-push Kotlin checks per
 commit: import diffs accounted, `/*` vs `*/` at baseline (DetailScreen
 29/28, PlayerScreen 23/22 — pre-existing `"video/*"` string literals), no
 brand-name strings, no raw Color(0x…) outside Color.kt. No local Gradle run
-by owner order — CI (ci.yml on push) is the verification path. Full backend
-gate run at session end; result in the parent's report.
+by owner order — CI (ci.yml on push) is the verification path. **Full backend
+gate (run 3, after the rename): 60/60 modules PASS, FAILED MODULES: 0** (log
+/tmp/gate123-run3.log; the 4 importer modules run solo by design — the gate
+regex misses them — all OK). Gate run 2 failed `test_api_v2` once under
+concurrent load; the module passes solo (71 OK) and passed in run 3 — the
+known ETag-304-under-load flake shape, not a 123 regression.
 
 ## Not done (parent / next session)
 
