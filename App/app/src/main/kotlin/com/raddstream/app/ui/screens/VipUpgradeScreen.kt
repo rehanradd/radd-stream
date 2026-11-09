@@ -135,7 +135,7 @@ fun VipUpgradeScreen(
             EntitlementCard(state = state)
             RewardedVipSection(
                 expiresAt = state.rewardedVipExpiresAt,
-                onWatchAd = { viewModel.grantRewardedVip() },
+                onActivatePass = { viewModel.grantRewardedVip() },
             )
             if (state.streak.isConfigured) {
                 StreakCard(
@@ -360,7 +360,12 @@ private fun VipHero() {
 }
 
 /**
- * The rewarded-ad pass: a live countdown when one is stored, otherwise the offer.
+ * The 4-hour VIP pass: a live countdown when one is stored, otherwise the offer.
+ *
+ * Session 123 (VIP-4): the button used to read "Watch Ad for 4-Hour VIP Pass"
+ * while no ad played at all — the tap activated the pass directly. The button
+ * now says what it does. No ad plays in this build; a rewarded network, when
+ * added, plays an ad first and then calls the same completion handler.
  *
  * The countdown is driven by a one-second ticker with a wall-clock deadline, so it
  * cannot drift while the screen sleeps and it shows the truth after a process death.
@@ -368,7 +373,7 @@ private fun VipHero() {
  * verify server-side.
  */
 @Composable
-private fun RewardedVipSection(expiresAt: Long, onWatchAd: () -> Unit) {
+private fun RewardedVipSection(expiresAt: Long, onActivatePass: () -> Unit) {
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(expiresAt) {
         if (expiresAt <= 0L) return@LaunchedEffect
@@ -416,24 +421,23 @@ private fun RewardedVipSection(expiresAt: Long, onWatchAd: () -> Unit) {
                 )
             } else {
                 Text(
-                    "Watch a short sponsored clip to unlock four hours of ad-free, direct " +
-                        "downloads on this device.",
+                    "Activate a four-hour VIP pass on this device — ad-free playback " +
+                        "and direct downloads. No ad plays when you tap this.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Button(onClick = onWatchAd, modifier = Modifier.fillMaxWidth()) {
+                Button(onClick = onActivatePass, modifier = Modifier.fillMaxWidth()) {
                     Icon(
                         Icons.Default.PlayArrow,
                         contentDescription = null,
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("Watch Ad for 4-Hour VIP Pass")
+                    Text("Activate 4-Hour VIP Pass")
                 }
                 Text(
-                    "This build has no ad player yet, so the button activates the pass " +
-                        "directly. A rewarded network, when added, must call the same " +
-                        "completion handler.",
+                    "When a rewarded network is added, an ad will play first and then " +
+                        "call the same completion handler.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
