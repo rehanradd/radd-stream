@@ -287,6 +287,24 @@ data class EntitlementResponse(
 )
 
 /**
+ * GET /api/v2/account/vip-pass — the capability a URL can carry (Session 123).
+ *
+ * The player and the download engine follow the redirector's 302 outside this
+ * process, so an `Authorization` header cannot ride along: the pass is the
+ * only way an entitled account reaches the bypass it paid for. It carries
+ * one expiry instant and no user id, price or payment detail, so a leaked
+ * pass reveals nothing about a person — and because there is no revocation
+ * list the window stays short (6h, capped at the membership end), so the app
+ * re-asks when it refreshes its entitlement. The app never mints, extends or
+ * guesses a pass; it only reads what this answer says.
+ */
+data class VipPassResponse(
+    val pass: String? = null,
+    @SerializedName("expires_at") val expiresAt: Double = 0.0,
+    @SerializedName("membership_until") val membershipUntil: Double = 0.0,
+)
+
+/**
  * The coin wallet the daily check-in pays into (the `coins` routes in
  * `accounts_api.py`).
  *

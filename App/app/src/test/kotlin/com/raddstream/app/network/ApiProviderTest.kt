@@ -96,4 +96,23 @@ class ApiProviderTest {
             )
         }
     }
+
+    @Test
+    fun `a vip pass appends to a redirector url and nothing without one`() {
+        val url = streamRedirectUrl("http://92.4.95.252", "tok1")
+        assertEquals(
+            "http://92.4.95.252/api/v1/stream?id=tok1&vip=ABC123",
+            withVipPass(url, "ABC123"),
+        )
+        assertEquals(url, withVipPass(url, null))
+        assertEquals(url, withVipPass(url, "   "))
+    }
+
+    @Test
+    fun `a vip pass starts the query on a url without one`() {
+        assertEquals(
+            "http://92.4.95.252/api/v1/download?vip=ABC123",
+            withVipPass("http://92.4.95.252/api/v1/download", "ABC123"),
+        )
+    }
 }

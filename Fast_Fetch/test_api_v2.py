@@ -42,6 +42,7 @@ import os
 import re
 import sqlite3
 import tempfile
+import time
 import unittest
 import unittest.mock
 from pathlib import Path
@@ -476,6 +477,14 @@ class V2WireFixture(unittest.TestCase):
                            "sources": [cdn("CT-CDN"), cdn("CT-CDN2")]},
                           {"release_title": "Cache Twins (2024) 720p WEBRip",
                            "quality": "720p", "sources": [cdn("CT-SIBLING")]}])
+        # Session 123: BOTH prints live — the gate, not a dead copy, is what
+        # must move the walk from the 1080p best print to the 720p sibling.
+        self.add_post("vegamovies", "https://new1.vegamovies.lease/gated-twins-2024/",
+                      clean_title="Gated Twins", year=2024, releases=[
+                          {"release_title": "Gated Twins (2024) 1080p WEB-DL",
+                           "sources": [cdn("GT-CDN")]},
+                          {"release_title": "Gated Twins (2024) 720p WEBRip",
+                           "quality": "720p", "sources": [cdn("GT-SIBLING")]}])
         self.mark_probe_on_ledger("DUNE-CDN")
         self.mark_probe_on_ledger("ADULT-CDN")
         self.mark_probe_on_ledger("QV-CDN")
@@ -486,6 +495,8 @@ class V2WireFixture(unittest.TestCase):
         self.mark_probe_on_ledger("CT-CDN")
         self.mark_probe_on_ledger("CT-CDN2")
         self.mark_probe_on_ledger("CT-SIBLING")
+        self.mark_probe_on_ledger("GT-CDN")
+        self.mark_probe_on_ledger("GT-SIBLING")
         self.project(rev=1)
         # Out-of-band evidence, including the sentence a probe really writes: this
         # is the one field that reaches a public body carrying a hoster's name.
@@ -529,6 +540,8 @@ class V2WireFixture(unittest.TestCase):
         self.secret = redact.stream_secret(self.db_path)
         # Session 109: the two-print works, for the fallback tests.
         self.twin_work_id = self.work_ids["Twin Prints"]
+        # Session 123: the two-live-print work, for the quality-gate tests.
+        self.gated_work_id = self.work_ids["Gated Twins"]
         self.twin_beats_work_id = self.work_ids["Twin Beats"]
         self.twin_beats_episode_id = self._one(
             "SELECT e.id FROM cat_episodes e JOIN cat_works w ON w.id = e.work_id"
@@ -944,6 +957,114 @@ class V2PlayWorkPrintFallbackTests(V2WireFixture):
         reply = self.post("/api/v2/play", {"work_id": self.twin_work_id})
         self.assert_problem(reply, code="no_playable_source", status=409,
                             instance="/api/v2/play")
+
+
+# ── 1c. /play quality-gate mint refusal (Session 123) ────────────────────────
+
+class V2PlayQualityGateTests(V2WireFixture):
+    """The mint refuses what the press would refuse.
+
+    The press-time gate (`viewer.quality_gate_block_reason`) already 402s a
+    free 1080p press, but `/play` still minted a playable bundle for it — so
+    the app showed a play that could only fail on press. With the gate on, a
+    free caller asking for the WORK gets the free sibling that plays, and a
+    free caller naming the gated print gets 200 with `playable: false` and
+    the premium reason (the S11 shape), minting no stream handle anywhere.
+    A VIP caller — bearer sync key or signed `?vip=` pass — is exempt, and
+    the operator is never gated.
+    """
+
+    def enable_gate(self):
+        """Flip the operator's `feature_quality_gate` on for this ledger."""
+        import admin_panel
+        admin_panel._ensure_monetization(self.conn)
+        self.conn.execute(
+            "UPDATE app_remote_config SET feature_quality_gate = 1 WHERE id = 1")
+        self.conn.commit()
+
+    def test_gate_off_leaves_the_best_print_playable(self):
+        # The fresh fixture has no app_remote_config row at all: the gate
+        # reads fail-open, so the best print plays exactly as before.
+        best, _sibling = self._twin_prints("Gated Twins")
+        reply = self.post("/api/v2/play", {"work_id": self.gated_work_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertTrue(reply.json["playable"])
+        self.assertEqual(reply.json["release_id"], best)
+
+    def test_work_id_skips_a_gated_best_print_for_a_free_sibling(self):
+        self.enable_gate()
+        _best, sibling = self._twin_prints("Gated Twins")
+        reply = self.post("/api/v2/play", {"work_id": self.gated_work_id})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertTrue(reply.json["playable"])
+        self.assertEqual(reply.json["release_id"], sibling)
+
+    def test_bare_gated_release_id_mints_no_handles(self):
+        self.enable_gate()
+        best, _sibling = self._twin_prints("Gated Twins")
+        reply = self.post("/api/v2/play", {"release_id": best})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertFalse(reply.json["playable"])
+        self.assertEqual(reply.json["reason"], "premium_quality_requires_vip")
+        self.assertEqual(reply.json["stream_candidates"], [])
+        self.assertEqual(reply.json["candidates"], [])
+        self.assertEqual(reply.json["tiers"], [])
+        self.assertNotIn("stream_id", reply.text,
+                         "a refused mint must not leak a handle anywhere")
+
+    def test_a_signed_pass_exempts_the_gate(self):
+        self.enable_gate()
+        best, _sibling = self._twin_prints("Gated Twins")
+        vip_pass = redact.mint_vip_pass(time.time() + 3600, self.secret)
+        reply = self.post("/api/v2/play", {"release_id": best},
+                          query={"vip": vip_pass})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertTrue(reply.json["playable"])
+        self.assertEqual(reply.json["release_id"], best)
+
+    def test_a_live_bearer_exempts_the_gate_and_a_bogus_one_does_not(self):
+        import accounts
+        self.enable_gate()
+        best, _sibling = self._twin_prints("Gated Twins")
+        state = Path(self.tmp.name) / "user_state.db"
+        with unittest.mock.patch.dict(
+                os.environ, {"RADD_USER_STATE_DB": str(state)}):
+            created = accounts.create_account(state)
+            key = created["sync_key"]
+            self.assertIsNotNone(key, "the fixture could not mint a sync key")
+            with accounts.connect(state) as conn:
+                conn.execute(
+                    "UPDATE user_accounts SET vip_until = ? WHERE id = ?",
+                    (time.time() + 3600, created["account_id"]))
+                conn.commit()
+            reply = self.post(
+                "/api/v2/play", {"release_id": best},
+                headers={"Authorization": f"Bearer {key}"})
+            self.assertEqual(reply.status, 200, reply.json)
+            self.assertTrue(reply.json["playable"])
+            self.assertEqual(reply.json["release_id"], best)
+            bogus = self.post(
+                "/api/v2/play", {"release_id": best},
+                headers={"Authorization": "Bearer bogus-key"})
+            self.assertEqual(bogus.status, 200, bogus.json)
+            self.assertFalse(bogus.json["playable"])
+            self.assertEqual(bogus.json["reason"],
+                             "premium_quality_requires_vip")
+
+    def test_the_operator_is_never_gated(self):
+        self.enable_gate()
+        best, _sibling = self._twin_prints("Gated Twins")
+        reply = self.post("/api/v2/play", {"release_id": best},
+                          operator=True)
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertTrue(reply.json["playable"])
+        self.assertEqual(reply.json["release_id"], best)
+
+    def test_the_two_gated_band_lists_agree(self):
+        import viewer
+        self.assertEqual(api_v2.GATED_QUALITY_BANDS,
+                         viewer.GATED_QUALITY_BANDS,
+                         "the mint and the press must gate the same bands")
 
 
 # ── 1d. release_id play fallback: same coverage only ─────────────────────
@@ -2073,13 +2194,14 @@ class V2StatsHonestyTests(V2WireFixture):
         self.assertEqual(health["probes"]["ok"], 1)
         self.assertEqual(health["probes"]["resumable"], 1)
         self.assertEqual(health["probes"]["avg_speed_mbps"], 42.0)
-        # Eleven posts, two of them hidden works: nine works, thirteen prints
-        # and 22 − 4 = 18 links are what a public caller may be told about
+        # Twelve posts, two of them hidden works: ten works, fifteen prints
+        # and 24 − 4 = 20 links are what a public caller may be told about
         # (§13). Session 113 added the eleventh post ("Cache Twins": 1 work,
-        # 2 prints, 3 links).
-        self.assertEqual(counts["works"], 9)
-        self.assertEqual(counts["links"], 18)
-        self.assertEqual(counts["prints"], 13)
+        # 2 prints, 3 links); Session 123 added the twelfth ("Gated Twins":
+        # 1 work, 2 prints, 2 links).
+        self.assertEqual(counts["works"], 10)
+        self.assertEqual(counts["links"], 20)
+        self.assertEqual(counts["prints"], 15)
         self.assertGreater(self.conn.execute(
             "SELECT COUNT(*) FROM cat_works").fetchone()[0], counts["works"])
 
@@ -2164,9 +2286,10 @@ class V2SurfaceTests(V2WireFixture):
                          stats["counts"]["works"])
         self.assertEqual(payload["catalog"]["counts"]["links"],
                          stats["counts"]["links"])
-        # Nine public works: Session 113 added the eleventh post
-        # ("Cache Twins"); the census must move with the corpus.
-        self.assertEqual(payload["catalog"]["counts"]["works"], 9)
+        # Ten public works: Session 113 added the eleventh post
+        # ("Cache Twins"); Session 123 added the twelfth ("Gated Twins").
+        # The census must move with the corpus.
+        self.assertEqual(payload["catalog"]["counts"]["works"], 10)
         self.assertLess(payload["catalog"]["counts"]["works"],
                         self.conn.execute("SELECT COUNT(*) FROM cat_works").fetchone()[0],
                         "the manifest advertised hidden rows")

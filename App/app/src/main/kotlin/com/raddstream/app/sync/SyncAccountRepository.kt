@@ -396,6 +396,10 @@ class SyncAccountRepository @Inject constructor(
         syncedProgressDao.clear()
         clearEntitlement()
         settingsRepository.clearStoredEntitlement()
+        // Session 123: the URL pass belongs to the account, not the phone —
+        // a signed-out device must not keep sending the old account's pass.
+        cachedVipPass = null
+        cachedVipPassExpiresAtMs = 0L
         // The trial clock belongs to the credential, not to the phone: with no key there is
         // nothing to spend the remaining days on, and a badge that outlived the account it was
         // minted with would be the app claiming an entitlement it cannot show.
@@ -611,6 +615,17 @@ class SyncAccountRepository @Inject constructor(
     private var lastEntitlementReadMs: Long = 0L
 
     /**
+     * The signed VIP pass the stream/download URLs carry (Session 123), and
+     * the instant it stops being good — the server's `expires_at` in epoch
+     * seconds, kept in millis beside it. In-memory only: a pass is a 6-hour
+     * capability, and a cold start re-asks with its entitlement refresh
+     * rather than trusting a persisted one. A pass carries no user id, price
+     * or payment detail, so holding it here reveals nothing about a person.
+     */
+    private var cachedVipPass: String? = null
+    private var cachedVipPassExpiresAtMs: Long = 0L
+
+    /**
      * File one claimed payment. The reference never leaves this call as a stored value: the
      * server keeps it in its ledger and the receipt deliberately does not carry it back.
      *
@@ -676,6 +691,10 @@ class SyncAccountRepository @Inject constructor(
                 // Mirror the server's answer so the next cold start has it before any network
                 // call can fail. The ledger remains the only authority; this is its cache.
                 settingsRepository.saveEntitlement(read)
+                // Session 123: a VIP answer warms the URL pass, so the next
+                // play/download already carries it — the server expects the
+                // app to re-ask when it refreshes its entitlement.
+                if (read.vip) refreshVipPass(key)
             }
             read
         } catch (error: Exception) {
@@ -691,6 +710,63 @@ class SyncAccountRepository @Inject constructor(
                 }
                 else -> _entitlement.value
             }
+        }
+    }
+
+    /**
+     * The signed VIP pass the stream/download URLs carry, or null when this
+     * viewer has none to send (Session 123).
+     *
+     * The cached pass is returned while it has more than a minute of life
+     * left; otherwise a fresh one is asked for — but only when the account is
+     * signed in AND entitled, so a guest or a free account never spends a
+     * 402-shaped call. A failed refresh keeps the stale pass out (an expired
+     * pass is worse than none: the server would read it as "not VIP" anyway,
+     * and the URL would carry a dead credential for nothing).
+     */
+    suspend fun currentVipPass(): String? {
+        cachedLivePass()?.let { return it }
+        val key = currentKey() ?: return null
+        if (_entitlement.value?.vip != true) {
+            // The entitlement may simply not have been read yet this session:
+            // one refresh decides, and a failure there keeps the answer null.
+            // A fresh VIP read warms the pass itself (see refreshEntitlement),
+            // so the cache is checked again before asking directly.
+            if (refreshEntitlement()?.vip != true) return null
+            cachedLivePass()?.let { return it }
+        }
+        refreshVipPass(key)
+        return cachedLivePass()
+    }
+
+    /** The cached pass while it has more than a minute of life left, else null. */
+    private fun cachedLivePass(): String? {
+        val pass = cachedVipPass
+        return if (!pass.isNullOrBlank() &&
+            System.currentTimeMillis() < cachedVipPassExpiresAtMs - 60_000L
+        ) {
+            pass
+        } else {
+            null
+        }
+    }
+
+    /** One `GET /api/v2/account/vip-pass`, cached on success, silent on failure. */
+    private suspend fun refreshVipPass(key: String) {
+        runCatching {
+            val answer = apiProvider.current().getVipPass(bearerHeader(key))
+            val pass = answer.pass?.takeIf { it.isNotBlank() }
+            val expiresAtMs = (answer.expiresAt * 1000.0).toLong()
+            if (pass != null && expiresAtMs > System.currentTimeMillis()) {
+                cachedVipPass = pass
+                cachedVipPassExpiresAtMs = expiresAtMs
+            } else {
+                cachedVipPass = null
+                cachedVipPassExpiresAtMs = 0L
+            }
+        }.onFailure {
+            // A failed refresh never clears a still-live pass: the next
+            // caller re-asks, and the cached one keeps working until it lapses.
         }
     }
 

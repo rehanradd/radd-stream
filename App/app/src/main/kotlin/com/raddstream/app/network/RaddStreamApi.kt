@@ -25,6 +25,7 @@ import com.raddstream.app.network.models.ContactResponse
 import com.raddstream.app.network.models.DeviceTrialRequest
 import com.raddstream.app.network.models.DeviceTrialResponse
 import com.raddstream.app.network.models.EntitlementResponse
+import com.raddstream.app.network.models.VipPassResponse
 import com.raddstream.app.network.models.FavoriteRequest
 import com.raddstream.app.network.models.FavoriteWriteResponse
 import com.raddstream.app.network.models.FavoritesResponse
@@ -356,6 +357,18 @@ interface RaddStreamApi {
     ): EntitlementResponse
 
     /**
+     * GET /api/v2/account/vip-pass — a signed pass the stream/download URLs
+     * can carry (Session 123). 401 with no key, 402 with no live membership,
+     * 410 when the membership lapsed between the check and the mint. The app
+     * re-asks when it refreshes its entitlement; the pass itself is good for
+     * six hours at most, capped at the membership end.
+     */
+    @GET("api/v2/account/vip-pass")
+    suspend fun getVipPass(
+        @Header("Authorization") authorization: String?,
+    ): VipPassResponse
+
+    /**
      * GET /api/v2/account/coins — this account's own coin balance. The number is the
      * same `SUM(delta)` the spender checks before it debits, so a reply and a refusal
      * cannot disagree about what this account holds.
@@ -489,10 +502,16 @@ interface RaddStreamApi {
      * of an error, and a target the server cannot see answers 404. The caller treats
      * ANY failure as "fall back to the client-side ladder" — never as a reason to show
      * the viewer an error for a Play tap that used to work.
+     *
+     * `authorization` is `Bearer <sync key>` when the viewer is signed in (Session
+     * 123): the server's quality-gate mint refusal exempts a VIP caller, and it can
+     * only see the capability when the call carries it. Null for a guest — the
+     * header is omitted, never sent empty.
      */
     @POST("api/v2/play")
     suspend fun play(
         @Body body: WirePlayRequest,
+        @Header("Authorization") authorization: String? = null,
     ): WirePlayResponse
 
     /**

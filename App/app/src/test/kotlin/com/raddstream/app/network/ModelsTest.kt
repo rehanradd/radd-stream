@@ -49,6 +49,7 @@ import com.raddstream.app.network.models.SourceTag
 import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
 import com.raddstream.app.network.models.SubtitleMode
+import com.raddstream.app.network.models.VipPassResponse
 import com.raddstream.app.network.models.WorkFlag
 import com.raddstream.app.network.models.WorkType
 import com.raddstream.app.network.models.SourceDetail
@@ -826,5 +827,27 @@ class ModelsTest {
         )
 
         assertEquals(0, response.coinsEarned)
+    }
+
+    @Test
+    fun `vip pass response decodes the pass and its expiry`() {
+        val response = gson.fromJson(
+            """{"pass":"AQIDBAUGBwg","expires_at":1794195742.0,"membership_until":1796790142.0}""",
+            VipPassResponse::class.java,
+        )
+
+        assertEquals("AQIDBAUGBwg", response.pass)
+        assertEquals(1794195742.0, response.expiresAt, 0.001)
+        assertEquals(1796790142.0, response.membershipUntil, 0.001)
+    }
+
+    @Test
+    fun `vip pass response without a pass carries nothing to append`() {
+        val response = gson.fromJson(
+            """{"pass":null,"expires_at":0.0,"membership_until":0.0}""",
+            VipPassResponse::class.java,
+        )
+
+        assertNull(response.pass)
     }
 }

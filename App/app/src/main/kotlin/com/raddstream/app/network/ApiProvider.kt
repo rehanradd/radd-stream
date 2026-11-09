@@ -140,6 +140,23 @@ fun streamRedirectUrl(baseUrl: String, streamId: String): String {
 }
 
 /**
+ * Appends a signed VIP pass to one of our own redirector/download URLs
+ * (Session 123): `…?vip=<pass>`. A null or blank pass leaves the URL
+ * untouched, so guests and free accounts send exactly what they sent
+ * before. The pass — not the sync key — is what travels here, because the
+ * player and the download engine follow the 302 outside this process and a
+ * header cannot ride along, while a pass carries no user id and cannot be
+ * pointed at a person. Callers fetch it once per URL build from
+ * `SyncAccountRepository.currentVipPass()`; the value is cached there, so
+ * this never costs a network call at play time.
+ */
+fun withVipPass(url: String, pass: String?): String {
+    if (pass.isNullOrBlank()) return url
+    val encoded = URLEncoder.encode(pass.trim(), StandardCharsets.UTF_8.name())
+    return url + if ("?" in url) "&vip=$encoded" else "?vip=$encoded"
+}
+
+/**
  * True only when [playUrl] is an absolute http(s) address on the SAME host+port as [baseUrl] —
  * the origin the user configured. Every hand-off in the app (external player, download, share)
  * checks this first, so an address belonging to anyone else is refused even if one somehow

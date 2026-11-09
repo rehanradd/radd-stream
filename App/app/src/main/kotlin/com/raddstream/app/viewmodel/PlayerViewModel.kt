@@ -93,6 +93,7 @@ import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.network.withVipPass
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
 import com.raddstream.app.sync.SyncAccountRepository
@@ -776,7 +777,14 @@ class PlayerViewModel @Inject constructor(
                 )
                 return@launch
             }
-            val playUrl = streamRedirectUrl(apiProvider.currentBaseUrl(), streamId)
+            val playUrl = withVipPass(
+                streamRedirectUrl(apiProvider.currentBaseUrl(), streamId),
+                // Session 123: the VIP pass rides the URL because the player
+                // follows the 302 outside this process — a header cannot ride
+                // along, and the sync key must never be handed to a file host
+                // on a redirect. A guest or free account sends no pass.
+                syncAccountRepository.currentVipPass(),
+            )
             // Runner-ups of this rung, staged by the detail screen: handles only, so a
             // 403 mid-play costs one silent hop instead of a dialog and a quality drop.
             val bundle = PlaybackBundle.forStreamHandle(streamId = streamId, playUrl = playUrl,
@@ -1692,7 +1700,13 @@ class PlayerViewModel @Inject constructor(
             val engine = CacheEngineHolder.engine
             val onWifi = connectivityProbe.current() == NetworkClass.WIFI
             if (engine != null && !DataSaver.wifiOnlyBlocks(wifiOnlyDownloads, onWifi)) {
-                val url = streamRedirectUrl(apiProvider.currentBaseUrl(), handle)
+                val url = withVipPass(
+                    streamRedirectUrl(apiProvider.currentBaseUrl(), handle),
+                    // Session 123: the preview fetches bytes through the same
+                    // redirector the player uses, so the same pass rides it —
+                    // a VIP next episode prefetches instead of 402ing.
+                    syncAccountRepository.currentVipPass(),
+                )
                 val label = prepared
                     ?.takeIf { it.handle == handle }
                     ?.let { "Episode ${it.episode}" }

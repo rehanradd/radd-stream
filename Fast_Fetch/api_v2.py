@@ -41,6 +41,7 @@ import uuid
 from contextlib import contextmanager
 from email.utils import formatdate
 
+import accounts
 import catalog_api
 import catalog_v2
 import redact
@@ -1701,7 +1702,8 @@ def route_post(handler, path: str, query: dict, *, db_path, operator: bool,
             return True
 
         if head == "play":
-            route_play(handler, conn, body, rid=rid, path=path, operator=operator)
+            route_play(handler, conn, body, rid=rid, path=path, operator=operator,
+                       query=query, secret=secret)
             return True
 
         if head == "links" and len(segments) == 3 and segments[2] == "report":
@@ -1949,7 +1951,103 @@ def _release_has_unfailed_candidate(conn, release_id) -> bool:
     return False
 
 
-def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
+def _bearer_token(headers) -> str:
+    raw = str((headers or {}).get("Authorization", "") or "")
+    parts = raw.split()
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return ""
+
+
+#: The bands the free tier does not get once the operator switches the quality
+#: gate on — the twin of `viewer.GATED_QUALITY_BANDS`. This module cannot
+#: import `viewer` (viewer imports api_v2), so the list lives here too, and a
+#: test pins the two equal so one cannot drift silently.
+GATED_QUALITY_BANDS = ("1080p", "2160p")
+
+
+def _request_is_vip(headers, query, *, secret: str) -> bool:
+    """Whether this /play caller carries a live VIP capability.
+
+    The mirror of `viewer.request_is_vip`, which this module cannot import
+    (viewer imports api_v2): a sync account whose `vip_until` has not passed
+    (`Authorization: Bearer <sync key>`), or a signed pass minted for a
+    rewarded-ad flow (`?vip=` or `?vip_token=`). A wrong or absent key is an
+    ordinary free user, never an error — and never charged against the key's
+    attempt budget. An unreadable state DB means "free", same as the viewer.
+    """
+    token = _bearer_token(headers)
+    if token:
+        try:
+            if accounts.vip_status(accounts.default_db_path(), token).get("vip"):
+                return True
+        except Exception:      # noqa: BLE001 — an unreadable state DB means "free"
+            pass
+    if secret:
+        params = query if isinstance(query, dict) else {}
+        for key in ("vip", "vip_token"):
+            raw = (params.get(key) or [""])[0]
+            if raw and redact.parse_vip_pass(raw, secret):
+                return True
+    return False
+
+
+def _gate_is_on(conn) -> bool:
+    """Whether the operator's quality gate is switched on, fail-open.
+
+    The same read `viewer.quality_gate_block_reason` makes: a missing row or
+    an unreadable settings table answers "free", because refusing every
+    premium play over a config that could not be read is an availability
+    failure. The row itself is seeded (default on) by the viewer's
+    `_ensure_monetization` on press paths and by the operator panel.
+    """
+    try:
+        row = conn.execute(
+            "SELECT feature_quality_gate FROM app_remote_config WHERE id = 1"
+        ).fetchone()
+    except Exception:      # noqa: BLE001 — an unreadable ledger means free tier
+        return False
+    if row is None:
+        return False
+    try:
+        return int(row[0] or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _bundle_is_gated(conn, bundle: dict, *, is_vip: bool, operator: bool) -> bool:
+    """True when this bundle's print sits in a gated band for this caller.
+
+    Session 123: the mint refuses what the press would refuse. The band is
+    the release's own (`tiers.band_of` over the release's quality/codec/size/
+    title columns, never a link field) — the exact rule the viewer's
+    press-time gate applies per source id, so the two enforcement points
+    cannot disagree about a print. The operator and a VIP caller are never
+    gated; a bundle with no release id, or one whose release row is gone,
+    fails open (the press-time gate still stands behind it).
+    """
+    if operator or is_vip:
+        return False
+    if not _gate_is_on(conn):
+        return False
+    release_id = _int_or_none(bundle.get("release_id"))
+    if release_id is None:
+        return False
+    try:
+        row = conn.execute(
+            "SELECT quality, codec, size, release_title FROM releases "
+            "WHERE id = ?", (release_id,)).fetchone()
+    except Exception:      # noqa: BLE001 — an unreadable ledger means free tier
+        return False
+    if row is None:
+        return False
+    band = tiers.band_of(row["quality"], row["codec"], row["size"],
+                         row["release_title"])
+    return band in GATED_QUALITY_BANDS
+
+
+def _play_first_playable(conn, release_ids, *, episode_id, include_adult,
+                         is_vip=False, operator=False):
     """Session 109: walk a work/episode's prints, best first, cat ids only.
 
     Returns the first bundle with a playable candidate. When no print
@@ -1963,6 +2061,11 @@ def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
     stop the walk (its copies are known-dead), so the walk continues to
     the next print. When nothing verifies, the best print's bundle is
     still returned, exactly as before.
+
+    Session 123: a gated print does not stop the walk either — a free caller
+    asking for the work gets the free sibling that plays, not the premium
+    print they cannot. The walk's `first` may still be that gated best
+    print, and `route_play` refuses it at the tail (no handles minted).
     """
     first = None
     for release_id in release_ids:
@@ -1972,12 +2075,15 @@ def _play_first_playable(conn, release_ids, *, episode_id, include_adult):
         if first is None:
             first = bundle
         if (bundle.get("ok") and bundle.get("playable")
-                and _release_has_unfailed_candidate(conn, int(release_id))):
+                and _release_has_unfailed_candidate(conn, int(release_id))
+                and not _bundle_is_gated(conn, bundle, is_vip=is_vip,
+                                         operator=operator)):
             return bundle
     return first
 
 
-def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool) -> None:
+def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool,
+               query=None, secret: str = "") -> None:
     """POST /play — one PlayBundle for a work, a print or an episode (§8.1, §9, S11).
 
     `prefer` orders the ladder on either axis; a print whose only copies are
@@ -2006,10 +2112,22 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     playable but every playable copy carries a fresh negative-cache
     failure (`_release_has_unfailed_candidate`), and a sibling is
     accepted only when it too holds an unfailed playable copy.
+
+    Session 123: the mint refuses what the press would refuse. A gated
+    print (1080p/2160p, gate on) for a caller with no VIP capability mints
+    no stream handles: the walk skips it for a free sibling, a named gated
+    print answers 200 with `playable: false` and
+    `reason: "premium_quality_requires_vip"` (the S11 shape — the app shows
+    the VIP upsell for that print instead of a play that would 402 on
+    press), and the same rule exempts the operator and a VIP caller
+    (`Authorization: Bearer <sync key>` or a signed `?vip=` pass).
     """
     release_id = _int_or_none(body.get("release_id"))
     episode_id = _int_or_none(body.get("episode_id"))
     work_id = _int_or_none(body.get("work_id"))
+    # The caller's VIP capability, read once: the gate below is the same
+    # question at three points, and it must not change mid-route.
+    is_vip = _request_is_vip(handler.headers, query or {}, secret=secret)
     # Session 108: a release_id in the body is a legacy id (the app's
     # universe) and is translated; one derived from an episode/work
     # lookup below is already a cat id and must NOT be translated —
@@ -2065,7 +2183,8 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
         # A derived target: walk its prints, best first (Session 109).
         bundle = _play_first_playable(conn, candidate_ids,
                                       episode_id=episode_id,
-                                      include_adult=bool(operator))
+                                      include_adult=bool(operator),
+                                      is_vip=is_vip, operator=operator)
     else:
         # Session 110: a bare release_id names one print — build its bundle
         # first (legacy translation applies to the NAMED print only) and
@@ -2105,7 +2224,10 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
                     if (sibling_bundle.get("ok")
                             and sibling_bundle.get("playable")
                             and _release_has_unfailed_candidate(
-                                conn, sibling_id)):
+                                conn, sibling_id)
+                            and not _bundle_is_gated(
+                                conn, sibling_bundle, is_vip=is_vip,
+                                operator=operator)):
                         bundle = sibling_bundle
                         break
     ok, code, _message = _from_layer2(bundle)
@@ -2113,6 +2235,28 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
         problem(handler, code=code or "not_found", rid=rid, instance=path,
                 detail="No playable print exists for that target.")
         return
+    if bundle.get("playable") and _bundle_is_gated(
+            conn, bundle, is_vip=is_vip, operator=operator):
+        # Session 123: the mint refuses what the press would refuse. The
+        # bundle reached here as the best (or only) print and it is gated
+        # for this caller, so no handle may leave in it — not in the
+        # candidates, not in the tiers' winner link, not in the print
+        # descriptor's embedded link list, and not as a recommended link id
+        # either (the test caught all three). The print's metadata stays
+        # (the caller already named it), the download options stay (the
+        # download route gates them the same way), and the reason names the
+        # refusal so the app shows the VIP upsell instead of a play that
+        # would 402 on press.
+        bundle["playable"] = False
+        bundle["stream_candidates"] = []
+        bundle["candidates"] = []
+        bundle["tiers"] = []
+        bundle["reason"] = "premium_quality_requires_vip"
+        if isinstance(bundle.get("print"), dict):
+            bundle["print"]["links"] = []
+        bundle.pop("recommended_link_id", None)
+        if isinstance(bundle.get("auto"), dict):
+            bundle["auto"]["playable"] = False
     prefer = str(body.get("prefer") or "quality").strip().lower()
     if prefer not in PREFER_VALUES:
         prefer = "quality"
@@ -2120,8 +2264,20 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     bundle["prefer"] = prefer
     bundle["device"] = str(body.get("device") or "")[:64] or None
     if not bundle.get("playable"):
+        if bundle.get("reason") == "premium_quality_requires_vip":
+            # Session 123: the mint refused this print for a free caller —
+            # a 200 with the reason, not a 409: the source CAN play, the
+            # caller just cannot have it free. The app shows the VIP upsell
+            # for the named print instead of a dead-end error.
+            json_response(handler, bundle, rid=rid, cache=CACHE_NO_STORE,
+                          operator=operator)
+            return
         if bundle.get("download_options"):
-            bundle["reason"] = "download_only"
+            # A gated print keeps its premium reason (set by the refusal
+            # above): "download only" would hide the VIP upsell behind a
+            # download the gate would refuse the same way.
+            if bundle.get("reason") != "premium_quality_requires_vip":
+                bundle["reason"] = "download_only"
             json_response(handler, bundle, rid=rid, cache=CACHE_NO_STORE,
                           operator=operator)
             return

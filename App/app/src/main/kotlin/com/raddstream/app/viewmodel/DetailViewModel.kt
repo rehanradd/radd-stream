@@ -18,6 +18,7 @@ import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.network.withVipPass
 import com.raddstream.app.player.AdoptRequest
 import com.raddstream.app.player.CacheAffordance
 import com.raddstream.app.player.CacheEngineHolder
@@ -767,7 +768,13 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = "Connect to a catalog server before downloading.") }
             return
         }
-        val url = streamRedirectUrl(baseUrl, handle)
+        val url = withVipPass(
+            streamRedirectUrl(baseUrl, handle),
+            // Session 123: the keep fetches bytes through the same redirector
+            // the player uses, so the same pass rides it — a VIP keep of a
+            // premium print downloads instead of 402ing.
+            syncAccountRepository.currentVipPass(),
+        )
         val request = AdoptRequest(
             key = CacheSessionKey(renditionKey = handle, url = url),
             url = url,

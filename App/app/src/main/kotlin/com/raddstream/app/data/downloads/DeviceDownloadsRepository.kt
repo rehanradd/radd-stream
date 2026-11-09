@@ -10,6 +10,8 @@ import com.google.gson.Gson
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.network.withVipPass
+import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.util.Locale
@@ -97,6 +99,7 @@ data class DeviceDownloadEntity(
 class DeviceDownloadsRepository @Inject constructor(
     @ApplicationContext val context: Context,
     private val apiProvider: ApiProvider,
+    private val syncAccountRepository: SyncAccountRepository,
 ) {
     private val gson: Gson = buildRaddGson()
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -170,7 +173,13 @@ class DeviceDownloadsRepository @Inject constructor(
         val entry = DeviceDownloadEntity(
             id = UUID.randomUUID().toString(),
             handle = handle,
-            url = streamRedirectUrl(baseUrl, handle),
+            url = withVipPass(
+                streamRedirectUrl(baseUrl, handle),
+                // Session 123: the device download follows the same
+                // redirector the player uses, so the same pass rides it — a
+                // VIP download of a premium print saves instead of 402ing.
+                syncAccountRepository.currentVipPass(),
+            ),
             title = cleanTitle,
             printLabel = cleanLabel,
             mimeType = mime,

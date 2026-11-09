@@ -2,6 +2,8 @@ package com.raddstream.app.repository
 
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
+import com.raddstream.app.network.bearerHeader
+import kotlinx.coroutines.flow.first
 import com.raddstream.app.network.models.ContactRequest
 import com.raddstream.app.network.models.LiveTvChannelsResponse
 import com.raddstream.app.network.models.PlayBundle
@@ -105,8 +107,18 @@ class CatalogRepository @Inject constructor(
      * upgrade. A ceiling on the wait is the caller's job, not this one's.
      */
     suspend fun playV2(releaseId: Int, prefer: String? = null): V2PlayResult? {
+        // Session 123: the call carries the viewer's sync key when signed in,
+        // so the server's quality-gate mint refusal can exempt a VIP caller.
+        // A guest sends no header at all. The key is read here, not passed
+        // in, because every caller would otherwise have to thread it through.
+        val authorization = runCatching {
+            bearerHeader(settingsRepository.syncKey.first())
+        }.getOrNull()
         val response = try {
-            apiProvider.current().play(WirePlayRequest(releaseId = releaseId, prefer = prefer ?: "quality"))
+            apiProvider.current().play(
+                WirePlayRequest(releaseId = releaseId, prefer = prefer ?: "quality"),
+                authorization = authorization,
+            )
         } catch (_: HttpException) {
             return null
         } catch (_: IOException) {
