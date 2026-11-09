@@ -151,6 +151,17 @@ class PlayerViewModel @Inject constructor(
      * bypasses it. Null once a first frame has rendered, so no stale attempt can fire.
      */
     private var startAttemptAtMs: Long? = null
+
+    /**
+     * Link-report bookkeeping (Session 123): the handle a `played` report was
+     * already sent for, and the attempt a `failed` report was already sent for.
+     * One report per handle / per attempt — the ticker visits every 200 ms and
+     * must never turn one playback into dozens of rows. Both reset naturally:
+     * a new bundle carries a new handle, a new attempt a new timestamp.
+     */
+    private var playedReportHandle: String? = null
+    private var failedReportAttemptAtMs: Long? = null
+
     private var keepJob: Job? = null
     private var settingsJob: Job? = null
     private var bingeResolveJob: Job? = null
@@ -653,12 +664,29 @@ class PlayerViewModel @Inject constructor(
                                     deadlineGiveUp = false,
                                 )
                             }
+                            // The link played: one `played` report per handle (Session
+                            // 123). The first frame is the proof — a stalled copy can
+                            // know its duration from the header while the picture is
+                            // still black, so duration alone never counts. Best-effort
+                            // and silent; a failed report is dropped, never shown.
+                            reportLinkPlayedOnce(elapsed)
                         } else {
                             _ui.update {
                                 it.copy(
                                     startElapsedMs = elapsed,
                                     deadlineGiveUp = elapsed >= StartDeadline.GIVE_UP_AFTER_MS,
                                 )
+                            }
+                            // The link never produced a first frame before the
+                            // deadline: one `failed` report per attempt (Session 123).
+                            // This is the dead-link signal the server's link-health
+                            // axis is built on — the give-up card the viewer sees is
+                            // the same event, reported once, at the same moment.
+                            if (elapsed >= StartDeadline.GIVE_UP_AFTER_MS &&
+                                failedReportAttemptAtMs != attemptAt
+                            ) {
+                                failedReportAttemptAtMs = attemptAt
+                                reportLinkFailedOnce(elapsed)
                             }
                         }
                     }
@@ -685,6 +713,46 @@ class PlayerViewModel @Inject constructor(
 
     private fun bufferedOf(c: MediaController): Long =
         if (c.bufferedPosition > 0) c.bufferedPosition else c.currentPosition
+
+    // ── Link reports (Session 123) ────────────────────────────────────────────
+
+    /** The handle this playback is streaming through, or null for local files. */
+    private fun currentReportHandle(): String? =
+        store.activeRendition()?.playback?.streamId?.takeIf { it.isNotBlank() }
+
+    /**
+     * One `played` report per handle: the first frame is the proof the link
+     * works. Runs in the background and never touches the UI — a failed report
+     * is dropped by the repository, never shown and never retried.
+     */
+    private fun reportLinkPlayedOnce(firstFrameMs: Long) {
+        val handle = currentReportHandle() ?: return
+        if (playedReportHandle == handle) return
+        playedReportHandle = handle
+        viewModelScope.launch {
+            catalogRepository.reportLink(
+                handle = handle,
+                event = "played",
+                latencyMs = firstFrameMs.toInt().coerceAtLeast(0),
+            )
+        }
+    }
+
+    /**
+     * One `failed` report per attempt: the give-up deadline passed with no
+     * first frame. Same best-effort rule as [reportLinkPlayedOnce].
+     */
+    private fun reportLinkFailedOnce(elapsedMs: Long) {
+        val handle = currentReportHandle() ?: return
+        viewModelScope.launch {
+            catalogRepository.reportLink(
+                handle = handle,
+                event = "failed",
+                latencyMs = elapsedMs.toInt().coerceAtLeast(0),
+                error = "Playback did not start",
+            )
+        }
+    }
 
     // ── Play entry points ────────────────────────────────────────────────────────
 
@@ -1009,6 +1077,7 @@ class PlayerViewModel @Inject constructor(
     private fun loadNow(title: String, resumeKey: String, resumePosition: Long, override: Long?) {
         store.requestLoad(title = title, resumePositionMs = resumePosition, startOverrideMs = override)
         startAttemptAtMs = SystemClock.elapsedRealtime()
+        playedReportHandle = null // a new attempt may play a handle that already failed
         _ui.update {
             it.copy(
                 resumeOfferMs = null,
@@ -1276,6 +1345,7 @@ class PlayerViewModel @Inject constructor(
         val title = _ui.value.activeRendition?.displayLabel() ?: Brand.name
         store.clearGaveUp()
         startAttemptAtMs = SystemClock.elapsedRealtime()
+        playedReportHandle = null // a new attempt may play a handle that already failed
         _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
         store.requestLoad(title = title, resumePositionMs = _ui.value.positionMs)
     }
@@ -1312,6 +1382,7 @@ class PlayerViewModel @Inject constructor(
      */
     fun dismissDeadlineGiveUp() {
         startAttemptAtMs = SystemClock.elapsedRealtime()
+        playedReportHandle = null // a new attempt may play a handle that already failed
         _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
     }
 
@@ -2232,12 +2303,28 @@ class PlayerViewModel @Inject constructor(
         }
         store.learnedOffsets.learn(report, store.offsetReporter)
         _ui.update { it.copy(calibration = null) }
-        val queued = store.offsetReporter is DeferredOffsetReporter
+        // The server post (Session 123): the catalog's own episode id rides on
+        // the coverage's enumerated episodes. When it resolves, the offset is
+        // shared with every later viewer at once; when it does not (an older
+        // bundle without episode ids), the local learned offset still stands
+        // and the deferred reporter keeps the report queued for the server.
+        val episodeId = rendition.coverage.episodes
+            .firstOrNull { it.number == episodeNumber }
+            ?.episodeId
         viewModelScope.launch {
+            val shared = episodeId?.let {
+                catalogRepository.reportEpisodeOffset(
+                    episodeId = it,
+                    offsetSeconds = report.offsetSeconds,
+                    chapterTitle = report.chapterTitle,
+                    releaseLabel = report.releaseLabel,
+                )
+            } == true
+            val queued = !shared && store.offsetReporter is DeferredOffsetReporter
             _events.emit(
                 PlayerEvent.Message(
                     "Episode $episodeNumber marked at ${(position / 1000L).formatTime()}" +
-                        (if (queued) " (queued for server)" else ""),
+                        (if (shared) " (shared with the server)" else if (queued) " (queued for server)" else ""),
                 ),
             )
         }

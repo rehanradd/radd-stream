@@ -12,9 +12,13 @@ package com.raddstream.app.network.models
  *  - `redirect=0` on the public port names no URL at all — it reports our handle plus the
  *    measured facts (mime, size, resumability, expiry) — so recovery re-reads those facts and
  *    replays the SAME address, never an address it was handed;
- *  - there is no way to tell the server a link is dead: `POST` is not implemented at all and
- *    `/api/heal` (a GET) never writes a response body.
- *  - // NOT SERVED YET — needs POST /api/v2/links/{id}/report (see EndpointGaps.REPORT)
+ *  - the app DOES tell the server now: `PlayerViewModel` reports `played` on
+ *    the first frame and `failed` when the give-up deadline passes with no
+ *    frame, through `POST /api/v2/links/{id}/report` (Session 123) — one
+ *    report per handle / per attempt, best-effort, never shown to the viewer.
+ *    A learned pack offset is POSTed the same way, through
+ *    `POST /api/v2/episodes/{episode_id}/offset`, when the coverage carries
+ *    the episode id; without it the local learned offset still stands.
  *
  * So recovery here is CLIENT-SIDE and honest: pick the next candidate, re-hit the same handle,
  * and stop after a bounded number of attempts. It never pretends to notify the server, and it

@@ -11,6 +11,8 @@ import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
 import com.raddstream.app.network.models.SuggestItem
 import com.raddstream.app.network.models.VipRemoteConfig
+import com.raddstream.app.network.models.EpisodeOffsetRequest
+import com.raddstream.app.network.models.LinkReportRequest
 import com.raddstream.app.network.models.WirePlayRequest
 import com.raddstream.app.player.Coverage
 import com.raddstream.app.player.toPlayerCoverage
@@ -118,6 +120,57 @@ class CatalogRepository @Inject constructor(
         }
         val coverage = response.coverage?.toPlayerCoverage() ?: Coverage()
         return V2PlayResult(bundle = response.toDomain(baseUrl), coverage = coverage)
+    }
+
+    /**
+     * POST /api/v2/links/{handle}/report — one playback fact about one link
+     * (Session 123). Best-effort by design: true only when the server recorded
+     * it; ANY failure (403 while nginx still blocks the route, a dead socket,
+     * a 400 for a stale handle) answers false and is dropped silently, because
+     * a report must never interrupt playback or show the viewer an error.
+     * `handle` is our own opaque handle — never a raw row id.
+     */
+    suspend fun reportLink(handle: String, event: String, latencyMs: Int? = null, error: String? = null): Boolean {
+        if (handle.isBlank()) return false
+        return try {
+            val response = apiProvider.current().reportLink(
+                handle = handle,
+                body = LinkReportRequest(event = event, latencyMs = latencyMs, error = error),
+            )
+            response.recorded
+        } catch (_: HttpException) {
+            false
+        } catch (_: IOException) {
+            false
+        }
+    }
+
+    /**
+     * POST /api/v2/episodes/{episodeId}/offset — a learned pack offset
+     * (Session 123). Best-effort like [reportLink]: false on any failure, and
+     * the local learned offset stays in place either way.
+     */
+    suspend fun reportEpisodeOffset(
+        episodeId: Int,
+        offsetSeconds: Int,
+        chapterTitle: String? = null,
+        releaseLabel: String? = null,
+    ): Boolean {
+        return try {
+            val response = apiProvider.current().reportEpisodeOffset(
+                episodeId = episodeId,
+                body = EpisodeOffsetRequest(
+                    offsetSeconds = offsetSeconds,
+                    chapterTitle = chapterTitle,
+                    releaseLabel = releaseLabel,
+                ),
+            )
+            response.recorded
+        } catch (_: HttpException) {
+            false
+        } catch (_: IOException) {
+            false
+        }
     }
 
     /**

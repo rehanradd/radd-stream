@@ -5478,6 +5478,12 @@ class CrawlRetryAccountingTests(unittest.TestCase):
             indexed_cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_sitemap_retry)")]
         self.assertEqual(indexed_cols, ["scraped", "attempts"])
 
+    def test_resumable_index_backs_the_resumable_count(self):
+        with fast_fetch.get_db() as conn:
+            # PRAGMA index_info(?) is not parameterizable; the name is a constant here.
+            indexed_cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_sources_resumable)")]
+        self.assertEqual(indexed_cols, ["is_resumable"])
+
     def payload(self, url, *, with_release):
         return {
             "url": url,

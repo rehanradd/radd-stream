@@ -202,6 +202,9 @@ data class EpisodeCoverage(
     @SerializedName("number") val number: Int = 0,
     @SerializedName("offset_seconds") val offsetSeconds: Int? = null,
     @SerializedName("chapter_title") val chapterTitle: String? = null,
+    // The catalog's own episode id (cat_episodes row), carried so a learned
+    // pack offset can be POSTed back (Session 123) — null on older payloads.
+    @SerializedName("episode_id") val episodeId: Int? = null,
 )
 
 /** Coverage block of a rendition: which episodes the file holds and where they start. */

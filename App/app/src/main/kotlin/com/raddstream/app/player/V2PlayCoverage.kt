@@ -27,6 +27,7 @@ fun WirePlayCoverage.toPlayerCoverage(): Coverage = Coverage(
             number = it.number ?: 0,
             offsetSeconds = it.offsetSeconds,
             chapterTitle = it.chapterTitle,
+            episodeId = it.episodeId,
         )
     },
 )

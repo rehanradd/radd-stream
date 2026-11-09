@@ -1295,6 +1295,10 @@ def _init_db(db_path: Path | None = None) -> None:
         CREATE INDEX IF NOT EXISTS idx_sources_res ON download_sources(resource_id);
         CREATE INDEX IF NOT EXISTS idx_sources_status_temp ON download_sources(status, is_temporary);
         CREATE INDEX IF NOT EXISTS idx_sources_rel_status ON download_sources(release_id, status);
+        -- Session 123: the resumable count (`WHERE is_resumable = 1`, the
+        -- health line) and any future resumable-first filter walked all four
+        -- million rows. One narrow index; the column is only ever 0/1.
+        CREATE INDEX IF NOT EXISTS idx_sources_resumable ON download_sources(is_resumable);
         """)
         # Every index on a column a migration can add is created *after* the migration
         # pass below. `CREATE TABLE IF NOT EXISTS` is a no-op on an existing staging

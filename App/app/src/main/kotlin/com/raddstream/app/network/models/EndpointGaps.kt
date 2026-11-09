@@ -43,17 +43,6 @@ enum class EndpointGaps(
         blockedCapability = "resolver round-trip for cloud_page/resolve_required links",
         v1Fallback = "/api/v1/stream?id={source_id}&redirect=0",
     ),
-    REPORT(
-        needed = "POST /api/v2/links/{link_id}/report",
-        blockedCapability = "client dead-link reporting (and the server's own /api/heal, " +
-            "which currently never writes a response body)",
-        v1Fallback = null,
-    ),
-    OFFSET(
-        needed = "/api/v2/episodes/{episode_id}/offset",
-        blockedCapability = "pack offsets: where in a season-pack file episode N starts",
-        v1Fallback = null,
-    ),
     SYNC(
         needed = "/api/v2/sync?since=",
         blockedCapability = "delta sync keyed by work_key (no /api/v1/sync exists)",

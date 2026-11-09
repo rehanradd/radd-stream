@@ -452,6 +452,65 @@ data class WirePlayTarget(
     fun toDomain(): EpisodeAddress = EpisodeAddress(season ?: 0, episode ?: 0, absolute)
 }
 
+/**
+ * POST /api/v2/links/{handle}/report — one playback fact about one link, so the
+ * server's link-health axis learns from real viewers instead of only its own
+ * probes. The `{handle}` path segment is OUR OWN opaque handle (the same one the
+ * player streams through) — never a raw row id and never a host address. `event`
+ * is one of `played` | `stalled` | `failed` | `resolved`; `error` is a short
+ * human sentence, scrubbed to 200 chars server-side. Best-effort by design: a
+ * failed report is dropped, never shown to the viewer and never retried.
+ * (Session 123: closes the gap EndpointGaps.REPORT used to list.)
+ */
+data class LinkReportRequest(
+    val event: String,
+    @SerializedName("latency_ms")
+    val latencyMs: Int? = null,
+    val error: String? = null,
+    val device: String? = null,
+)
+
+data class LinkReportResponse(
+    val ok: Boolean = false,
+    val recorded: Boolean = false,
+    @SerializedName("report_id")
+    val reportId: Int = 0,
+    val event: String = "",
+    @SerializedName("link_ref")
+    val linkRef: String? = null,
+)
+
+/**
+ * POST /api/v2/episodes/{episode_id}/offset — a learned pack offset: where
+ * episode N starts inside a season-pack file. The `{episode_id}` is the
+ * catalog's own episode id (carried on `WirePlayEpisode.episode_id` through
+ * `EpisodeCoverage.episodeId`); the server stores it against the work identity
+ * and echoes it back to the next `/play`, so a wrong offset can be corrected
+ * once by one viewer and learned by every later one. `chapter_title` is
+ * scrubbed server-side (it is echoed back publicly). Best-effort like the
+ * link report: a failed post leaves the local learned offset in place.
+ * (Session 123: closes the gap EndpointGaps.OFFSET used to list.)
+ */
+data class EpisodeOffsetRequest(
+    @SerializedName("offset_seconds")
+    val offsetSeconds: Int,
+    @SerializedName("chapter_title")
+    val chapterTitle: String? = null,
+    @SerializedName("release_label")
+    val releaseLabel: String? = null,
+)
+
+data class EpisodeOffsetResponse(
+    val ok: Boolean = false,
+    val recorded: Boolean = false,
+    @SerializedName("episode_id")
+    val episodeId: Int = 0,
+    val season: Int = 0,
+    val episode: Int = 0,
+    @SerializedName("offset_seconds")
+    val offsetSeconds: Int = 0,
+)
+
 data class WirePlayAuto(
     val band: String? = null,
     val playable: Boolean = false,

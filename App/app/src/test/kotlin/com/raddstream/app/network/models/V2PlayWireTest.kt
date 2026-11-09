@@ -143,4 +143,64 @@ class V2PlayWireTest {
         assertTrue(json.contains("\"prefer\":\"quality\""))
         assertFalse(json.contains("episode_id"))
     }
+
+    @Test
+    fun `the coverage keeps the catalog episode id for the offset post`() {
+        val response = gson.fromJson(responseJson, WirePlayResponse::class.java)
+        val coverage = response.coverage!!.toPlayerCoverage()
+
+        assertEquals(41, coverage.episodes[0].episodeId)
+        assertEquals(42, coverage.episodes[1].episodeId)
+    }
+
+    // Session 123 — link reports and pack offsets (one JSON test per new class).
+
+    @Test
+    fun `a failed link report encodes the event latency and error`() {
+        val json = gson.toJson(
+            LinkReportRequest(event = "failed", latencyMs = 30000, error = "Playback did not start"),
+        )
+        assertTrue(json.contains("\"event\":\"failed\""))
+        assertTrue(json.contains("\"latency_ms\":30000"))
+        assertTrue(json.contains("\"error\":\"Playback did not start\""))
+        assertFalse(json.contains("device"))
+    }
+
+    @Test
+    fun `a played link report decodes the servers answer`() {
+        val response = gson.fromJson(
+            """{"ok": true, "recorded": true, "report_id": 7, "event": "played",
+                "link_ref": "tok1"}""".trimIndent(),
+            LinkReportResponse::class.java,
+        )
+        assertTrue(response.ok)
+        assertTrue(response.recorded)
+        assertEquals(7, response.reportId)
+        assertEquals("played", response.event)
+        assertEquals("tok1", response.linkRef)
+    }
+
+    @Test
+    fun `a pack offset report encodes seconds and the release label`() {
+        val json = gson.toJson(
+            EpisodeOffsetRequest(offsetSeconds = 1800, chapterTitle = "Second", releaseLabel = "1080p WEB-DL"),
+        )
+        assertTrue(json.contains("\"offset_seconds\":1800"))
+        assertTrue(json.contains("\"chapter_title\":\"Second\""))
+        assertTrue(json.contains("\"release_label\":\"1080p WEB-DL\""))
+    }
+
+    @Test
+    fun `a pack offset report decodes the servers answer`() {
+        val response = gson.fromJson(
+            """{"ok": true, "recorded": true, "episode_id": 42, "season": 1,
+                "episode": 2, "offset_seconds": 1800}""".trimIndent(),
+            EpisodeOffsetResponse::class.java,
+        )
+        assertTrue(response.ok)
+        assertTrue(response.recorded)
+        assertEquals(42, response.episodeId)
+        assertEquals(2, response.episode)
+        assertEquals(1800, response.offsetSeconds)
+    }
 }

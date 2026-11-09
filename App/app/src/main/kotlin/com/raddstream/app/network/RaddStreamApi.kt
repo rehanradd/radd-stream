@@ -44,6 +44,10 @@ import com.raddstream.app.network.models.StatsResponse
 import com.raddstream.app.network.models.StreamResponse
 import com.raddstream.app.network.models.SuggestResponse
 import com.raddstream.app.network.models.VipRemoteConfig
+import com.raddstream.app.network.models.EpisodeOffsetRequest
+import com.raddstream.app.network.models.EpisodeOffsetResponse
+import com.raddstream.app.network.models.LinkReportRequest
+import com.raddstream.app.network.models.LinkReportResponse
 import com.raddstream.app.network.models.WirePlayRequest
 import com.raddstream.app.network.models.WirePlayResponse
 import retrofit2.http.Body
@@ -490,4 +494,25 @@ interface RaddStreamApi {
     suspend fun play(
         @Body body: WirePlayRequest,
     ): WirePlayResponse
+
+    /**
+     * POST /api/v2/links/{handle}/report — one playback fact about one link
+     * (Session 123). Best-effort: the caller treats ANY failure as "dropped",
+     * never as a reason to show the viewer an error.
+     */
+    @POST("api/v2/links/{handle}/report")
+    suspend fun reportLink(
+        @Path("handle") handle: String,
+        @Body body: LinkReportRequest,
+    ): LinkReportResponse
+
+    /**
+     * POST /api/v2/episodes/{episodeId}/offset — a learned pack offset
+     * (Session 123). Best-effort like the link report.
+     */
+    @POST("api/v2/episodes/{episodeId}/offset")
+    suspend fun reportEpisodeOffset(
+        @Path("episodeId") episodeId: Int,
+        @Body body: EpisodeOffsetRequest,
+    ): EpisodeOffsetResponse
 }
