@@ -214,8 +214,8 @@ jobs:
       # The resolved-link cache (Session 123, scale plan B2): lazy-first
       # freshness reads over the ledger row + the top-200 eager warmer.
       # Offline, stdlib, in-memory fixture, no network.
-      - name: 🧪 test_resolved_cache.py
-        run: python3 -S Fast_Fetch/test_resolved_cache.py
+      - name: 🧪 test_resolved_link_cache.py
+        run: python3 -S Fast_Fetch/test_resolved_link_cache.py
 
       # Scheduled maintenance inside serve (Session 123): the bounded
       # propagate + warm + heal tick, env-gated, memory-floor guarded.

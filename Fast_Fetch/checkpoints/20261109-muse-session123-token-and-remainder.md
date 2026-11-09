@@ -54,7 +54,7 @@ device session started. Commits A–L below, all by rehanradd <rehanradd@gmail.c
   player/download header (ExoPlayer forwards headers to 302 targets) — the
   signed `?vip=` pass (6 h TTL, in-memory cache only) rides stream/download
   URLs instead. `test_api_v2` 71 OK; `test_accounts_api` 38 OK.
-- **J `94ded78` — server remainder.** `resolved_cache.py` (lazy-first
+- **J `94ded78` — server remainder.** `resolved_link_cache.py` (lazy-first
   freshness over the ledger row — no second table: the row already stores
   final_url/expires_at/last_checked_at, and only 298 of 4,074,415 live rows
   carry a measured expiry — + top-200 eager `warm()`); `maintenance.py`
@@ -66,8 +66,15 @@ device session started. Commits A–L below, all by rehanradd <rehanradd@gmail.c
   of `_finalize`; the v2 search already accelerated on `cat_works_fts` when
   present — the table simply never existed). FTS proven end to end on a
   fixture projection (2 works → 2 FTS rows, "amelie" → work 1). Tests:
-  `test_resolved_cache` 14 OK, `test_maintenance` 11 OK, `test_fts_search`
-  9 OK; all three registered in backend-ci.yml; invariants OK.
+  `test_resolved_link_cache` 14 OK, `test_maintenance` 11 OK, `test_fts_search`
+  9 OK; all three registered in backend-ci.yml; invariants OK. **Rename
+  (fixup commit):** the module was first written as `resolved_cache.py`, but
+  that name collided with qoder12's unlanded Phase-1 module — `test_host_classifier.py`
+  guards `import resolved_cache` and calls `init_resolved_cache` /
+  `record_resolved_cache` on it, so the new file made 31 of its tests error
+  instead of skip (first full gate: 63/64 PASS, FAILED MODULES: 1). Renamed
+  to `resolved_link_cache.py` (module, test, `maintenance.py` import, CI step,
+  docs); the old name stays free for qoder12's module if it ever lands.
 - **K `757f56f` — Home HO-1…HO-8.** Hero posters de-duplicated out of their
   own rail; "Your library" / "Browse by type" (was two "Browse"); JumpOffRow
   actually scrolls; search bar inside the 16 dp margin; tile renamed "Paste
@@ -116,7 +123,7 @@ device session started. Commits A–L below, all by rehanradd <rehanradd@gmail.c
 
 Backend suites run this session: test_api_v2 71 OK, test_accounts_api 38 OK,
 test_coins_engine 86 OK, test_database 216 OK (skipped=1), test_catalog_v2
-103 OK, test_docs_invariants OK, test_resolved_cache 14 OK,
+103 OK, test_docs_invariants OK, test_resolved_link_cache 14 OK,
 test_maintenance 11 OK, test_fts_search 9 OK. Pre-push Kotlin checks per
 commit: import diffs accounted, `/*` vs `*/` at baseline (DetailScreen
 29/28, PlayerScreen 23/22 — pre-existing `"video/*"` string literals), no

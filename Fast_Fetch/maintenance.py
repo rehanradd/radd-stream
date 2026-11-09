@@ -14,7 +14,7 @@ order, and never holds the database or the network long:
    catalog is millions of rows, and a tick that tried to eat it whole would
    hold the write lock and starve presses. The sweep is slow by design and
    the press-time probe is what keeps a played link honest.
-2. `resolved_cache.warm` — the top-N eager pre-warm, so the links `/play`
+2. `resolved_link_cache.warm` — the top-N eager pre-warm, so the links `/play`
    picks first are resolved before the first press of the day.
 3. `fast_fetch.heal_expiring_sources` — re-resolve temporary links whose
    stored check is older than the interval, before their tokens die.
@@ -129,13 +129,13 @@ def tick_once(*, propagate_batches: int = PROPAGATE_BATCHES_PER_TICK,
                 return link_state.propagate(
                     conn, scope=PROPAGATE_SCOPE, **kwargs)
     if warm is None:
-        import resolved_cache
+        import resolved_link_cache
 
         def warm(**kwargs):
             import fast_fetch
 
             with fast_fetch.get_db() as conn:
-                return resolved_cache.warm(conn, **kwargs)
+                return resolved_link_cache.warm(conn, **kwargs)
     if heal is None:
         def heal(**kwargs):
             import fast_fetch
