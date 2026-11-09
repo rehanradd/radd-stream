@@ -298,6 +298,7 @@ fun DetailScreen(
                 onAskRungs = viewModel::showRungsFor,
                 hasRungs = { season, episode -> !viewModel.ladderFor(season, episode).isEmpty },
                 onOpenVipUpgrade = onOpenVipUpgrade,
+                onActorClick = onActorClick,
                 reloadError = state.error,
                 onRetryReload = viewModel::loadDetail,
                 contentPadding = paddingValues,
@@ -450,6 +451,8 @@ private fun DetailContent(
     onAskRungs: (season: Int?, episode: Int?) -> Unit,
     hasRungs: (season: Int?, episode: Int?) -> Boolean,
     onOpenVipUpgrade: () -> Unit,
+    /** An actor chip in the cast row: open that actor's titles in Search. */
+    onActorClick: (String) -> Unit = {},
     /**
      * A reload of a title that is already on screen. Null in the normal case. It arrives here
      * rather than through the full-screen error because the viewer can already read the

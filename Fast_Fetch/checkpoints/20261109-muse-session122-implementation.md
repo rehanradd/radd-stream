@@ -146,3 +146,30 @@ regression:
 
 Both fixes are in the second parent fixup commit on `session122-implementation`.
 No local Gradle run (owner order) — Android CI is the compile check.
+
+## Parent fixup 3 (07:02 PKT 2026-11-09) — second Android compile error
+
+The self-check (07:00 PKT) read the 0f29a57 Android job log: there were TWO
+compile errors, not one. Fixup 2 covered only the HomeScreen constant. The
+second: `DetailScreen.kt:559 Unresolved reference 'onActorClick'`.
+
+Root cause: `onActorClick` is a parameter of `DetailScreen` (line 129), but
+line 559 sits inside the private `DetailContent` (line 422), whose parameter
+list had no `onActorClick`, and the call site (line 271) did not pass one.
+The builder wired `CastSection(cast, onActorClick)` inside DetailContent
+without threading the callback through. Fix: add
+`onActorClick: (String) -> Unit = {},` to DetailContent's params (next to
+`onOpenVipUpgrade`, with the same KDoc wording as DetailScreen's) and pass
+`onActorClick = onActorClick,` at the call site. NavGraph already passes the
+real handler (line 358: `navigate(Screen.Search.createRoute(actor))`), so the
+chain NavGraph → DetailScreen → DetailContent → CastSection is now complete;
+a tap searches that actor's titles.
+
+Pre-push checks: diff is exactly +3 lines, no deletions, no new imports;
+@Composable 15 (base) → 16 (builder's CastSection; this fixup adds none);
+comment balance 26/25 → 29/28, delta +3/+3 (two builder KDocs + this one),
+the persistent 1-off is the pre-existing `"video/*"` string literal. No local
+Gradle run (owner order) — Android CI is the compile check. Pushing this
+fixup cancels the in-progress acebcde Android run (cancel-in-progress) and
+starts a fresh run on the new SHA — intended, since acebcde was known to fail
+on this error.
