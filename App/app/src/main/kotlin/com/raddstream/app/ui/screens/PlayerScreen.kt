@@ -3373,8 +3373,7 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
     // PL-6: the ranks, the failover log and the failover policy are debug, not

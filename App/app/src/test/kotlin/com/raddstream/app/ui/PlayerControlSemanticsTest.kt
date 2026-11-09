@@ -159,7 +159,10 @@ class PlayerControlSemanticsTest {
     private fun moreSheetBody(): String {
         val start = source.indexOf("private fun MoreSheet(")
         assertTrue("PlayerScreen.kt no longer declares MoreSheet", start >= 0)
-        val end = source.indexOf("\n@OptIn(ExperimentalMaterial3Api::class)", start)
+        // The next sheet is PrintLogSheet, whose opt-in also covers the
+        // ExperimentalFoundationApi its long-press title needs — the marker
+        // tracks the real annotation, not a shorter one.
+        val end = source.indexOf("\n@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)", start)
         assertTrue("cannot find the end of MoreSheet", end >= 0)
         return source.substring(start, end)
     }

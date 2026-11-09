@@ -211,3 +211,16 @@ re-run against the edited tree and all read clean.
   `PrintLogSheet`'s `@OptIn` to `(…, ExperimentalFoundationApi::class)` broke
   the test's end marker, the literal `"\n@OptIn(ExperimentalMaterial3Api::class)"`.
   Split into two separate `@OptIn` lines; same opt-ins, marker restored.
+
+## Parent fixup 3 (19:5x PKT, CI run 42637503486 on 8f6e0c5 — Backend green, Android compile red)
+
+One error, mine, not the builder's: `PlayerScreen.kt:3377 "This annotation is
+not repeatable"` — `@OptIn` cannot be stacked, so fixup 2's two-line split of
+`PrintLogSheet`'s opt-in was illegal Kotlin. Reverted to the single combined
+`@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)`.
+The test that needed the split (`PlayerControlSemanticsTest.moreSheetBody`)
+uses the next sheet's annotation as its end marker; the marker now tracks the
+real combined annotation (same intent — the body still ends at PrintLogSheet),
+with a comment saying why. Precedent: Session 122 fixup 3 updated a guard
+string after proving the guarded invariant intact; the More-sheet control
+assertions themselves are untouched.
