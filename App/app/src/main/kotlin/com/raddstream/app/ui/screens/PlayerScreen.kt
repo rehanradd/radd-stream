@@ -52,6 +52,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
@@ -80,6 +81,7 @@ import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.VolumeMute
 import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -145,7 +147,7 @@ import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.LifecycleOwner
 import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.player.AspectMode
@@ -332,7 +334,9 @@ private fun PlayerScreenContent(
     // PL-10: opt-in auto-enter PiP — when the switch is on and the title is playing,
     // leaving the player (home, recents, another app) keeps it playing in a window.
     // Off by default: a window the viewer did not open is a window they did not ask for.
-    val lifecycleOwner = LocalLifecycleOwner.current
+    // The screen is always hosted by the Activity, so its context is the owner;
+    // lifecycle-runtime-compose is not a dependency, so no LocalLifecycleOwner.
+    val lifecycleOwner = context as LifecycleOwner
     DisposableEffect(lifecycleOwner, state.autoPip, state.isPlaying) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE && state.autoPip && state.isPlaying) launchPip()
@@ -1901,8 +1905,8 @@ private fun Scrubber(
     val currentChapter = ticks.lastOrNull { it.offsetMs <= positionMs }?.title
     val seekDescription = stringResource(
         R.string.player_seek,
-        formatTime(positionMs),
-        formatTime(durationMs),
+        positionMs.formatTime(),
+        durationMs.formatTime(),
     ) + (currentChapter?.let { ", $it" } ?: "")
     BoxWithConstraints(
         Modifier
@@ -2230,14 +2234,18 @@ private fun OfflineCard(onRetry: () -> Unit) {
 @Composable
 private fun LockedTimeChip(positionMs: Long, durationMs: Long, lowRam: Boolean, modifier: Modifier = Modifier) {
     val spec = PlayerGlass.spec(lowRam)
+    // GlassSpec carries alphas, not ready-made modifiers: the tint is a dark
+    // chip at tintAlpha (opaque when solid), the edge is 1dp white at
+    // borderAlpha (invisible when solid). Same frosted/solid split as the
+    // other glass bars, built from the fields the spec actually has.
     Box(
         modifier
-            .background(spec.tint, spec.shape)
-            .border(spec.borderWidth, spec.border, spec.shape)
+            .background(Color.Black.copy(alpha = spec.tintAlpha), RoundedCornerShape(8.dp))
+            .border(1.dp, Color.White.copy(alpha = spec.borderAlpha), RoundedCornerShape(8.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Text(
-            text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+            text = "${positionMs.formatTime()} / ${durationMs.formatTime()}",
             color = Color.White,
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -3359,7 +3367,7 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
     // PL-6: the ranks, the failover log and the failover policy are debug, not

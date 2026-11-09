@@ -144,3 +144,34 @@ reviews and pushes. Five commits, author rehanradd:
   order). Device verification of all of the above on the next emulator /
   device session (owner-only). The scrub-thumbnails version-bump decision
   (owner). Gate-deploy after CI green (parent).
+
+## Parent fixup 1 — Android CI red on first push (compile, bf49a36 + this commit)
+
+Branch CI on bf49a36: Backend SUCCESS (42632823555), Android FAILURE
+(42632823748, job 129213194491, `:app:compileDebugKotlin`). All 16
+errors in PlayerScreen.kt, all builder slips — the parent's pre-push
+checks (duplicate types, unused imports) do not catch missing imports
+or wrong member names, and there is no local Gradle to catch them
+either; CI is the judge. Root causes, each fixed in PlayerScreen.kt:
+
+- `LocalLifecycleOwner` (lines 148, 335): `androidx.lifecycle.compose`
+  is not a dependency — the version catalog carries only
+  `lifecycle-viewmodel-compose`, no `lifecycle-runtime-compose`. The
+  screen is always hosted by the Activity, so the owner is the context:
+  `val lifecycleOwner = context as LifecycleOwner` (import swapped to
+  `androidx.lifecycle.LifecycleOwner`, same artifact as the already
+  imported `LifecycleEventObserver`, so it resolves).
+- `formatTime(positionMs)` bare (1904, 1905, 2240 ×2): the only
+  `formatTime` is the `Long` extension in the viewmodel, already
+  imported, always called receiver-style elsewhere in the file —
+  changed to `positionMs.formatTime()` / `durationMs.formatTime()`.
+- `WifiOff` (2206): `Icons.Default.WifiOff` used with no import — added
+  `androidx.compose.material.icons.filled.WifiOff`.
+- `spec.tint` / `spec.shape` / `spec.borderWidth` / `spec.border`
+  (2235, 2236): GlassSpec has no such members — its fields are
+  `useGlass`, `tintAlpha`, `borderAlpha`. LockedTimeChip rebuilt from
+  the real fields: dark chip at `tintAlpha` (opaque when solid), 1dp
+  white edge at `borderAlpha` (invisible when solid), `RoundedCornerShape(8.dp)`
+  (import added). Same frosted/solid split the builder intended.
+- `combinedClickable` (3381): `PrintLogSheet` had only the Material3
+  opt-in; added `ExperimentalFoundationApi` to its `@OptIn`.
