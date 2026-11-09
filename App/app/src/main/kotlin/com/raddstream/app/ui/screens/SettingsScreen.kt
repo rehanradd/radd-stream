@@ -1080,7 +1080,7 @@ internal fun ProfileLinkDialog(account: AccountUiState, viewModel: SettingsViewM
 internal fun ContactDialog(contact: ContactUiState, viewModel: SettingsViewModel) {
     AlertDialog(
         onDismissRequest = viewModel::closeContactForm,
-        title = { Text("Write to us") },
+        title = { RaddDialogTitle("Write to us") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 FlowRow(
