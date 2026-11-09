@@ -730,7 +730,11 @@ class AccountSurfaceRoutes(Fixture):
         # the caller's own phone may come back; the PIN it was guard-railed with may
         # not, and neither may anything a guesser could work offline against.
         for label, answered in bodies[1:]:
-            self.assertNotIn(PIN, answered[2].decode("utf-8"), label)
+            # Check the PIN quoted, as a JSON string value: vip_until is a float
+            # timestamp whose digits can contain the PIN by chance (CI 2026-11-09:
+            # vip_until 1794534721.0603328 contains "4721"). A bare-substring
+            # check fails on the clock, not on a leak.
+            self.assertNotIn('"%s"' % PIN, answered[2].decode("utf-8"), label)
 
     def test_a_bad_profile_is_a_400_and_a_wrong_pin_is_a_401(self):
         key = self.payload(self.post("%s/anonymous" % P,

@@ -7,8 +7,8 @@ import android.net.Uri
 import android.text.format.Formatter
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import com.google.android.play.core.install.model.ActivityResult as PlayCoreActivityResult
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -122,7 +122,7 @@ fun HomeScreen(
     ) { result ->
         val url = pendingFlexibleUpdateUrl
         pendingFlexibleUpdateUrl = null
-        if (url != null && result.resultCode == ActivityResult.RESULT_IN_APP_UPDATE_FAILED) {
+        if (url != null && result.resultCode == PlayCoreActivityResult.RESULT_IN_APP_UPDATE_FAILED) {
             openDownload(context, url)
         }
     }

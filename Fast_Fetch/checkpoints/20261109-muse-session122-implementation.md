@@ -117,3 +117,32 @@ Diff: 41 files (35 modified + 6 new), +1734/−283.
 - Device verification owed: Play Core fallback (tap Update now on a sideloaded
   build → download page opens), disclaimer Decline exits, cast chips + actor
   search on a real title with cast data, velocity 429 on the wire.
+
+## Parent fixups after CI (06:56 PKT 2026-11-09)
+
+CI on 0f29a57 failed BOTH runs — two unrelated defects, neither a 122 code
+regression:
+
+1. **Android compile error (122's bug):** `HomeScreen.kt:125` used
+   `ActivityResult.RESULT_IN_APP_UPDATE_FAILED`, but `androidx.activity.result.ActivityResult`
+   has no such constant. The constant lives in Play Core itself:
+   `com.google.android.play.core.install.model.ActivityResult` (proven by
+   inspecting the app-update-2.1.0 AAR — it is the only class in the artifact
+   carrying the name; the Android docs page writes it as
+   `ActivityResult.RESULT_IN_APP_UPDATE_FAILED` without saying which
+   ActivityResult). Fix: import it aliased as `PlayCoreActivityResult`, use
+   `PlayCoreActivityResult.RESULT_IN_APP_UPDATE_FAILED`, and drop the now-unused
+   `androidx.activity.result.ActivityResult` import.
+2. **Backend test flake (pre-existing, Session 105's test, not 122):**
+   `test_device_trials_and_webhook.py::test_no_account_response_carries_a_pin_a_digest_or_a_phone_of_someone_else`
+   asserts the bare PIN `"4721"` never appears in a response body — but
+   `vip_until` is a float timestamp, and at CI time it was `1794534721.0603328`,
+   which contains `4721` as a substring. The test passed in the local gate
+   (06:47) and failed on CI (06:52) on the clock alone. Fix: check the PIN
+   quoted, as a JSON string value (`'"4721"'`) — a leaked PIN field would be a
+   string value; a timestamp is a number. Test module re-run: 89 tests OK.
+   122's diff to `accounts_api.py` is only the +9-line 429 mapping; the test
+   file is untouched by 122 (last touched 42afbc0, Session 105).
+
+Both fixes are in the second parent fixup commit on `session122-implementation`.
+No local Gradle run (owner order) — Android CI is the compile check.
