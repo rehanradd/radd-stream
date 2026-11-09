@@ -383,7 +383,7 @@ private fun DeviceStatusPill(state: DeviceDownloadState) {
         DeviceDownloadState.QUEUED -> "Queued"
         DeviceDownloadState.DOWNLOADING -> "Downloading"
         DeviceDownloadState.PAUSED -> "Paused"
-        DeviceDownloadState.READY -> stringResource(R.string.player_saved_on_device)
+        DeviceDownloadState.READY -> stringResource(R.string.downloads_saved_on_device)
         DeviceDownloadState.FAILED -> "Failed"
     }
     val error = state == DeviceDownloadState.FAILED
@@ -457,7 +457,7 @@ private fun StatusPill(state: KeepState) {
         KeepState.QUEUED -> "Queued"
         KeepState.DOWNLOADING -> "Downloading"
         KeepState.PAUSED -> "Paused"
-        KeepState.READY -> stringResource(R.string.player_saved_on_device)
+        KeepState.READY -> stringResource(R.string.downloads_saved_on_device)
         KeepState.EXPIRING -> "Expiring soon"
         KeepState.EXPIRED -> "Expired"
         KeepState.NO_SPACE -> "No space"

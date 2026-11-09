@@ -83,8 +83,12 @@
     <string name="player_step_warming">Warming the link</string>
     <string name="player_step_buffering">Buffering</string>
     <string name="player_volume_boost">Volume boost</string>
-    <string name="player_saved_on_device">Saved on device</string>
     <string name="player_seek">Seek: %1$s of %2$s</string>
+    <string name="player_seek_chapter">, %1$s</string>
+    <string name="player_up_next_title">%1$s: %2$s</string>
+    <string name="player_position_duration">%1$s / %2$s</string>
+    <!-- Parent fixup 2: the saved-on-device pill lives on the downloads screen, not the player. -->
+    <string name="downloads_saved_on_device">Saved on device</string>
     <string name="player_quality_single">Only one quality is available for this title</string>
     <!-- Session 126 (NAV-4/NAV-5): the catch-all deep-link destination. -->
     <string name="dead_link_title">This link didn’t lead anywhere</string>
@@ -105,11 +109,6 @@
     <string name="player_this_print">this print</string>
     <string name="player_resume">Resume</string>
     <string name="player_start_over">Start over</string>
-    <string name="player_slot_pre_roll">before playback starts</string>
-    <string name="player_slot_between">between two episodes</string>
-    <string name="player_ad_title">Sponsor break</string>
-    <string name="player_ad_body">A free-tier break can only appear %1$s — never in the middle of a title. Continue whenever you are ready.</string>
-    <string name="player_continue">Continue</string>
     <string name="player_calibration_title">Calibrate episode start</string>
     <string name="player_calibration_body">This file packs several episodes. Pause exactly where the target episode starts, then confirm.</string>
     <string name="player_episode_number">Episode number</string>
@@ -162,7 +161,6 @@
     <string name="player_chapter_row">"%1$s  ·  %2$s"</string>
     <string name="player_failover_log">Failover log</string>
     <string name="player_prints_note">Ranked candidates — the first playable one wins; switches happen automatically on playback errors, preserving position.</string>
-    <string name="player_rune_rank">"#%1$d  %2$s"</string>
     <string name="player_rune_playing">playing</string>
     <string name="player_failover_record">#%1$d %2$s: %3$s → %4$s</string>
     <string name="player_failover_policy">Policy: retry same ×%1$d, backoff %2$d ms, then next rank, max %3$d ranks.</string>

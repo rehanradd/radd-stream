@@ -13,7 +13,8 @@ import com.raddstream.app.viewmodel.formatTime
 object ShareMoment {
 
     /**
-     * "Title — 12:34\nradd://stream/<id>/Title" — the timestamp is the position the
+     * The shared text is `Title — 12:34` on one line and the deep link
+     * `radd://stream/<id>/Title` on the next — the timestamp is the position the
      * viewer was at when they tapped share, formatted the same way the player shows
      * time everywhere else. A blank title falls back to "this moment" so the text is
      * never an empty sentence.

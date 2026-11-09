@@ -175,3 +175,39 @@ either; CI is the judge. Root causes, each fixed in PlayerScreen.kt:
   (import added). Same frosted/solid split the builder intended.
 - `combinedClickable` (3381): `PrintLogSheet` had only the Material3
   opt-in; added `ExperimentalFoundationApi` to its `@OptIn`.
+
+## Parent fixup 2 (19:4x PKT, CI run 42634752406 on d03fba6 — compile fixed, 7 tests failed)
+
+All 7 were builder slips the pre-push checks cannot catch (the checks verify
+imports and duplicate types, not test-guard contracts). Each was root-caused
+from the failing test's own assertion before editing; the guard replicas were
+re-run against the edited tree and all read clean.
+
+- `BrandDriftTest.deepLinkSchemeIsNeverHardcoded`: the only offender was
+  `ShareMoment.kt`'s KDoc example — a double-quoted `"Title — 12:34\nradd://…"`
+  that the test's naive literal regex catches even inside a comment. Reworded
+  to backticked fragments; the link itself is unchanged (`DeepLinks.streamUri`).
+- `DeadCodeGuardTest` + `PlayerChromeCopyTest` (vocabulary): the PL-2 ad removal
+  deleted the ad code but left 6 strings in `strings.xml` (`player_slot_pre_roll`,
+  `player_slot_between`, `player_ad_title`, `player_ad_body`, `player_continue`,
+  `player_rune_rank`) — all unreferenced. Deleted. `player_saved_on_device`
+  (SC.8) was also unpainted by the player because its pills live on the
+  downloads screen, not the player — renamed to `downloads_saved_on_device`
+  (2 refs in `DownloadsScreen.kt`), same text.
+- `PlayerChromeCopyTest` (prose): three hardcoded literals with letters+spaces
+  in `PlayerScreen.kt` — the chapter suffix `", $it"`, the Up-next join
+  `"${…player_up_next}: $nextEpisodeTitle"`, the position/duration join
+  `"${…} / ${…}"`. Each moved into `strings.xml` as a format resource
+  (`player_seek_chapter`, `player_up_next_title`, `player_position_duration`)
+  with matching placeholder counts (verified: 0 arg mismatches).
+- `PlayerBackExitTest` x2: the builder's PL-13 broke the Session 114 pinned
+  rule — `onDismissRequest` pointed at the keep-waiting lambda and a comment
+  mentioned `BackHandler` a third time (count must be exactly 2: import + call).
+  Restored `onDismissRequest = onBackToDetails`, `dismissOnClickOutside = false`
+  (outside tap does nothing; Close keeps waiting; Back exits via the screen
+  handler), comment reworded without the word. The PL-13 "outside tap dismisses"
+  design is superseded by the pinned rule.
+- `PlayerControlSemanticsTest` (More sheet): fixup 1's own doing — extending
+  `PrintLogSheet`'s `@OptIn` to `(…, ExperimentalFoundationApi::class)` broke
+  the test's end marker, the literal `"\n@OptIn(ExperimentalMaterial3Api::class)"`.
+  Split into two separate `@OptIn` lines; same opt-ins, marker restored.

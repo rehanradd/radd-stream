@@ -1907,7 +1907,7 @@ private fun Scrubber(
         R.string.player_seek,
         positionMs.formatTime(),
         durationMs.formatTime(),
-    ) + (currentChapter?.let { ", $it" } ?: "")
+    ) + (currentChapter?.let { stringResource(R.string.player_seek_chapter, it) } ?: "")
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
@@ -2149,7 +2149,11 @@ private fun AutoplayCountdownCard(
             }
             if (nextEpisodeTitle != null) {
                 Text(
-                    text = "${stringResource(R.string.player_up_next)}: $nextEpisodeTitle",
+                    text = stringResource(
+                        R.string.player_up_next_title,
+                        stringResource(R.string.player_up_next),
+                        nextEpisodeTitle,
+                    ),
                     color = Color.White.copy(alpha = 0.85f),
                     fontSize = brandSp(13),
                     textAlign = TextAlign.Center,
@@ -2245,7 +2249,11 @@ private fun LockedTimeChip(positionMs: Long, durationMs: Long, lowRam: Boolean, 
             .padding(horizontal = 10.dp, vertical = 6.dp),
     ) {
         Text(
-            text = "${positionMs.formatTime()} / ${durationMs.formatTime()}",
+            text = stringResource(
+                R.string.player_position_duration,
+                positionMs.formatTime(),
+                durationMs.formatTime(),
+            ),
             color = Color.White,
             style = MaterialTheme.typography.bodyMedium,
         )
@@ -2458,17 +2466,15 @@ private fun GiveUpCard(
     // card shows it — the other failures already have their own way out.
     onHomeClick: (() -> Unit)? = null,
 ) {
-    // PL-13: a tap outside the card means "keep waiting" — it dismisses the card
-    // and playback continues. Back still exits the player (Session 114): a failed
-    // play must never trap the viewer. AlertDialog's onDismissRequest fires for
-    // both, so the two are split here: dismissOnBackPress is false and the
-    // screen-level BackHandler owns Back, leaving onDismissRequest to mean only
-    // the outside tap.
+    // PL-13 (Session 114): dismissing this card must leave the player — a failed
+    // play must never trap the viewer. The dialog itself never dismisses on Back
+    // or on an outside tap, so the screen-level back handler owns Back (exit) and
+    // the card's own Close button is the only way to keep waiting.
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = onBackToDetails,
         properties = DialogProperties(
             dismissOnBackPress = false,
-            dismissOnClickOutside = true,
+            dismissOnClickOutside = false,
         ),
         // D-48: the dialog reads as a surface, not a slab on black — a 1dp
         // outline in the dialog's own shape, over the tonal container.
@@ -3367,7 +3373,8 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
     // PL-6: the ranks, the failover log and the failover policy are debug, not
