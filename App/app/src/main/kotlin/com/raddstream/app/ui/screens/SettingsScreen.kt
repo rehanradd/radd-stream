@@ -223,7 +223,7 @@ fun SettingsScreen(
                         label = "Delete watched downloads",
                     )
                     Text(
-                        "A finished movie deletes itself to free space. Series keeps are never touched — one watched episode does not mean the season is done.",
+                        "A finished download deletes itself to free space. A finished series episode deletes its own keep too — only the episode you just watched, never the rest of the season.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )

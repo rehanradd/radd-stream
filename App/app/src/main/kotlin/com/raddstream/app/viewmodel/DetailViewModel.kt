@@ -604,6 +604,16 @@ class DetailViewModel @Inject constructor(
             _uiState.update { it.copy(actionMessage = "Nothing to download on this rung yet.") }
             return
         }
+        // Session 123: the Wi-Fi-only gate, at the tap — the same gate
+        // `keepPrint` already honours. The dialog must not offer a download
+        // the switch forbids, and the viewer must hear why now, not after
+        // confirming a size for a file that will never start.
+        if (DataSaver.wifiOnlyBlocks(wifiOnlyDownloads, onWifi)) {
+            _uiState.update {
+                it.copy(actionMessage = "Wi-Fi only is on — connect to Wi-Fi to download this title. You can change it in Settings.")
+            }
+            return
+        }
         val workTitle = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         viewModelScope.launch {
             // One metadata ask decides which download system owns this copy. A failed
@@ -697,6 +707,16 @@ class DetailViewModel @Inject constructor(
     fun confirmKeep() {
         val pending = _uiState.value.pendingKeep ?: return
         _uiState.update { it.copy(pendingKeep = null, directLinkMessage = null) }
+        // Session 123: the gate again, at confirm time — the Wi-Fi state can
+        // change while the dialog is open, and the confirm is the moment the
+        // bytes would actually start. A viewer who walked out of Wi-Fi range
+        // while reading the size hears why nothing started.
+        if (DataSaver.wifiOnlyBlocks(wifiOnlyDownloads, onWifi)) {
+            _uiState.update {
+                it.copy(actionMessage = "Wi-Fi only is on — connect to Wi-Fi to download this title. You can change it in Settings.")
+            }
+            return
+        }
         viewModelScope.launch {
             if (pending.target == KeepTarget.EngineHls) {
                 keepViaEngine(pending.handle, pending.printLabel, pending.title, pending.sizeBytes, pending.resumable)

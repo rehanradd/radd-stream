@@ -31,6 +31,8 @@ import com.raddstream.app.player.AutoplayCountdown
 import com.raddstream.app.player.BingePrefetchPlanner
 import com.raddstream.app.player.BingePreloadDecision
 import com.raddstream.app.player.CacheAffordance
+import com.raddstream.app.player.CacheSessionKey
+import com.raddstream.app.player.PreviewRequest
 import com.raddstream.app.player.CacheEngineHolder
 import com.raddstream.app.player.CacheSnapshot
 import com.raddstream.app.player.CacheState
@@ -257,6 +259,10 @@ class PlayerViewModel @Inject constructor(
     private var freeQualityCap: String = "720p"
     /** Data Saver — on by default, so mobile-data titles start at 480p. */
     private var dataSaver: Boolean = true
+    /** Wi-Fi-only downloads — on by default; the Keep button honours it (Session 123). */
+    private var wifiOnlyDownloads: Boolean = true
+    /** Delete a watched download to free the space — on by default (Session 123: series episodes too). */
+    private var autoDeleteWatched: Boolean = true
 
     /** A confirmed member, or everyone while the operator has not turned gating on. */
     private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, syncEntitled)
@@ -332,6 +338,16 @@ class PlayerViewModel @Inject constructor(
             settingsRepository.dataSaver.collect { enabled ->
                 dataSaver = enabled
                 armQualityChoices()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.wifiOnlyDownloads.collect { enabled ->
+                wifiOnlyDownloads = enabled
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.autoDeleteWatched.collect { enabled ->
+                autoDeleteWatched = enabled
             }
         }
     }
@@ -493,6 +509,7 @@ class PlayerViewModel @Inject constructor(
             if (playbackState == Player.STATE_ENDED) {
                 rememberResume()
                 handleSleepEndOfVideo()
+                maybeAutoDeleteWatchedEpisode()
             }
         }
 
@@ -1536,14 +1553,15 @@ class PlayerViewModel @Inject constructor(
     /**
      * One binge tick: ask the policy, and act on a real request exactly once.
      *
-     * WHAT THE ACT HONESTLY IS: [BingePreloader] emits a request for the head bytes of the
-     * next episode because the cache boundary it was written against has no head-pull entry
-     * point — only whole-file [ProgressiveCacheEngine.adopt] — and inventing one is the data
-     * agent's call, not this wiring's. So the executable part today is the one thing that
-     * genuinely costs nothing and genuinely speeds the transition: ask our own redirector
-     * about that handle (`redirect=0`), which resolves and caches the upstream link
-     * server-side, proves the handle is alive, and arms the prepared successor so the END
-     * hand-off is a load rather than a lookup.
+     * Session 123: the act used to be only a probe — the redirector was asked
+     * about the handle and the successor marked resolved, but zero bytes were
+     * fetched, so the advance still waited on the first bytes. The head-pull
+     * entry point the old comment said did not exist is the engine's own
+     * `seedPreview` (the same bounded ahead-window the player seeds while
+     * watching), so the tick now pulls the next episode's head through it
+     * after a usable probe. The budget (`mayPreview`) and the Wi-Fi-only
+     * switch still apply: on mobile data with Wi-Fi-only on, the link stays
+     * warm and the bytes wait for Wi-Fi.
      */
     private fun tickBingePreload(positionMs: Long, durationMs: Long) {
         val bundle = store.bundle.value ?: return
@@ -1590,6 +1608,35 @@ class PlayerViewModel @Inject constructor(
             val prepared = preparedNextEpisode
             if (prepared != null && prepared.handle == handle) {
                 preparedNextEpisode = prepared.copy(resolved = true)
+            }
+            // Session 123: the probe alone never fetched a byte. Pull the next
+            // episode's head through the engine's preview pass now — the same
+            // bounded ahead-window the player seeds while watching — so the
+            // advance starts on bytes already on disk. The engine's own budget
+            // (`mayPreview`) decides whether the bytes are affordable, and the
+            // Wi-Fi-only switch decides whether mobile data may buy them: with
+            // Wi-Fi-only on and no Wi-Fi, the link stays warm and the bytes
+            // wait. A preview that fails is silent — the advance still works,
+            // it just waits on the first bytes again.
+            val engine = CacheEngineHolder.engine
+            val onWifi = connectivityProbe.current() == NetworkClass.WIFI
+            if (engine != null && !DataSaver.wifiOnlyBlocks(wifiOnlyDownloads, onWifi)) {
+                val url = streamRedirectUrl(apiProvider.currentBaseUrl(), handle)
+                val label = prepared
+                    ?.takeIf { it.handle == handle }
+                    ?.let { "Episode ${it.episode}" }
+                    ?: "Next episode"
+                runCatching {
+                    engine.seedPreview(
+                        PreviewRequest(
+                            key = CacheSessionKey(renditionKey = handle, url = url),
+                            url = url,
+                            expectedTotalBytes = answer.fileSizeBytes?.takeIf { it > 0L },
+                            resumable = answer.resumable ?: false,
+                            printLabel = label,
+                        ),
+                    )
+                }
             }
             _events.emit(
                 PlayerEvent.Message("Next episode ready — its link is live, so advancing will not wait on a lookup"),
@@ -2034,6 +2081,33 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Series auto-delete (Session 123): a series episode the viewer just
+     * finished, whose keep is complete, deletes itself — the same promise the
+     * Downloads sweep already keeps for movies, extended to the one case the
+     * sweep cannot identify. The sweep matches by title against movie rows
+     * only, because one watched episode must never delete the whole season;
+     * here the identity is exact instead — this player holds the episode's
+     * own cache key, and only a complete keep (`KeepUiState.Stored`) is
+     * touched, so a keep still fetching is left alone. Movies keep their
+     * sweep and are never touched here; the message names what went, so the
+     * deletion is never silent.
+     */
+    private fun maybeAutoDeleteWatchedEpisode() {
+        if (!autoDeleteWatched) return
+        val bundle = store.bundle.value ?: return
+        val target = bundle.target
+        val episode = target.episode.takeIf { it > 0 } ?: store.currentSyncScope()?.episode ?: 0
+        if (episode <= 0) return
+        if (_ui.value.keep !is KeepUiState.Stored) return
+        val engine = CacheEngineHolder.engine ?: return
+        val key = store.cacheKey() ?: return
+        viewModelScope.launch {
+            runCatching { engine.cancelKeep(key) }
+            _events.emit(PlayerEvent.Message("Deleted Episode $episode — you finished watching it."))
+        }
+    }
+
     // ── Episode progression + offsets ────────────────────────────────────────────
 
     private fun handleCrossEpisodeAction(action: NextEpisodeAction) {
@@ -2220,6 +2294,17 @@ class PlayerViewModel @Inject constructor(
         if (!downloadsAllowed) {
             viewModelScope.launch {
                 _events.emit(PlayerEvent.Message("Keeping files for offline is switched off for this server"))
+            }
+            return
+        }
+        // Session 123: the same Wi-Fi-only gate the detail screen's Keep
+        // honours. A hundreds-of-megabytes download starting on mobile data
+        // because the viewer tapped Keep mid-playback is the expensive
+        // mistake the switch exists to prevent — the message says where the
+        // switch lives, so the tap is never left guessing.
+        if (DataSaver.wifiOnlyBlocks(wifiOnlyDownloads, connectivityProbe.current() == NetworkClass.WIFI)) {
+            viewModelScope.launch {
+                _events.emit(PlayerEvent.Message("Wi-Fi only is on — connect to Wi-Fi to download this title. You can change it in Settings."))
             }
             return
         }

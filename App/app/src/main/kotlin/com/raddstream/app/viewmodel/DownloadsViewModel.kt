@@ -204,7 +204,11 @@ class DownloadsViewModel @Inject constructor(
      * downloaded keep (READY/EXPIRING) whose title is in the watched set is
      * touched — a download still in flight is never deleted, and a series
      * keep never matches, because the watched set holds movie titles only.
-     * The notice names what went, so the deletion is never silent.
+     * Series episodes are deleted at the player instead, when the episode
+     * ends (`PlayerViewModel.maybeAutoDeleteWatchedEpisode`): there the
+     * identity is the episode's own cache key, so one watched episode can
+     * never delete the rest of the season. The notice names what went, so
+     * the deletion is never silent.
      */
     private fun sweepWatched(items: List<KeptItem>) {
         if (!autoDeleteWatched) return
