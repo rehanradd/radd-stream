@@ -27,6 +27,7 @@ import com.raddstream.app.player.AdSurface
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
+import com.raddstream.app.player.AutoplayCountdown
 import com.raddstream.app.player.BingePrefetchPlanner
 import com.raddstream.app.player.BingePreloadDecision
 import com.raddstream.app.player.CacheAffordance
@@ -206,6 +207,16 @@ class PlayerViewModel @Inject constructor(
      * "no break was granted", and the successor opens exactly as it did before this field existed.
      */
     private var pendingCrossEpisode: NextEpisodeAction.NextBundleRequest? = null
+
+    /**
+     * The autoplay-next countdown (Session 123, PL-1): the job ticking the ten
+     * seconds between an episode's end and the advance, and the action it will
+     * fire when it reaches zero. Cancelling the job is cancelling the advance —
+     * the viewer chose to stay — so every path that opens something else
+     * (a manual Next, a new bundle) clears both without firing.
+     */
+    private var autoplayCountdownJob: Job? = null
+    private var pendingAutoplayAction: NextEpisodeAction.NextBundleRequest? = null
 
     /** In-run resume memory; cross-launch persistence is a data-agent request (handoff). */
     private val resumeByTarget = HashMap<String, Long>()
@@ -516,6 +527,9 @@ class PlayerViewModel @Inject constructor(
     private fun observeStore() {
         viewModelScope.launch {
             store.bundle.collect { b ->
+                // A new bundle is a new episode: any countdown belonging to the
+                // ended one is dropped, never carried across.
+                clearAutoplayCountdown()
                 _ui.update { it.copy(bundle = b, activeRendition = store.activeRendition(), endedHasNextEpisode = false) }
                 armQualityChoices()
                 // A rung Auto moved to is the SAME episode in a different address, so the
@@ -1286,6 +1300,9 @@ class PlayerViewModel @Inject constructor(
 
     /** Manual "next episode" button — same event path as auto-advance at media end. */
     fun requestNextEpisode() {
+        // A manual Next while the countdown is running replaces it: the viewer
+        // already chose, so the held advance is dropped, never fired twice.
+        clearAutoplayCountdown()
         _ui.update { it.copy(endedHasNextEpisode = false) }
         val bundle = store.bundle.value
         val target = bundle?.target
@@ -2031,15 +2048,10 @@ class PlayerViewModel @Inject constructor(
                     _ui.update { it.copy(endedHasNextEpisode = true) }
                     return@launch
                 }
-                // The one placement raised without being asked: the file ended and a successor
-                // exists, which is the only moment the policy allows a break and the viewer was
-                // already about to be handed to the next episode. A refusal — cadence off, not due,
-                // no network to fill it — takes the held branch never and the advance runs now.
-                if (requestBetweenEpisodesBreak() != AdSlot.NONE) {
-                    pendingCrossEpisode = action
-                    return@launch
-                }
-                advanceCrossEpisode(action)
+                // Session 123 (PL-1): the episode no longer advances the instant it
+                // ends. The viewer gets ten seconds and a Cancel first — the ad
+                // decision and the advance both wait for the countdown to finish.
+                startAutoplayCountdown(action)
             }
 
             is NextEpisodeAction.CalibrationNeeded -> _ui.update {
@@ -2054,6 +2066,56 @@ class PlayerViewModel @Inject constructor(
 
             else -> Unit
         }
+    }
+
+    /**
+     * The autoplay-next countdown (Session 123, PL-1).
+     *
+     * The state is the pure [AutoplayCountdown] ticking once a second; the
+     * advance it fires is exactly the path that used to run the instant the
+     * episode ended — the between-episodes break decision, then the advance —
+     * only delayed by ten seconds. Cancelling the job (the viewer's Cancel, a
+     * manual Next, a new bundle, or the ViewModel dying) drops the held action
+     * without firing it: a countdown that never reaches zero advances nothing.
+     */
+    private fun startAutoplayCountdown(action: NextEpisodeAction.NextBundleRequest) {
+        clearAutoplayCountdown()
+        pendingAutoplayAction = action
+        autoplayCountdownJob = viewModelScope.launch {
+            var countdown = AutoplayCountdown.start()
+            while (true) {
+                _ui.update { it.copy(autoplayCountdownSeconds = countdown.secondsLeft) }
+                delay(1_000L)
+                countdown = countdown.tick() ?: break
+            }
+            _ui.update { it.copy(autoplayCountdownSeconds = null) }
+            val held = pendingAutoplayAction
+            pendingAutoplayAction = null
+            if (held == null) return@launch
+            // The one placement raised without being asked: the file ended and a successor
+            // exists, which is the only moment the policy allows a break and the viewer was
+            // already about to be handed to the next episode. A refusal — cadence off, not due,
+            // no network to fill it — takes the held branch never and the advance runs now.
+            if (requestBetweenEpisodesBreak() != AdSlot.NONE) {
+                pendingCrossEpisode = held
+                return@launch
+            }
+            advanceCrossEpisode(held)
+        }
+    }
+
+    /** The countdown's Cancel: stay on the ended episode and offer the buttons instead. */
+    fun cancelAutoplayCountdown() {
+        clearAutoplayCountdown()
+        _ui.update { it.copy(autoplayCountdownSeconds = null, endedHasNextEpisode = true) }
+    }
+
+    /** Drops the countdown and its held action without firing either. */
+    private fun clearAutoplayCountdown() {
+        autoplayCountdownJob?.cancel()
+        autoplayCountdownJob = null
+        pendingAutoplayAction = null
+        _ui.update { it.copy(autoplayCountdownSeconds = null) }
     }
 
     /**

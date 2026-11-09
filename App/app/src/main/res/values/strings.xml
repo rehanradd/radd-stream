@@ -93,6 +93,7 @@
     <string name="player_episode_number">Episode number</string>
     <string name="player_mark_position">Mark current position</string>
     <string name="player_cancel">Cancel</string>
+    <string name="player_autoplay_countdown">Next episode in %1$d s</string>
     <string name="player_play_from_title">Play from</string>
     <string name="player_play_from_hint">mm:ss or h:mm:ss</string>
     <string name="player_go">Go</string>

@@ -17,6 +17,25 @@ package com.raddstream.app.player
 fun shouldAutoAdvance(autoplayNext: Boolean, action: NextEpisodeAction): Boolean =
     autoplayNext && action is NextEpisodeAction.NextBundleRequest
 
+/** Seconds of warning before an auto-advance fires: long enough to read and cancel, short enough not to stall a binge. */
+const val AUTOPLAY_COUNTDOWN_SECONDS = 10
+
+/**
+ * One autoplay-next countdown, as pure state: the seconds left, and the tick
+ * that moves it. [tick] returns null at zero — the moment the advance fires —
+ * so the caller never has to compare against a magic number, and a JVM test
+ * can run the whole countdown without a clock. A cancelled countdown is
+ * simply dropped, never ticked.
+ */
+data class AutoplayCountdown(val secondsLeft: Int) {
+    fun tick(): AutoplayCountdown? =
+        if (secondsLeft > 1) copy(secondsLeft = secondsLeft - 1) else null
+
+    companion object {
+        fun start(): AutoplayCountdown = AutoplayCountdown(AUTOPLAY_COUNTDOWN_SECONDS)
+    }
+}
+
 /**
  * The rung playback starts on, and whether Auto may still move it.
  *

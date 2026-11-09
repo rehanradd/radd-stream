@@ -598,12 +598,23 @@ private fun PlayerScreenContent(
         }
 
         if (state.isEnded && controlsVisible && !state.locked && !state.pureCinema) {
-            EndedButtons(
-                chrome,
-                showNextEpisode = state.endedHasNextEpisode,
-                onPlayAgain = { vm.playFrom(0) },
-                onNextEpisode = { vm.requestNextEpisode() },
-            )
+            // Session 123 (PL-1): while the countdown runs the ended overlay is
+            // the countdown, not the buttons — one clear action, Cancel.
+            val countdown = state.autoplayCountdownSeconds
+            if (countdown != null) {
+                AutoplayCountdownCard(
+                    chrome,
+                    secondsLeft = countdown,
+                    onCancel = { vm.cancelAutoplayCountdown() },
+                )
+            } else {
+                EndedButtons(
+                    chrome,
+                    showNextEpisode = state.endedHasNextEpisode,
+                    onPlayAgain = { vm.playFrom(0) },
+                    onNextEpisode = { vm.requestNextEpisode() },
+                )
+            }
         }
 
         // 7 — dialogs & sheets (VM-flag driven so every entry point is centralized)
@@ -1744,6 +1755,40 @@ private fun EndedButtons(chrome: PlayerChromeTheme, showNextEpisode: Boolean, on
                         Text(stringResource(R.string.player_next_episode), color = Color.White, fontSize = brandSp(14))
                     }
                 }
+            }
+        }
+    }
+}
+
+/**
+ * The autoplay-next countdown (Session 123, PL-1): what the viewer sees for
+ * the ten seconds between an episode's end and the advance. One line stating
+ * the wait, one Cancel that stops it — the same card language as the ended
+ * buttons, so it reads as part of the player, not a popup.
+ */
+@Composable
+private fun AutoplayCountdownCard(chrome: PlayerChromeTheme, secondsLeft: Int, onCancel: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Surface(
+                color = chrome.card,
+                shape = MaterialTheme.shapes.medium,
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(Icons.Default.SkipNext, null, tint = Color.White)
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        stringResource(R.string.player_autoplay_countdown, secondsLeft),
+                        color = Color.White,
+                        fontSize = brandSp(14),
+                    )
+                }
+            }
+            TextButton(onClick = onCancel) {
+                Text(stringResource(R.string.player_cancel), color = Color.White, fontSize = brandSp(14))
             }
         }
     }

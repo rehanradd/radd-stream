@@ -194,6 +194,13 @@ data class PlayerUiState(
     val isEnded: Boolean = false,
     /** The ended episode has a numbered successor and autoplay-next is off: the ended overlay offers the Next Episode button instead of advancing. */
     val endedHasNextEpisode: Boolean = false,
+    /**
+     * The autoplay-next countdown, in seconds — null when no countdown is
+     * running. Session 123 (PL-1): an episode no longer advances the instant
+     * it ends; the viewer gets ten seconds and a Cancel first. While this is
+     * non-null the ended overlay shows the countdown, not the buttons.
+     */
+    val autoplayCountdownSeconds: Int? = null,
     /** The A-B repeat segment (plan §5 step 14): the playhead loops back to A when it reaches B. Empty = no segment. */
     val abRepeat: AbRepeat = AbRepeat(),
     val positionMs: Long = 0,
