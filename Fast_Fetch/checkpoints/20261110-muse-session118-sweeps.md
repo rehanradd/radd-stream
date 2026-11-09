@@ -15,10 +15,11 @@ base main `399f747`.
 - **HarPal Geo** homepage: 200, 321 KB, **11 programs** via the real
   extractor (Session 118's "31" was the raw `/program/` href count incl.
   episode links — corrected in the importer docstring). NEW surface:
-  `/programs` is a **12-page index** (`/programs`, `/programs/2`, …;
-  `?page=N` returns page 1 again): page 1 = 24 programs, page 2 = 25
-  (18 new), page 12 = 25 (18 new); union across pages 1, 2, 12 alone is
-  **60 programs**. Estimated total ~200+ programs, not 11.
+  `/programs` is a **30-page index** (`/programs`, `/programs/2`, …;
+  `?page=N` returns page 1 again): page 1 = 24 programs, ~18 new per
+  page through page 29, page 30 adds 0 (dedup-stop fired); **509
+  programs total**, not 11. The pager's link window only shows up to
+  page 12 — the loop, not the pager, finds the end.
 - **MoviesDrive** `new1.moviesdrive.cyou` wp-json: **302 → new2**
   (`https://new2.moviesdrive.cyou/wp-json/wp/v2/posts`, query string
   dropped by the redirect). Followed: 200, `X-WP-Total: 9658`,
@@ -37,7 +38,7 @@ base main `399f747`.
 - `import_harpalgeo.py`: `sync_programs_to_db` now walks the homepage
   AND `/programs` pages 1..N with a dedup-stop (first page adding no new
   program, or non-200; cap `PROGRAMS_INDEX_MAX_PAGES = 50`). The
-  homepage-only sync was missing ~90% of the catalog.
+  homepage-only sync was missing ~98% of the catalog (11 of 509).
   `test_harpalgeo_import.py`: +1 test (homepage + /programs union,
   dedup-stop at `/programs/2`, 3 fetches) — 10 → **11 OK**.
 
@@ -52,8 +53,9 @@ base main `399f747`.
 MoviesDrive's sync had already walked the full wp-json list (9,648 posts
 then; 9,658 now) — the sweep is the detail scrape of the 9,638 pending.
 MovieNestBD's 16 pending are letter-"a" leftovers (sync capped at
-`--limit 20` in the first batch). HarPal's 6 pending are the homepage
-programs not yet scraped; the /programs index adds ~190 more.
+`--limit 20` in the first batch). HarPal's re-sync (new /programs walk)
+discovered **509 programs total, 504 pending** — the /programs index,
+not the homepage, is the real catalog.
 
 ## 4. Launch (detached on the VM, from the branch worktree)
 
@@ -73,6 +75,15 @@ Rates are modest on purpose (small sites, one page at a time on the
 syncs). Load at launch ~0.2; the parent's gate deploy (live tree
 399f747, service+panel restart) was in flight at the same time — the
 sweeps touch neither the live tree nor the service.
+
+Launched 00:38–00:39 PKT: MovieNestBD chain PID 1408837, HarPal
+1410253, MoviesDrive 1410254. First HarPal/MoviesDrive launch failed
+instantly: `cd DIR && nohup ... &` backgrounds the `cd` too, so those
+two chains ran in /home/ubuntu (`can't open file`); relaunched with
+absolute script paths + `</dev/null`. MovieNestBD was unaffected
+(sync running, PID 1408841). HarPal sync finished in ~20 s: 509
+programs, dedup-stop at page 30. MoviesDrive sync walking 97 wp-json
+pages on new2 (page 20/97 at +20 s).
 
 ## 5. Tests (this tree, CI way, before push)
 

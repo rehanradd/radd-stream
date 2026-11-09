@@ -17,7 +17,7 @@ MEASURED LIVE FROM THE ORACLE VM, 2026-11-09 (Session 118):
   * /sitemap.xml 307s away — there is no sitemap; the catalog surface is the
     homepage program list + each program page's episode list. The homepage
     lists only the 11 current programs; the fuller catalog is the /programs
-    index (12 pages, ~24-25 per page, ~18 new per page, ~200+ total —
+    index (30 pages, ~24-25 per page, ~18 new per page, 509 programs —
     measured 2026-11-10, Session 118 sweeps). Pages are /programs,
     /programs/2, ... — ?page=N returns page 1 again.
   * Teaser pages exist alongside full episodes ("Episode 26 Teaser - 7th
