@@ -56,4 +56,24 @@ class ResumeSeedTest {
     fun `nothing remembered means the load starts where it always did`() {
         assertNull(ResumeSeed.seedFor(null, null, null, null))
     }
+
+    @Test
+    fun `a newer remembered position re-seeds an already seeded one`() {
+        // Session 126 (audit bug d): the viewer watched further elsewhere, so the
+        // freshest row beats the seeded position.
+        assertEquals(300_000L, ResumeSeed.newerSeed(120_000L, 300_000L, 240_000L))
+        assertEquals(480_000L, ResumeSeed.newerSeed(120_000L, null, 480_000L))
+    }
+
+    @Test
+    fun `an older or equal remembered position never moves the seed back`() {
+        assertNull(ResumeSeed.newerSeed(300_000L, 120_000L, 240_000L))
+        assertNull(ResumeSeed.newerSeed(300_000L, 300_000L, null))
+        assertNull(ResumeSeed.newerSeed(300_000L, null, null))
+    }
+
+    @Test
+    fun `no seeded position takes the freshest row`() {
+        assertEquals(300_000L, ResumeSeed.newerSeed(null, 300_000L, 240_000L))
+    }
 }

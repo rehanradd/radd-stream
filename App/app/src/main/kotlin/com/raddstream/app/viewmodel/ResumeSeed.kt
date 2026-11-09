@@ -33,4 +33,20 @@ object ResumeSeed {
         inProcessMs != null -> null
         else -> syncedMs ?: localHistoryMs
     }
+
+    /**
+     * Session 126 (audit bug d): the same handle re-opened after the viewer watched
+     * further on another device must re-seed to the NEWER position — the old code
+     * bailed out whenever a row already existed in `resumeByTarget`, so a position
+     * that changed elsewhere was silently ignored. This answers the question the
+     * bail-out used to answer with "nothing": given the position already seeded
+     * ([existingMs]) and the freshest rows known ([syncedMs], [localHistoryMs]),
+     * return the later position when it is strictly later than what is seeded, else
+     * null. The seedFor rule is preserved — a remembered row never wins over a
+     * position this process measured; this only decides between remembered rows.
+     */
+    fun newerSeed(existingMs: Long?, syncedMs: Long?, localHistoryMs: Long?): Long? {
+        val freshest = listOfNotNull(syncedMs, localHistoryMs).maxOrNull() ?: return null
+        return if (existingMs == null || freshest > existingMs) freshest else null
+    }
 }

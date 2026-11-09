@@ -29,11 +29,13 @@ class AdaptiveQualityTest {
     }
 
     @Test
-    fun `cold auto pick returns the first playable band`() {
+    fun `cold auto pick starts at the lowest band, not the top`() {
+        // Session 126 start-low: with no measurement yet the player must not open on the
+        // top rung and stall the first frame — it starts cheapest and steps up on evidence.
         val aq = AdaptiveQualitySwitcher()
         assertEquals(0L, aq.estimateBps)
-        assertEquals(ladder.first(), aq.pickBand(ladder, null, auto = true))
-        assertEquals("2160p", aq.pickBand(ladder, null, auto = true))
+        assertEquals("sd", aq.pickBand(ladder, null, auto = true))
+        assertEquals("sd", aq.pickBand(ladder, null, auto = true))
     }
 
     @Test
@@ -129,6 +131,7 @@ class AdaptiveQualityTest {
         aq.reset()
         assertEquals(0L, aq.estimateBps)
         assertEquals(0, aq.acceptedSampleCount)
-        assertEquals(ladder.first(), aq.pickBand(ladder, null, auto = true))
+        // Session 126 start-low: a reset title opens on the cheapest rung again.
+        assertEquals("sd", aq.pickBand(ladder, null, auto = true))
     }
 }

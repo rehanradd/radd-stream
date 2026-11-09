@@ -100,9 +100,13 @@ class AdaptiveQualitySwitcher(
      *
      *  - empty ladder -> null (nothing to pick; the caller must not crash the overlay);
      *  - [auto] false -> [current] is returned untouched: a manual choice outranks any estimate;
-     *  - no samples yet -> the first listed (highest offered) band: the ladder is ordered by
-     *    what the server believes is best, and the hysteresis below protects the viewer from a
-     *    rung the network cannot feed within a few confirmed samples;
+     *  - no samples yet -> the LOWEST offered band (Session 126, start-low): every player
+     *    that starts at the top rung pays a buffering stall the viewer sees before the first
+     *    frame, and the research is blunt — users quit after ~3.5 s of start and each extra
+     *    second costs 3–5% retention. The ladder is ordered by what the server believes is
+     *    best, but "best" is not "fastest to start"; the step-up below climbs within seconds
+     *    once the estimate proves the network can feed a higher rung, so the viewer trades
+     *    one brief low-rung start for a first frame that actually arrives;
      *  - otherwise the band may step UP immediately when the estimate clears a higher rung's
      *    nominal bitrate by [stepUpMargin], or step DOWN only after [stepDownConfirmSamples]
      *    consecutive samples under [stepDownMargin]; anything in between keeps [current], which
@@ -116,7 +120,11 @@ class AdaptiveQualitySwitcher(
         if (bands.isEmpty()) return null
         val validCurrent = current?.takeIf { bands.contains(it) }
         if (!auto || estimate <= 0.0) {
-            val chosen = validCurrent ?: bands.first()
+            // Start-low (Session 126): with no measurement yet, hold the current rung if
+            // there is one, else take the cheapest rung on the ladder — never the top.
+            // `bands` is server order, best first, so the lowest is the last by nominal
+            // bitrate; the step-up path below climbs once samples prove the network.
+            val chosen = validCurrent ?: bands.minByOrNull { nominalBitrateFor(it) }!!
             adopt(chosen)
             return chosen
         }

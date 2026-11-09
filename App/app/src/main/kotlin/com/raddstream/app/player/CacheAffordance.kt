@@ -47,6 +47,24 @@ object CacheAffordance {
     fun remaining(savedBytes: Long, totalBytes: Long?): Long? =
         totalBytes?.let { (it - savedBytes).coerceAtLeast(0) }
 
+    /**
+     * SC.7: the living progress of a Keep, 0..1 — the ring drawn on the poster while
+     * the copy runs. Null when the total size is unknown: the UI then shows saved
+     * bytes only and never a 0% ring, because "Keeping 0 B of 3.05 GB" (Session 120)
+     * was a lie the player told about a copy that had not started, and a ring at 0%
+     * is the same lie in a circle. Only [KeepUiState.Keeping] has a ring — a
+     * Watching preview's buffered fraction is a different number (how much of the
+     * stream is buffered, not how much of the file is kept) and must not wear one.
+     */
+    fun keepingProgress(state: KeepUiState): Float? =
+        if (state is KeepUiState.Keeping) {
+            state.totalBytes?.takeIf { it > 0 }?.let {
+                (state.savedBytes.toFloat() / it.toFloat()).coerceIn(0f, 1f)
+            }
+        } else {
+            null
+        }
+
     /** Map engine snapshot (+ nothing else) into UI state. */
     fun uiStateFor(snapshot: CacheSnapshot?, keepRequested: Boolean): KeepUiState {
         if (snapshot == null) {

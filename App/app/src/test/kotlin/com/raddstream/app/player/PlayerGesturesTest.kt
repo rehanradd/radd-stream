@@ -172,4 +172,19 @@ class PlayerGesturesTest {
         assertEquals(1.75f, GestureMapper.clampedSpeed(1.75f), 0f)
         assertTrue(GestureMapper.SPEED_PRESETS.first() == 0.25f && GestureMapper.SPEED_PRESETS.last() == 4.0f)
     }
+
+    @Test
+    fun `the brightness drag starts where the screen already is`() {
+        // PL-9: a viewer at 20% must not feel the brightness jump to 50% on first touch.
+        assertEquals(0.2f, initialBrightnessBase(0.2f, 0.9f), 0f)
+        assertEquals(0.9f, initialBrightnessBase(-1f, 0.9f), 0f)
+        assertEquals(0.5f, initialBrightnessBase(-1f, null), 0f)
+        assertEquals(0.5f, initialBrightnessBase(-1f, Float.NaN), 0f)
+    }
+
+    @Test
+    fun `an out-of-range brightness reading is clamped, not trusted`() {
+        assertEquals(1f, initialBrightnessBase(1.4f, null), 0f)
+        assertEquals(0f, initialBrightnessBase(-1f, -0.3f), 0f)
+    }
 }

@@ -188,6 +188,10 @@ class AutoQualityDirector(
     @Volatile
     private var auto: Boolean = false
 
+    /** The phone's thermal state, set by the service's PowerManager listener (API 29+). */
+    @Volatile
+    var thermalStatus: ThermalStatus = ThermalStatus.NONE
+
     @Volatile
     private var band: String? = null
 
@@ -210,7 +214,17 @@ class AutoQualityDirector(
         switcher.reset()
         this.rungs = rungs.filter { it.usable }.distinctBy { it.band }
         this.auto = auto
-        this.band = startBand?.takeIf { rungFor(it) != null } ?: this.rungs.firstOrNull()?.band
+        // Start-low (Session 126): when Auto is on, the director arms on the cheapest
+        // rung, not the requested start band — the first frame matters more than the
+        // first rung, and the step-up climbs once samples prove the network. A manual
+        // choice keeps its band exactly: the user asked for it.
+        this.band = if (auto) {
+            this.rungs.minByOrNull { AdaptiveQualitySwitcher.nominalBitrateFor(it.band) }?.band
+                ?: startBand?.takeIf { rungFor(it) != null }
+                ?: this.rungs.firstOrNull()?.band
+        } else {
+            startBand?.takeIf { rungFor(it) != null } ?: this.rungs.firstOrNull()?.band
+        }
     }
 
     /** Disabled unless Auto is on and the ladder can actually move (two rungs minimum). */
@@ -222,12 +236,24 @@ class AutoQualityDirector(
     /**
      * Which rung Auto wants now, updating [currentBand] to the answer. Null when nothing
      * is armed. Calling this repeatedly is safe: the switcher's hysteresis keeps returning
-     * the current rung inside the dead zone, which is what stops oscillation.
+     * the current rung inside the dead zone, which is what stops oscillation. The thermal
+     * cap (Session 126) is applied after the pick, and only to a CLIMB: a hot phone never
+     * climbs to a rung it cannot sustain, but the cap never forces a step down on its own
+     * — a downgrade is the switcher's decision, on measured throughput, so playback is
+     * never yanked down the moment the phone gets warm.
      */
     fun targetBand(): String? {
         if (!isEnabled()) return band
-        val next = switcher.pickBand(rungs.map { it.band }, band, true)
-        if (next != null) band = next
+        val next = switcher.pickBand(rungs.map { it.band }, band, true) ?: return band
+        val current = band
+        val capped = if (current == null ||
+            AdaptiveQualitySwitcher.nominalBitrateFor(next) > AdaptiveQualitySwitcher.nominalBitrateFor(current)
+        ) {
+            ThermalCap.apply(next, ThermalCap.maxBandFor(thermalStatus))
+        } else {
+            next
+        }
+        band = capped
         return band
     }
 
@@ -249,6 +275,43 @@ class AutoQualityDirector(
     /** Forget the throughput picture; call when a new media item starts. */
     fun reset() {
         switcher.reset()
+    }
+}
+
+/**
+ * Thermal states, mirroring `PowerManager`'s thermal-status values without importing
+ * Android — the policy stays JVM-testable and the service translates the platform
+ * constant into one of these. Only the two hot states cap the ladder: a warm phone
+ * (LIGHT) is not a reason to drop quality, and the cap is a ceiling on climbs, never
+ * a forced step down.
+ */
+enum class ThermalStatus { NONE, LIGHT, MODERATE, SEVERE, CRITICAL }
+
+/**
+ * Thermal-aware ABR cap (Session 126, research item 15 — low-end tuning). A phone that
+ * is already throttling should not be asked to decode 2160p: the cap holds Auto at
+ * 720p while MODERATE and 480p while SEVERE or CRITICAL, and lifts again when the phone
+ * cools. The cap is applied in [AutoQualityDirector.targetBand] after the pick, so it
+ * never disturbs the switcher's hysteresis — it only refuses a climb the phone cannot
+ * sustain, and a manual band is untouched (the user asked for it).
+ */
+object ThermalCap {
+
+    /** The highest band Auto may climb to at this status, or null when uncapped. */
+    fun maxBandFor(status: ThermalStatus): String? = when (status) {
+        ThermalStatus.SEVERE, ThermalStatus.CRITICAL -> "480p"
+        ThermalStatus.MODERATE -> "720p"
+        else -> null
+    }
+
+    /** The lower of [band] and [cap] by nominal bitrate; [band] untouched when uncapped. */
+    fun apply(band: String, cap: String?): String {
+        if (cap == null) return band
+        return if (AdaptiveQualitySwitcher.nominalBitrateFor(band) <= AdaptiveQualitySwitcher.nominalBitrateFor(cap)) {
+            band
+        } else {
+            cap
+        }
     }
 }
 

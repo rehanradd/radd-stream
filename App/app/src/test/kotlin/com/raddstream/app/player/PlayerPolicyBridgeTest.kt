@@ -159,7 +159,9 @@ class PlayerPolicyBridgeTest {
             "720p",
             auto = true,
         )
-        assertEquals("720p", director.currentBand)
+        // Session 126 start-low: Auto arms on the cheapest usable rung (480p), not the
+        // requested start band — the dropped-rung assertion below is the point of the test.
+        assertEquals("480p", director.currentBand)
         assertTrue(director.isEnabled())
         assertNull(director.handleFor("1080p"))
         assertEquals("h-480", director.handleFor("480p"))
@@ -169,6 +171,10 @@ class PlayerPolicyBridgeTest {
     fun `a sustained slow link steps the rung down after confirmation`() {
         val director = AutoQualityDirector()
         director.configure(fiveRungs, "1080p", auto = true)
+        // Session 126 start-low arms on "sd"; the service corrects the director to the
+        // rung actually playing (markPlaying), and only then does the slow chain matter.
+        director.markPlaying("1080p")
+        assertEquals("1080p", director.currentBand)
         // 100 KB in 1 s = 800 kbps: cannot feed 1080p's 6 Mbps rung at all.
         director.push(100_000L, 1_000L)
         assertEquals("1080p", director.targetBand())
@@ -213,7 +219,33 @@ class PlayerPolicyBridgeTest {
         director.configure(fiveRungs, "2160p", auto = true)
         assertEquals(0L, director.estimateBps)
         assertEquals(0, director.sampleCount)
-        assertEquals("2160p", director.currentBand)
+        // Session 126 start-low: Auto arms on the cheapest rung, not the requested band.
+        assertEquals("sd", director.currentBand)
+    }
+
+    @Test
+    fun `a hot phone never climbs past the thermal cap`() {
+        val director = AutoQualityDirector()
+        director.configure(fiveRungs, "720p", auto = true)
+        assertEquals("sd", director.currentBand)
+        director.push(4_000_000L, 1_000L) // 32 Mbps — fast enough for the top rung.
+        director.thermalStatus = ThermalStatus.SEVERE
+        assertEquals("480p", director.targetBand())
+        director.thermalStatus = ThermalStatus.MODERATE
+        assertEquals("720p", director.targetBand())
+        director.thermalStatus = ThermalStatus.NONE
+        assertEquals("1080p", director.targetBand())
+    }
+
+    @Test
+    fun `the thermal cap never forces a step down on its own`() {
+        val director = AutoQualityDirector()
+        director.configure(fiveRungs, "720p", auto = true)
+        director.markPlaying("1080p")
+        director.thermalStatus = ThermalStatus.SEVERE
+        // No samples yet: the pick holds the current rung, and the cap only refuses a
+        // climb — playback stays on 1080p until the switcher itself steps down.
+        assertEquals("1080p", director.targetBand())
     }
 
     // ── audio boost: the 0..1 contract and the honest caption ──────────────────

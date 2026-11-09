@@ -72,6 +72,24 @@ fun tapZone(x: Float, widthPx: Float): ScreenZone {
     }
 }
 
+/**
+ * PL-9: the brightness drag's starting point. The old code assumed 0.5f on first use,
+ * so a viewer whose screen was already at 20% (or 90%) felt the brightness JUMP the
+ * moment they touched the left half. The drag must start where the screen already is:
+ * the window's own `screenBrightness` first (what the player last set, -1f when the
+ * window never set one), then the system brightness in 0..1 (Settings.System
+ * SCREEN_BRIGHTNESS / 255), and only when neither answers does the drag fall back to
+ * the middle. Both inputs are clamped — a driver that reports out of range must not
+ * hand the drag a base it cannot hold.
+ */
+fun initialBrightnessBase(windowBrightness: Float, systemBrightness01: Float?): Float =
+    when {
+        windowBrightness >= 0f -> windowBrightness.coerceIn(0f, 1f)
+        systemBrightness01 != null && systemBrightness01.isFinite() ->
+            systemBrightness01.coerceIn(0f, 1f)
+        else -> 0.5f
+    }
+
 /** Which half of the width a vertical-drag point falls in (LEFT=brightness, RIGHT=volume). */
 fun dragHalfZone(x: Float, widthPx: Float): ScreenZone =
     if (x < widthPx / 2f) ScreenZone.LEFT else ScreenZone.RIGHT
