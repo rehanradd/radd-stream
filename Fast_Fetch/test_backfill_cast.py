@@ -89,6 +89,46 @@ class BackfillCastTests(unittest.TestCase):
         self.assertEqual(self.cast_of(1), "Shah Rukh Khan, Kajol")
         self.assertIsNone(self.cast_of(2))
 
+    def test_source_url_column_is_read(self):
+        """Session 124: mp4moviez names its page column `source_url`, not
+        `post_url`/`url` — the 11:30 backfill crashed on it with
+        "no such column: url" and its 29,848 cast rows were never filled.
+        No `site` column either, so the site defaults to the db stem."""
+        with sqlite3.connect(self.target) as conn:
+            conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year,"
+                " content_type, canonical_key) VALUES"
+                " ('https://mp4.example/m1/', 'm1', 'Mp4 Film (2024)',"
+                "  'Mp4 Film', 2024, 'movie', 'mp4-film_2024')")
+            conn.execute(
+                "INSERT INTO post_sources (post_id, source_site, url) VALUES"
+                " (4, 'mp4moviez', 'https://mp4.example/m1/')")
+        staging = self.dir / "mp4moviez.db"
+        with sqlite3.connect(staging) as conn:
+            conn.execute(
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY,"
+                " source_url TEXT, cast_names TEXT)")
+            conn.execute(
+                "INSERT INTO posts VALUES"
+                " (1, 'https://mp4.example/m1/', 'Mp4 Actor')")
+        stats = bc.backfill(self.target, self.dir, apply=True)
+        self.assertEqual(self.cast_of(4), "Mp4 Actor")
+        self.assertEqual(stats["sites"]["mp4moviez"]["filled"], 1)
+
+    def test_no_url_column_raises(self):
+        """A staging table with cast but no page-url column at all fails
+        loudly with the columns named, instead of crashing on a missing
+        `url` or silently skipping the database."""
+        staging = self.dir / "nourl.db"
+        with sqlite3.connect(staging) as conn:
+            conn.execute(
+                "CREATE TABLE posts (id INTEGER PRIMARY KEY,"
+                " cast_names TEXT, link TEXT)")
+            conn.execute("INSERT INTO posts VALUES (1, 'Someone', 'x')")
+        with sqlite3.connect(staging) as src:
+            with self.assertRaises(ValueError):
+                bc.cast_rows(src, "nourl")
+
 
 if __name__ == "__main__":
     unittest.main()

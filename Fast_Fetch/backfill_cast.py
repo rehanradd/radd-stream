@@ -56,12 +56,20 @@ def staging_dbs(staging_dir: Path, target: Path) -> list:
 def cast_rows(conn: sqlite3.Connection, default_site: str) -> list:
     """`(url, site, cast_names)` for every staging post that carries a cast
     list, in row order — first row wins per catalog post. The URL column is
-    `post_url` on the importers that name it that way, `url` on the rest; the
-    site is the row's own when it has one, else the database's."""
+    `post_url` on the importers that name it that way, `url` on most others,
+    `source_url` on mp4moviez; the site is the row's own when it has one,
+    else the database's. A staging table with none of the three URL columns
+    cannot be joined to the catalog, so it fails loudly instead of being
+    silently skipped."""
     cols = _columns(conn, "posts")
     if "cast_names" not in cols:
         return []
-    url_col = "post_url" if "post_url" in cols else "url"
+    url_col = next((c for c in ("post_url", "url", "source_url")
+                    if c in cols), None)
+    if url_col is None:
+        raise ValueError(
+            "staging posts has no page-url column (looked for post_url,"
+            " url, source_url); columns are: %s" % sorted(cols))
     site_col = "site" if "site" in cols else (
         "source_site" if "source_site" in cols else None)
     site_sql = f", {site_col}" if site_col else ""
