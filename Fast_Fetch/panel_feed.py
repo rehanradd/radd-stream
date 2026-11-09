@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 import redact
+import db_pragmas  # serve-path SQLite pragmas (Session 125)
 
 try:
     from config import PANEL_DB_PATH
@@ -72,6 +73,13 @@ def _open_panel(panel_path=None):
             return None
         conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
         conn.row_factory = sqlite3.Row
+        # Session 125: serve-path pragmas (read-only handle — the helper
+        # guards journal_mode). Inside the try so a pragma failure still
+        # answers None, the fail-quiet contract of this module. The
+        # busy_timeout stays 5000 ms — this handle's live value (sqlite's
+        # default): the panel database is neither the catalog nor the
+        # user-state DB, and no rule in this batch re-times it.
+        db_pragmas.apply_serve_pragmas(conn, busy_timeout_ms=5000)
         return conn
     except sqlite3.Error:
         return None

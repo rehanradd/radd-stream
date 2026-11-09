@@ -5,6 +5,22 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-09 — Muse [MUSE-SESSION125-SCALE-QUICK-WINS]: scale quick
+  wins A1/A2/A6 — reconcile build after a collision (a self-check worker
+  built the same pragmas inline `-131072` in the same clone, then reverted
+  all of it): centralized helper `db_pragmas.py` wins, `cache_size -65536`
+  (64 in-flight x 64 MiB = 4 GiB worst-case cap, not the note's -131072 =
+  8 GiB), wired into every serve path (viewer/api_v2/admin_panel 30000 ms,
+  user-state 5000 ms, catalog oracle 30000 ms, panel-feed 5000 ms, six
+  redact sites); search limit clamped 1–100 in-function, by-media already
+  50 internally, 10 s deadline → 503 `search_timeout` (a raise inside the
+  progress handler is swallowed by sqlite3 — the handler returns 1);
+  nginx artifact `~/workspace/nginx125-changes.py` done (suggest 60 s, art
+  302 at 600 s not a day, cache max_size 500m not 2g — disk 2.6G free,
+  worker_connections 4096, upstream keepalive 32); new `test_scale_pragmas.py`
+  20/20, gate 65 steps; not done: push + CI + merge + gate-deploy (nginx
+  artifact still to apply on the VM) — [20261109-muse-session125-scale-quick-wins.md](20261109-muse-session125-scale-quick-wins.md)
+
 - 2026-11-09 — Muse [MUSE-SESSION124-BACKFILL-SOURCE-URL]: `backfill_cast.py`
   reads a third page-URL column, `source_url` — the Session 123 backfill crashed
   on `mp4moviez.db` with "no such column: url" and its 29,848 cast rows (biggest

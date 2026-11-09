@@ -229,6 +229,13 @@ jobs:
       - name: 🧪 test_fts_search.py
         run: python3 -S Fast_Fetch/test_fts_search.py
 
+      # Scale quick wins (Session 125): the serve-path pragmas in one
+      # helper + every call site applying them, the search limit clamp,
+      # the 10 s search deadline and the 503 `search_timeout` branch.
+      # Offline, stdlib, tempfile fixtures; loopback only for the 503 proof.
+      - name: 🧪 test_scale_pragmas.py
+        run: python3 -S Fast_Fetch/test_scale_pragmas.py
+
       - name: 🧪 test_site_scout.py
         run: python3 -S Fast_Fetch/test_site_scout.py
 

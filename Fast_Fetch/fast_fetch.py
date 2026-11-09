@@ -37,6 +37,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import db_pragmas  # serve-path SQLite pragmas (Session 125); stdlib-only
+
 # Ensure UTF-8 output on Windows consoles
 if sys.platform.startswith("win"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1162,9 +1164,16 @@ def get_db(db_path: Path | None = None):
     conn = sqlite3.connect(db_path, timeout=30.0)
     conn.row_factory = sqlite3.Row
     try:
-        conn.execute("PRAGMA journal_mode = WAL")
-        conn.execute("PRAGMA busy_timeout = 30000")
-        conn.execute("PRAGMA foreign_keys = ON")
+        # Session 125: one helper for every serve-path pragma (WAL,
+        # busy_timeout 30000 — the live value, kept — foreign keys, plus
+        # cache_size / mmap_size / temp_store / synchronous /
+        # wal_autocheckpoint). See db_pragmas.py for the values and why.
+        # cache_size is -65536 (64 MiB), not the build note's -131072
+        # (128 MiB): the server is ThreadingMixIn — one thread per
+        # connection, unbounded — and nginx limit_conn bounds connections
+        # per IP, not globally, so 128 MiB x an unbounded thread count
+        # was unbounded memory. See db_pragmas.py for the count.
+        db_pragmas.apply_serve_pragmas(conn)
         yield conn
         conn.commit()
     except Exception:

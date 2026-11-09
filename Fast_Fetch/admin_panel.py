@@ -139,6 +139,7 @@ from pathlib import Path
 import accounts
 import catalog_v2
 import config
+import db_pragmas  # serve-path SQLite pragmas (Session 125)
 import engagement
 import payments
 import redact
@@ -267,6 +268,9 @@ def _session(db_path):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     try:
+        # Session 125: serve-path pragmas via the shared helper (same
+        # values as viewer.get_db / fast_fetch.get_db).
+        db_pragmas.apply_serve_pragmas(conn)
         yield conn
         conn.commit()
     except Exception:

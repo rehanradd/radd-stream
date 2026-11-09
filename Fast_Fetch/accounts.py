@@ -177,6 +177,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+import db_pragmas  # serve-path SQLite pragmas (Session 125)
+
 BASE_DIR = Path(__file__).parent.resolve()
 
 #: Bumped only when the shape of the state changes incompatibly; additive columns
@@ -489,16 +491,13 @@ def default_db_path() -> Path:
 
 
 def _prepare(conn: sqlite3.Connection, busy_timeout_ms: int) -> None:
-    conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
-    # WAL: this table is read on every browse request and written when someone
-    # hearts a title; without it a writer and a reader serialize on one CPU.
-    # `foreign_keys` is PER-CONNECTION and must be set here, or the cascade delete
-    # on an account quietly does nothing and orphan rows accumulate forever.
-    try:
-        conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.Error:
-        pass
-    conn.execute("PRAGMA foreign_keys = ON")
+    # Session 125: the serve-path pragmas live in one helper now — WAL,
+    # foreign keys (per-connection; without them the cascade delete on an
+    # account quietly does nothing and orphan rows accumulate), cache,
+    # mmap, temp_store, synchronous, wal_autocheckpoint. The user-state
+    # busy_timeout stays at the caller's value (5000 ms default), NOT the
+    # catalog's 30000.
+    db_pragmas.apply_serve_pragmas(conn, busy_timeout_ms=busy_timeout_ms)
 
 
 def connect(db_path=None, *, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,
@@ -1785,7 +1784,12 @@ def _open_catalog_read_only(path) -> sqlite3.Connection:
     conn = sqlite3.connect(f"file:{text}?mode=ro", uri=True,
                            timeout=DEFAULT_BUSY_TIMEOUT_MS / 1000.0)
     conn.row_factory = sqlite3.Row
-    conn.execute(f"PRAGMA busy_timeout = {DEFAULT_BUSY_TIMEOUT_MS}")
+    # Session 125: serve-path pragmas via the shared helper. This oracle
+    # reads the catalog, so it takes the helper's 30000 ms catalog
+    # busy_timeout — its old value was 5000 (DEFAULT_BUSY_TIMEOUT_MS),
+    # changed here deliberately so every catalog connection waits the
+    # same. The sqlite-level connect timeout above stays 5000 ms.
+    db_pragmas.apply_serve_pragmas(conn)
     return conn
 
 

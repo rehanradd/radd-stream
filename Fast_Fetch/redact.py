@@ -53,6 +53,8 @@ import struct
 import time
 from pathlib import Path
 
+import db_pragmas  # serve-path SQLite pragmas (Session 125)
+
 # ── the vocabulary that must never be public ─────────────────────────────────
 
 #: Key names that carry provenance wherever they appear. ``project`` never
@@ -1167,6 +1169,9 @@ def _read_legacy_db_secret(db_path):
     """
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        # Session 125: serve-path pragmas (read-only handle — the helper
+        # guards journal_mode).
+        db_pragmas.apply_serve_pragmas(conn)
     except Exception:
         return None
     try:
@@ -1304,6 +1309,8 @@ def art_url_for(post_id: int, kind: str, index: int, db_path,
     with sqlite3.connect(db_path) as conn:
         conn.row_factory = sqlite3.Row
         try:
+            # Session 125: serve-path pragmas.
+            db_pragmas.apply_serve_pragmas(conn)
             row = conn.execute(f"SELECT poster_url, backdrop_urls FROM {from_table} "
                                "WHERE id = ?", (post_id,)).fetchone()
         except sqlite3.Error:
@@ -1328,6 +1335,8 @@ def art_is_adult(target_id: int, db_path, table: str = "posts") -> bool:
     from_table = ART_TABLES.get(str(table or "posts"), "posts")
     with sqlite3.connect(db_path) as conn:
         try:
+            # Session 125: serve-path pragmas.
+            db_pragmas.apply_serve_pragmas(conn)
             row = conn.execute(f"SELECT is_18_plus FROM {from_table} WHERE id = ?",
                                (target_id,)).fetchone()
         except sqlite3.Error:
@@ -1350,6 +1359,8 @@ def link_is_adult(source_id: int, db_path) -> bool:
     a flagged title are indistinguishable — and none of them plays."""
     with sqlite3.connect(db_path) as conn:
         try:
+            # Session 125: serve-path pragmas.
+            db_pragmas.apply_serve_pragmas(conn)
             row = conn.execute(
                 """
                 SELECT p.is_18_plus FROM download_sources s
@@ -1498,6 +1509,8 @@ def site_needles(db_path=None) -> frozenset[str]:
     if db_path and Path(db_path).exists():
         try:
             with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                # Session 125: serve-path pragmas.
+                db_pragmas.apply_serve_pragmas(conn)
                 has_cat_sites = conn.execute(
                     "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cat_work_sites'"
                 ).fetchone()
@@ -1543,6 +1556,8 @@ def site_text_needles(db_path=None) -> frozenset[str]:
     if db_path and Path(db_path).exists():
         try:
             with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                # Session 125: serve-path pragmas.
+                db_pragmas.apply_serve_pragmas(conn)
                 for (value,) in conn.execute("SELECT DISTINCT source_site FROM posts"):
                     text = str(value or "").strip().lower()
                     if text and text != UNATTRIBUTED:

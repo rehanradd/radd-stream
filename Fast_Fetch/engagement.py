@@ -73,6 +73,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import accounts  # stdlib sibling; the schema home + FK parent + _borrow/_commit
+import db_pragmas  # serve-path SQLite pragmas (Session 125)
 import redact    # signed VIP-pass primitives: mint_vip_pass / parse_vip_pass
 
 BASE_DIR = Path(__file__).parent.resolve()
@@ -308,13 +309,12 @@ def default_db_path() -> Path:
 
 
 def _prepare(conn: sqlite3.Connection, busy_timeout_ms: int) -> None:
-    conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)}")
-    try:
-        conn.execute("PRAGMA journal_mode = WAL")
-    except sqlite3.Error:
-        pass
-    # Per-connection, and required for the ON DELETE CASCADE + FK integrity.
-    conn.execute("PRAGMA foreign_keys = ON")
+    # Session 125: the serve-path pragmas live in one helper now — WAL,
+    # foreign keys (per-connection, required for the ON DELETE CASCADE +
+    # FK integrity), cache, mmap, temp_store, synchronous,
+    # wal_autocheckpoint. The user-state busy_timeout stays at the
+    # caller's value (5000 ms default), NOT the catalog's 30000.
+    db_pragmas.apply_serve_pragmas(conn, busy_timeout_ms=busy_timeout_ms)
 
 
 def connect(db_path=None, *, busy_timeout_ms: int = DEFAULT_BUSY_TIMEOUT_MS,

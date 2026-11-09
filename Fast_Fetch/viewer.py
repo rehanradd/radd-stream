@@ -25,6 +25,7 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from socketserver import ThreadingMixIn
 
 import redact
+import db_pragmas  # serve-path SQLite pragmas (Session 125)
 import tiers
 import live_tv
 import api_v2
@@ -169,6 +170,11 @@ def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     try:
+        # Session 125: serve-path pragmas via the shared helper (64 MiB
+        # cache, mmap, temp_store, busy_timeout 30000 like
+        # fast_fetch.get_db — this connection used to run on sqlite's
+        # 5 s default). One helper for every serve path.
+        db_pragmas.apply_serve_pragmas(conn)
         yield conn
         conn.commit()
     except Exception:
@@ -3036,14 +3042,41 @@ _NEWEST_YEAR_SQL = (
 )
 
 
+#: A single /api/v1/posts search may not run longer than this. Live nginx
+#: reads the posts location in 15 s; 10 s leaves headroom for the JSON encode
+#: and the proxy hop, and turns a pathological query into a 503 instead of a
+#: hung worker thread (Session 125 scale quick wins).
+SEARCH_DEADLINE_SECONDS = 10.0
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
                      quality: str = "", sort: str = "", free_only: bool = False,
                      work_ref: str = "") -> dict:
     _ensure_schema()
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 20
+    # The HTTP layer clamps limit to 1–100, but this function is also called
+    # directly (tests, other modules): clamp here too, so no caller can ask
+    # for an unbounded page (Session 125).
+    limit = max(1, min(100, limit))
     offset = max(0, (page - 1) * limit)
     with get_db() as conn:
+        # Deadline: a slow query must not hold a worker thread past the
+        # nginx read timeout. The handler fires every 1000 VM instructions
+        # and aborts the query by returning 1 — it must NOT raise: this
+        # Python's sqlite3 module swallows a raise inside the callback and
+        # the query surfaces as OperationalError("interrupted") instead.
+        # The /api/v1/posts branch maps exactly that error to 503.
+        deadline = time.monotonic() + SEARCH_DEADLINE_SECONDS
+
+        def _search_deadline():
+            return 1 if time.monotonic() > deadline else 0
+
+        conn.set_progress_handler(_search_deadline, 1000)
         # Adult-flagged posts are stored in the DB but never exposed via the API
         where_clauses = [redact.adult_clause("p")]
         params = []
@@ -4247,16 +4280,27 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json({"success": False, "error": "page_beyond_range",
                                 "max_offset": POSTS_MAX_OFFSET}, status=400)
                 return
-            data = api_v1_get_posts(
-                query=q, content_type=ctype, page=page, limit=limit,
-                full=full, base_url=base_url,
-                industry=query_params.get("industry", [""])[0],
-                genre=query_params.get("genre", [""])[0],
-                quality=query_params.get("quality", [""])[0],
-                sort=query_params.get("sort", [""])[0],
-                free_only=query_params.get("free_only", [""])[0] == "1",
-                work_ref=query_params.get("work_ref", [""])[0],
-            )
+            try:
+                data = api_v1_get_posts(
+                    query=q, content_type=ctype, page=page, limit=limit,
+                    full=full, base_url=base_url,
+                    industry=query_params.get("industry", [""])[0],
+                    genre=query_params.get("genre", [""])[0],
+                    quality=query_params.get("quality", [""])[0],
+                    sort=query_params.get("sort", [""])[0],
+                    free_only=query_params.get("free_only", [""])[0] == "1",
+                    work_ref=query_params.get("work_ref", [""])[0],
+                )
+            except sqlite3.OperationalError as exc:
+                # The query ran past the 10 s search deadline: the progress
+                # handler aborted it, which surfaces as "interrupted" (a
+                # raise inside the callback is swallowed by sqlite3). Any
+                # other OperationalError is not the deadline: re-raise it.
+                if str(exc) != "interrupted":
+                    raise
+                self.send_json({"success": False, "error": "search_timeout"},
+                               status=503)
+                return
             self.send_json(data)
 
         elif path == "/api/v1/search/by-media":
