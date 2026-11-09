@@ -1975,8 +1975,10 @@ def _request_is_vip(headers, query, *, secret: str) -> bool:
 
     The mirror of `viewer.request_is_vip`, which this module cannot import
     (viewer imports api_v2): a sync account whose `vip_until` has not passed
-    (`Authorization: Bearer <sync key>`), or a signed pass minted for a
-    rewarded-ad flow (`?vip=` or `?vip_token=`). A wrong or absent key is an
+    (`Authorization: Bearer <sync key>`), a signed pass minted for a
+    rewarded-ad flow (`?vip=` or `?vip_token=`), or the same signed pass in the
+    `X-Radd-Vip-Pass` request header (the embed player sends it there so the
+    pass never lands in browser history). A wrong or absent key is an
     ordinary free user, never an error — and never charged against the key's
     attempt budget. An unreadable state DB means "free", same as the viewer.
     """
@@ -1988,6 +1990,9 @@ def _request_is_vip(headers, query, *, secret: str) -> bool:
         except Exception:      # noqa: BLE001 — an unreadable state DB means "free"
             pass
     if secret:
+        header_pass = str((headers or {}).get(redact.VIP_PASS_HEADER, "") or "").strip()
+        if header_pass and redact.parse_vip_pass(header_pass, secret):
+            return True
         params = query if isinstance(query, dict) else {}
         for key in ("vip", "vip_token"):
             raw = (params.get(key) or [""])[0]

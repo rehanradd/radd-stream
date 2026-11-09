@@ -5657,14 +5657,27 @@ def probe_single_source(src: dict, timeout: int = 8) -> dict:
             aranges = resp.headers.get("Accept-Ranges", "")
             clen = resp.headers.get("Content-Length")
 
-            # Extract exact file size if available from Content-Range or Content-Length
+            # Exact file size, from the response that actually carries the file.
+            # A120 P-8: the probe used to take Content-Length at face value, so a
+            # redirect/landing page answered "513 B" for a 3.05 GB file — the page's
+            # length, not the file's. Two guards now: a page or a playlist is never
+            # a file, so its length is not a file size (text/* answers and HLS
+            # manifests); and a 206 without a Content-Range total only says how
+            # long the slice is, not the file. An unknown size stays None — the
+            # caller must say "unknown", never a page's length.
             file_bytes = None
-            if crange and "/" in crange:
-                total_part = crange.split("/")[-1].strip()
-                if total_part.isdigit():
-                    file_bytes = int(total_part)
-            elif clen and clen.isdigit():
-                file_bytes = int(clen)
+            media_type = (ctype or "").split(";")[0].strip().lower()
+            is_page_or_playlist = media_type.startswith("text/") or media_type in (
+                "application/x-mpegurl",
+                "application/vnd.apple.mpegurl",
+            )
+            if not is_page_or_playlist:
+                if crange and "/" in crange:
+                    total_part = crange.split("/")[-1].strip()
+                    if total_part.isdigit():
+                        file_bytes = int(total_part)
+                elif http_status != 206 and clen and clen.isdigit():
+                    file_bytes = int(clen)
 
             is_resumable = int(http_status == 206 or (aranges and "bytes" in aranges.lower()) or bool(crange))
             status = "active" if http_status in (200, 206, 302) else "dead"

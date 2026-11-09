@@ -476,9 +476,12 @@ def _bearer_token(headers) -> str:
 def request_is_vip(headers, query_params, *, now=None, secret=None) -> bool:
     """Whether this download request carries a live VIP capability.
 
-    Two forms, both server-verifiable: a sync account whose `vip_until` has not
+    Three forms, all server-verifiable: a sync account whose `vip_until` has not
     passed (`Authorization: Bearer <sync key>`), or a signed pass minted for a
-    rewarded-ad flow (`?vip=<pass>` or `?vip_token=<pass>`). There is
+    rewarded-ad flow (`?vip=<pass>` or `?vip_token=<pass>`), or the same signed
+    pass in the `X-Radd-Vip-Pass` request header (the embed player sends it
+    there so the pass never lands in browser history — the header is only ever
+    read on the initial redirector request; a redirect drops it). There is
     deliberately no bare `vip=1`: a boolean a caller can type is not a purchase,
     and trusting it would let every free user skip the operator's shortener by
     editing a URL."""
@@ -492,6 +495,9 @@ def request_is_vip(headers, query_params, *, now=None, secret=None) -> bool:
         except Exception:      # noqa: BLE001 — an unreadable state DB means "free"
             pass
     secret = signing_secret() if secret is None else secret
+    header_pass = str((headers or {}).get(redact.VIP_PASS_HEADER, "") or "").strip()
+    if header_pass and redact.parse_vip_pass(header_pass, secret, now=now):
+        return True
     for key in ("vip", "vip_token"):
         raw = (query_params.get(key) or [""])[0]
         if raw and redact.parse_vip_pass(raw, secret, now=now):

@@ -436,6 +436,59 @@ class VipPass(EdgeFixture, unittest.TestCase):
         honoured = viewer.request_is_vip({}, {"vip": [payload["pass"]]}, secret=SECRET)
         self.assertTrue(honoured, "the pass bypasses nothing")
 
+    def test_a_pass_in_the_vip_header_is_honoured_like_the_query_param(self):
+        """Session 126: the embed player sends the pass as a header, not a URL.
+
+        A WebView cannot put a pass in the URL without leaving it in browser
+        history, so it sends the same signed pass in `X-Radd-Vip-Pass` — the
+        same verification, the same expiry. Both mirrors must honour it:
+        `viewer.request_is_vip` (the /api/v1/stream gate the embed loads) and
+        `api_v2._request_is_vip` (the /api/v2/play gate).
+        """
+        import viewer
+        self.key = self.enroll()
+        now = time.time()
+        self.grant(now + 30 * 86400)
+        status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        self.assertEqual(status, 200, raw)
+        payload = json.loads(raw.decode("utf-8"))
+        header = {redact.VIP_PASS_HEADER: payload["pass"]}
+        self.assertTrue(
+            viewer.request_is_vip(header, {}, secret=SECRET),
+            "the header pass must satisfy the stream gate",
+        )
+        self.assertTrue(
+            api_v2._request_is_vip(header, {}, secret=SECRET),
+            "the header pass must satisfy the play gate",
+        )
+
+    def test_a_tampered_header_pass_is_free(self):
+        """A header that fails verification is an ordinary free user, never an error."""
+        import viewer
+        self.key = self.enroll()
+        now = time.time()
+        self.grant(now + 30 * 86400)
+        status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        self.assertEqual(status, 200, raw)
+        payload = json.loads(raw.decode("utf-8"))
+        header = {redact.VIP_PASS_HEADER: "x" + payload["pass"]}
+        self.assertFalse(viewer.request_is_vip(header, {}, secret=SECRET))
+        self.assertFalse(api_v2._request_is_vip(header, {}, secret=SECRET))
+
+    def test_an_expired_header_pass_is_free(self):
+        import viewer
+        self.key = self.enroll()
+        now = time.time()
+        self.grant(now + 30 * 86400)
+        status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
+        self.assertEqual(status, 200, raw)
+        payload = json.loads(raw.decode("utf-8"))
+        header = {redact.VIP_PASS_HEADER: payload["pass"]}
+        self.assertFalse(
+            viewer.request_is_vip(header, {}, now=now + 7 * 86400, secret=SECRET),
+            "a lapsed pass must not open the gate, in a header or anywhere else",
+        )
+
     def test_a_pass_never_outlives_the_membership_it_was_minted_from(self):
         """Six hours of capability paid for by ten minutes of membership is a bug."""
         self.key = self.enroll()

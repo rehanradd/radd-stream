@@ -994,6 +994,14 @@ def mint_vip_pass(expires_at: float, secret: str) -> str:
     return _b64(bytes([_VIP_PASS_VERSION]) + body + tag)
 
 
+#: The request header that carries a signed VIP pass (Session 126). The embed
+#: player (WebView) cannot put a pass in the URL without leaving it in browser
+#: history, so it sends the same signed pass here instead — the same
+#: verification, the same expiry, never a bare boolean. Both `viewer` and
+#: `api_v2` read it through this name so the two mirrors cannot drift apart.
+VIP_PASS_HEADER = "X-Radd-Vip-Pass"
+
+
 def parse_vip_pass(token, secret: str, now: float | None = None) -> float | None:
     """The expiry a pass was minted for, or ``None`` for anything not ours,
     tampered with, or already lapsed. A capability check, never an account."""

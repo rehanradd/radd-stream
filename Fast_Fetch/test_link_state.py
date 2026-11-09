@@ -676,5 +676,78 @@ class SchemaSafetyTests(unittest.TestCase):
         conn.close()
 
 
+class ProbeSingleSourceFileSizeTests(unittest.TestCase):
+    """A120 P-8: the probe measured a redirect/landing page, not the file.
+
+    `probe_single_source` sends `Range: bytes=0-100` and urllib follows
+    redirects, so a bridge page answers 200 with the page's own Content-Length
+    (513 B for a 3.05 GB file) and the old code recorded the page's length as
+    the file's size. The size is only a file size when the response carries a
+    file: a text/* answer or an HLS manifest is a page, never a file, and a 206
+    without a Content-Range total only says how long the slice is. No network
+    here: `urlopen` is patched to answer canned headers.
+    """
+
+    def _fake_response(self, status, headers):
+        class FakeResp:
+            def __init__(self, status, headers):
+                self.status = status
+                self.headers = headers
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        return FakeResp(status, headers)
+
+    def _probe(self, status, headers):
+        src = {"id": 7, "final_url": "https://h/f.mkv"}
+        with unittest.mock.patch(
+            "urllib.request.urlopen",
+            return_value=self._fake_response(status, headers),
+        ):
+            return fast_fetch.probe_single_source(src)
+
+    def test_an_html_landing_page_has_no_file_size(self):
+        got = self._probe(200, {
+            "Content-Type": "text/html; charset=utf-8",
+            "Content-Length": "513",
+        })
+        self.assertEqual(got["status"], "active")
+        self.assertIsNone(got["file_size_bytes"], "a page's length is not a file size")
+        self.assertEqual(got["mime_type"], "text/html")
+
+    def test_a_real_file_keeps_its_content_length(self):
+        got = self._probe(200, {
+            "Content-Type": "video/mp4",
+            "Content-Length": "3050000000",
+        })
+        self.assertEqual(got["file_size_bytes"], 3_050_000_000)
+
+    def test_a_ranged_reply_reports_the_range_total_not_the_slice(self):
+        got = self._probe(206, {
+            "Content-Type": "video/mp4",
+            "Content-Range": "bytes 0-100/3050000000",
+            "Content-Length": "101",
+        })
+        self.assertEqual(got["file_size_bytes"], 3_050_000_000)
+
+    def test_a_ranged_reply_without_a_total_reports_no_size(self):
+        got = self._probe(206, {
+            "Content-Type": "video/mp4",
+            "Content-Length": "101",
+        })
+        self.assertIsNone(got["file_size_bytes"], "101 is the slice, not the file")
+
+    def test_an_hls_manifest_has_no_file_size(self):
+        got = self._probe(200, {
+            "Content-Type": "application/x-mpegURL",
+            "Content-Length": "4321",
+        })
+        self.assertIsNone(got["file_size_bytes"], "a playlist's length is not a file size")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
