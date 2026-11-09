@@ -5,6 +5,24 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-09 — Muse [MUSE-SESSION126-PLAYER-COMPLETE]: video player
+  complete — the consolidated plan's whole open list: D-35 poster backdrop,
+  PL-2 sponsor placeholder removed (countdown advances directly), PL-3
+  offline card, PL-4 locked time chip, PL-6 user-facing print sheet
+  (ranks/failover behind a long-press), PL-8 scrubber semantics, PL-9 real
+  brightness base, PL-10 PiP aspect + source rect + opt-in auto-enter,
+  PL-11 series-gated More rows, PL-12 Up-next preview + Play now, PL-13
+  outside-tap keeps waiting, PL-14 no stacked cards, D-37 year · quality ·
+  source subtitle, D-40 real buttons, D-43 filled states + labels, start-low
+  ABR + 3-step progress story, data saver, honest boost slider, SC.7 keep
+  ring, SC.8 "Saved on device" pills, SC.24 share a moment, pause cast
+  strip, Embed VIP pass as a header (never in history), NAV-4 expired-link
+  card + NAV-5 deep-link routing with a DeadLink destination, P-8 probe
+  fix; parked: Skip Intro, audio delay, SW decoder toggle, true gain,
+  Chromecast, watch party/AI, scrub thumbnails (Media3 1.3.1, bump needs
+  minSdk 21 → 23 — owner decision); not done: push + CI + device retest —
+  [20261109-muse-session126-player-complete.md](20261109-muse-session126-player-complete.md)
+
 - 2026-11-09 — Muse [MUSE-SESSION125-SCALE-QUICK-WINS]: scale quick
   wins A1/A2/A6 — reconcile build after a collision (a self-check worker
   built the same pragmas inline `-131072` in the same clone, then reverted
