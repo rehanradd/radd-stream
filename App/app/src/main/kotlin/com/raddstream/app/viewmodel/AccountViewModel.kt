@@ -54,7 +54,7 @@ fun claimedTodayFor(
  * redeem calls. The balance is the ledger's `SUM(delta)`; the streak is the
  * server's count, not the device's local open-count.
  */
-data class AccountUiState(
+data class AccountOverviewUiState(
     val isLoading: Boolean = false,
     val signedIn: Boolean = false,
     val loadError: String? = null,
@@ -95,7 +95,7 @@ class AccountViewModel @Inject constructor(
     private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(AccountUiState())
+    private val _uiState = MutableStateFlow(AccountOverviewUiState())
     val uiState = _uiState.asStateFlow()
 
     init {
@@ -238,7 +238,7 @@ class AccountViewModel @Inject constructor(
         viewModelScope.launch {
             syncAccountRepository.signOut()
             _uiState.update {
-                AccountUiState(signedIn = false)
+                AccountOverviewUiState(signedIn = false)
             }
         }
     }
