@@ -67,6 +67,27 @@
     <string name="player_giveup_no_candidate_body">Every option for this print failed. Retry, try another print, or open it in another player.</string>
     <string name="player_giveup_timeout">Taking too long to start</string>
     <string name="player_giveup_timeout_body">The link is still being found. Retry, try another print, or open it in another player.</string>
+    <!-- Session 126: offline card (PL-3), expired-link card (NAV-4), up-next preview (PL-12),
+         share a moment (SC.24), data saver (26), auto-PiP (PL-10), progress story (26). -->
+    <string name="player_offline_title">You’re offline</string>
+    <string name="player_offline_body">Check your connection and try again — nothing will play until the network is back.</string>
+    <string name="player_giveup_expired">This shared link has expired</string>
+    <string name="player_giveup_expired_body">The link was only good for a while. Ask whoever shared it for a fresh one, or go back home and find the title again.</string>
+    <string name="player_home">Home</string>
+    <string name="player_up_next">Up next</string>
+    <string name="player_autoplay_play_now">Play now</string>
+    <string name="player_share_moment">Share a moment</string>
+    <string name="player_data_saver">Data Saver</string>
+    <string name="player_data_saver_detail">Cap Auto at 480p on mobile data</string>
+    <string name="player_auto_pip">Auto picture-in-picture</string>
+    <string name="player_auto_pip_detail">Keep playing in a small window when you leave the player</string>
+    <string name="player_step_finding">Finding the best print</string>
+    <string name="player_step_warming">Warming the link</string>
+    <string name="player_step_buffering">Buffering</string>
+    <string name="player_volume_boost">Volume boost</string>
+    <string name="player_saved_on_device">Saved on device</string>
+    <string name="player_seek">Seek: %1$s of %2$s</string>
+    <string name="player_quality_single">Only one quality is available for this title</string>
     <string name="player_start_slow">Taking longer than usual — your link is being found</string>
     <string name="player_start_try_another">Try another print</string>
     <string name="player_attempt_counter">Trying copy %1$d of %2$d</string>

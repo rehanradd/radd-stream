@@ -86,14 +86,21 @@ class AdCadenceGuardTest {
     }
 
     @Test
-    fun `the sponsor slot is a card the viewer dismisses over a player that keeps running`() {
-        val call = lines("ui/screens/PlayerScreen.kt")
-            .filter { "SponsorBreakDialog(slot = state.adBreak" in it }
-        assertTrue("the card is still rendered", call.isNotEmpty())
-        assertTrue(
-            "and it leaves on the viewer's press, never on a timer the app decided",
-            call.single().contains("onDismiss"),
+    fun `the player shows no sponsor card at all`() {
+        // Session 126 (PL-2): the SponsorBreakDialog was a placeholder for an ad that
+        // does not exist — a fake ad gating a real episode advance. It is removed,
+        // not dismissed: the player screen must not name it anywhere.
+        val screen = lines("ui/screens/PlayerScreen.kt")
+        assertFalse(
+            "the placeholder dialog must be gone, not hidden behind a flag",
+            screen.any { "SponsorBreakDialog" in it },
         )
+        assertFalse(
+            "and no ad-break state may survive in the player state the screen reads",
+            screen.any { "state.adBreak" in it },
+        )
+        // Positive control: the screen still renders a real card that must exist.
+        assertTrue(screen.any { "GiveUpCard" in it })
     }
 
     // ── rule 2: nothing unskippable past five seconds ────────────────────────────
@@ -198,9 +205,11 @@ class AdCadenceGuardTest {
 
     @Test
     fun `each surface asks the governor rather than deciding for itself`() {
-        assertTrue(
-            "pre-roll",
-            lines("viewmodel/PlayerViewModel.kt").any { "adCadence.offer(AdSurface.PRE_ROLL" in it },
+        // Session 126 (PL-2): the player is no longer a surface at all — there is no
+        // pre-roll to ask about, so the player ViewModel must not call the governor.
+        assertFalse(
+            "the player must not ask the governor: it has no ad surface left",
+            lines("viewmodel/PlayerViewModel.kt").any { "adCadence.offer(" in it },
         )
         val browse = lines("viewmodel/BrowseViewModel.kt")
         assertTrue("feed card", browse.any { "adCadence.offer(AdSurface.FEED_CARD" in it })
@@ -212,21 +221,18 @@ class AdCadenceGuardTest {
     }
 
     @Test
-    fun `the interstitial seam has a caller, and that caller holds its hand off`() {
+    fun `the interstitial seam has no caller in the player, and the advance runs directly`() {
+        // Session 126 (PL-2): the between-episodes break was a placeholder for an ad
+        // that does not exist, holding a real episode advance behind a fake gate. The
+        // seam is removed from the player: no request, no held hand-off, no dismiss.
         val player = lines("viewmodel/PlayerViewModel.kt")
-        assertTrue(
-            "the policy is asked somewhere real, not only by a test",
-            player.any { "requestBetweenEpisodesBreak()" in it && "if (" in it },
-        )
-        assertTrue(
-            "a granted break holds the successor instead of dropping it",
-            player.any { "pendingCrossEpisode = held" in it },
-        )
-        val dismiss = player.expressionBlock("fun dismissAdBreak()")
-        assertTrue("dismissal plays the held hand-off", dismiss.any { "advanceCrossEpisode(held)" in it })
-        assertTrue("and takes nothing for a break that was never raised", dismiss.any { "?: return" in it })
-        // Positive control: the hand-off itself is still the same single implementation, shared by
-        // the ad path and the no-ad path.
+        listOf("requestBetweenEpisodesBreak", "pendingCrossEpisode", "dismissAdBreak", "requestAdBreak", "grantCadence", "isAdFree")
+            .forEach { word ->
+                assertFalse("the player must not name $word anywhere", player.any { word in it })
+            }
+        // Positive control: the countdown advances the episode directly, and the
+        // hand-off itself is still the same single implementation.
+        assertTrue(player.any { "advanceCrossEpisode(held)" in it })
         assertTrue(player.any { "private suspend fun advanceCrossEpisode(" in it })
     }
 

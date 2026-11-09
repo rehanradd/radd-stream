@@ -1,6 +1,7 @@
 package com.raddstream.app.ui.screens
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.ContextWrapper
@@ -9,6 +10,7 @@ import android.content.pm.ActivityInfo
 import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
+import android.provider.Settings
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -46,6 +48,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -79,6 +83,7 @@ import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
@@ -104,22 +109,32 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -128,14 +143,17 @@ import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.CaptionStyleCompat
 import androidx.media3.ui.PlayerView
 import androidx.media3.ui.SubtitleView
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.raddstream.app.R
 import com.raddstream.app.brand.Brand
-import com.raddstream.app.player.AdSlot
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
 import com.raddstream.app.player.CacheAffordance
+import com.raddstream.app.player.initialBrightnessBase
 import com.raddstream.app.player.EpisodeCoverage
 import com.raddstream.app.player.chapterTicks
 import com.raddstream.app.player.CalibrationState
@@ -145,6 +163,7 @@ import com.raddstream.app.player.GestureMapper
 import com.raddstream.app.player.GestureSettings
 import com.raddstream.app.player.HandoffWhy
 import com.raddstream.app.player.KeepUiState
+import com.raddstream.app.player.PlayerGlass
 import com.raddstream.app.player.looksLikeQualityLabel
 import com.raddstream.app.player.PinchCommand
 import com.raddstream.app.player.PlayerOrientation
@@ -162,7 +181,9 @@ import com.raddstream.app.player.subtitles.SubtitleOffsetSheet
 import com.raddstream.app.player.dragHalfZone
 import com.raddstream.app.player.dominantAxis
 import com.raddstream.app.player.qualityCostPerHour
+import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.RaddDialogTitle
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.ui.theme.RaddCaptionPlate
 import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
 import com.raddstream.app.ui.theme.RaddCoral400
@@ -186,6 +207,7 @@ import com.raddstream.app.viewmodel.PlayerEvent
 import com.raddstream.app.viewmodel.PlayerViewModel
 import com.raddstream.app.viewmodel.formatTime
 import kotlinx.coroutines.delay
+import kotlin.math.roundToInt
 
 /**
  * The MX-style player screen (PLAYER_SPEC.md §2). Decomposed into small composables so every
@@ -221,6 +243,11 @@ fun PlayerScreen(
     onBackClick: () -> Unit,
     onPlayNextEpisode: (workKey: String?, postId: Int?, season: Int, episode: Int) -> Unit = { _, _, _, _ -> },
     localUri: String? = null,
+    // SC §3 (Session 126): tapping an actor on the pause strip searches them, the
+    // same route the detail screen's cast chips take. NAV-4: the expired-link
+    // card's Home button.
+    onActorClick: (String) -> Unit = {},
+    onHomeClick: (() -> Unit)? = null,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -231,7 +258,7 @@ fun PlayerScreen(
             viewModel.startStreamHandle(streamId, title)
         }
     }
-    PlayerScreenContent(state, viewModel, onBackClick, onPlayNextEpisode)
+    PlayerScreenContent(state, viewModel, onBackClick, onPlayNextEpisode, onActorClick, onHomeClick)
 }
 
 /** Bundle-driven entry (PlayBundle already installed into the session store by the caller). */
@@ -240,10 +267,12 @@ fun PlayerScreen(
     title: String,
     onBackClick: () -> Unit,
     onPlayNextEpisode: (workKey: String?, postId: Int?, season: Int, episode: Int) -> Unit = { _, _, _, _ -> },
+    onActorClick: (String) -> Unit = {},
+    onHomeClick: (() -> Unit)? = null,
     viewModel: PlayerViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
-    PlayerScreenContent(state, viewModel, onBackClick, onPlayNextEpisode)
+    PlayerScreenContent(state, viewModel, onBackClick, onPlayNextEpisode, onActorClick, onHomeClick)
 }
 
 // ── Root ───────────────────────────────────────────────────────────────────────
@@ -255,6 +284,8 @@ private fun PlayerScreenContent(
     vm: PlayerViewModel,
     onBackClick: () -> Unit,
     onPlayNextEpisode: (workKey: String?, postId: Int?, season: Int, episode: Int) -> Unit,
+    onActorClick: (String) -> Unit = {},
+    onHomeClick: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
@@ -263,14 +294,21 @@ private fun PlayerScreenContent(
     // pieces resolve it from `state.playerTheme` themselves.
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
 
+    // BM rule 9: low-end devices get solid chrome, not frosted glass — the
+    // blur is a cost they pay for nothing, and a solid plate reads the same.
+    val lowRam = remember(context) {
+        (context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager)?.isLowRamDevice == true
+    }
+
     // System Back always leaves the player (Session 117): the give-up card's
-    // AlertDialog handles Back while it is showing, and the top-left arrow
-    // always worked, but nothing handled Back during playback — the 114
-    // device retest pressed it three times on a stuck player and once while
-    // the card was up, and the player never exited. This handler is the
-    // fallback underneath the dialog's own: it is registered first, so a
-    // dialog or sheet that is showing wins the press (its handler was added
-    // later and both end in the same place — back to details), and with
+    // AlertDialog declines Back while it is showing (PL-13: an outside tap is
+    // keep-waiting, Back is exit), and the top-left arrow always worked, but
+    // nothing handled Back during playback — the 114 device retest pressed it
+    // three times on a stuck player and once while the card was up, and the
+    // player never exited. This handler is the fallback underneath the dialog's
+    // own: it is registered first, so a dialog or sheet that is showing wins
+    // the press (its handler was added later and both end in the same place —
+    // back to details), and with
     // nothing showing, Back pops the player instead of doing nothing. The
     // lock does not gate it: a locked player must still let its viewer out.
     BackHandler { onBackClick() }
@@ -285,8 +323,23 @@ private fun PlayerScreenContent(
     val showCoach by vm.showCoach.collectAsState()
     var coachDismissed by remember { mutableStateOf(false) }
 
-    val launchPip = rememberPipLauncher()
+    // PL-10: the PiP window follows the video's own shape, and the source rect is
+    // the surface's own bounds — the window grows out of the picture, not the corner.
+    var pipSourceRect by remember { mutableStateOf<androidx.compose.ui.geometry.Rect?>(null) }
+    val launchPip = rememberPipLauncher(aspectRatio = state.videoAspectRatio, sourceRect = pipSourceRect)
     PlayerEventWatcher(vm, context, onPlayNextEpisode) { snackbar = it }
+
+    // PL-10: opt-in auto-enter PiP — when the switch is on and the title is playing,
+    // leaving the player (home, recents, another app) keeps it playing in a window.
+    // Off by default: a window the viewer did not open is a window they did not ask for.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, state.autoPip, state.isPlaying) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE && state.autoPip && state.isPlaying) launchPip()
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     // Immersive fullscreen + keep-screen-on while the player exists (MX behaviour).
     DisposableEffect(activity) {
@@ -399,7 +452,27 @@ private fun PlayerScreenContent(
                 isPlaying = state.isPlaying,
             )
         } else {
-            PlayerSurface(vm, state)
+            PlayerSurface(vm, state, onBounds = { pipSourceRect = it })
+        }
+
+        // D-35: the poster's blurred shadow behind the loading state. The window before
+        // the first frame is the one a viewer cannot tell apart from a crash, and a black
+        // void is the worst thing to show in it — so the staged poster sits dimmed and
+        // blurred behind the notice card, with the real progress ring on top. (Blur is a
+        // no-op below API 31; the scrim carries the dimming there.) It stands down the
+        // moment the picture starts, and a deep link with no staged poster shows none.
+        if (state.startPhase != StartPhase.NONE && !state.posterUrl.isNullOrBlank()) {
+            Box(Modifier.fillMaxSize()) {
+                CatalogImage(
+                    url = state.posterUrl,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(24.dp),
+                    contentScale = ContentScale.Crop,
+                )
+                Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
+            }
         }
 
         // 2 — our own subtitle overlay (external SRT/VTT with delay)
@@ -414,7 +487,21 @@ private fun PlayerScreenContent(
                 interactTick = System.nanoTime()
             },
             onBrightness = { frac ->
-                brightness = ((if (brightness < 0f) 0.5f else brightness) + frac).coerceIn(0f, 1f)
+                if (brightness < 0f) {
+                    // PL-9: the drag starts where the screen already is — the window's
+                    // own brightness first, then the system brightness — never an
+                    // assumed 0.5 that jumps a dim screen to half brightness on touch.
+                    val windowBrightness = activity?.window?.attributes?.screenBrightness ?: -1f
+                    val system01 = runCatching {
+                        Settings.System.getInt(
+                            context.contentResolver,
+                            Settings.System.SCREEN_BRIGHTNESS,
+                            -1,
+                        ).takeIf { it >= 0 }?.div(255f)
+                    }.getOrNull()
+                    brightness = initialBrightnessBase(windowBrightness, system01)
+                }
+                brightness = (brightness + frac).coerceIn(0f, 1f)
                 hud = Hud.Brightness(brightness)
             },
             onVolume = { frac ->
@@ -461,6 +548,8 @@ private fun PlayerScreenContent(
                         vm = vm,
                         onEnterPip = launchPip,
                         onActivity = { interactTick = System.nanoTime() },
+                        onActorClick = onActorClick,
+                        onMessage = { snackbar = it },
                     )
                 }
             }
@@ -500,6 +589,8 @@ private fun PlayerScreenContent(
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissGiveUp() },
                 onBackToDetails = onBackClick,
+                // NAV-4: an expired shared link gets its own way home.
+                onHomeClick = onHomeClick,
                 // Session 120: the deadline card offered this and the handoff
                 // card did not, so after every candidate failed the viewer
                 // could only retry the same dead ladder. A further print past
@@ -523,6 +614,7 @@ private fun PlayerScreenContent(
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissDeadlineGiveUp() },
                 onBackToDetails = onBackClick,
+                onHomeClick = onHomeClick,
                 onTryAnother = if (state.canTryAnotherPrint) {
                     { vm.tryNextPrint() }
                 } else {
@@ -533,8 +625,36 @@ private fun PlayerScreenContent(
             // Neither a give-up nor a deadline expiry is showing.
         }
 
-        state.connectionError?.let { err ->
-            ConnectionErrorCard(err, onRetry = { vm.retryCurrentCandidates() })
+        // PL-14: the connection-error card and the give-up card are mutually
+        // exclusive — they used to stack on the same failure, two cards saying
+        // the same thing in different words. The give-up card is the one that
+        // stays; the connection error owns only the failures it does not cover.
+        if (state.connectionError != null && state.giveUp == null && !state.deadlineGiveUp) {
+            state.connectionError?.let { err ->
+                ConnectionErrorCard(err, onRetry = { vm.retryCurrentCandidates() })
+            }
+        }
+
+        // PL-3: an offline start or an offline failure shows an offline card
+        // immediately, with Retry — not just the 30-second deadline card. Waiting
+        // half a minute to be told there is no network is not a wait, it is a lie.
+        if (state.isOffline && state.giveUp == null && !state.deadlineGiveUp) {
+            OfflineCard(onRetry = { vm.retryCurrentCandidates() })
+        }
+
+        // PL-4: a locked player keeps a small time chip visible — position and
+        // remaining, without unlocking. A locked screen that says nothing about
+        // where you are is a screen that says nothing at all. A duration the
+        // player has not learned yet is not a time to show.
+        if (state.locked && state.durationMs > 0) {
+            LockedTimeChip(
+                positionMs = state.positionMs,
+                durationMs = state.durationMs,
+                lowRam = lowRam,
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(12.dp),
+            )
         }
 
         if (state.isBuffering && !state.isPlaying && state.giveUp == null &&
@@ -575,6 +695,14 @@ private fun PlayerScreenContent(
                 title = state.pendingTitle,
                 attemptLabel = attemptLabel,
                 slowHint = state.startDeadlineStage != StartDeadlineStage.SILENT,
+                // 26: the three-step progress story — the label names the step
+                // being done, not the generic phase: finding the best print,
+                // then warming the link, then buffering.
+                stepLabel = when (state.startPhase) {
+                    StartPhase.CONNECTING_PLAYER -> stringResource(R.string.player_step_finding)
+                    StartPhase.STARTING -> stringResource(R.string.player_step_warming)
+                    else -> stringResource(R.string.player_step_buffering)
+                },
                 // Session 121 (P-7): the rung label must name a rung. The display label
                 // used to fall back to the print's title, so the notice read
                 // "Quality: Ali Baba aur 40 Bhoot"; a non-quality label falls through
@@ -608,6 +736,8 @@ private fun PlayerScreenContent(
                     chrome,
                     secondsLeft = countdown,
                     onCancel = { vm.cancelAutoplayCountdown() },
+                    nextEpisodeTitle = state.nextEpisodeTitle,
+                    onPlayNow = { vm.requestNextEpisode() },
                 )
             } else {
                 EndedButtons(
@@ -615,6 +745,10 @@ private fun PlayerScreenContent(
                     showNextEpisode = state.endedHasNextEpisode,
                     onPlayAgain = { vm.playFrom(0) },
                     onNextEpisode = { vm.requestNextEpisode() },
+                    nextEpisodeTitle = state.nextEpisodeTitle,
+                    nextEpisodeSeason = state.nextEpisodeSeason,
+                    nextEpisodeEpisode = state.nextEpisodeEpisode,
+                    nextEpisodePosterUrl = state.nextEpisodePosterUrl,
                 )
             }
         }
@@ -652,9 +786,6 @@ private fun PlayerScreenContent(
         if (state.printSheetVisible) PrintLogSheet(state, vm)
         if (state.qualitySheetVisible) QualitySheet(state, vm)
         if (state.moreSheetVisible) MoreSheet(state, vm, onEnterPip = launchPip)
-        if (state.adBreak != AdSlot.NONE) {
-            SponsorBreakDialog(slot = state.adBreak, onDismiss = { vm.dismissAdBreak() })
-        }
 
         // 8 — lightweight snackbar
         snackbar?.let { msg ->
@@ -695,18 +826,19 @@ private const val TWO_FINGER_TAP_GUARD_NS = 250_000_000L
 /**
  * True when a sheet the viewer opened is up — pauses the controls auto-hide.
  *
- * `adBreak` is deliberately NOT one of these. An ad is not a modal: it never holds the chrome
- * still, and nothing here can make the tape wait on a creative the viewer did not ask for. A
- * sponsor slot renders as a dismissible card over a player that keeps playing, and the owner's
- * rule — no interstitial that blocks playback, and if an ad cannot be filled show nothing — is
- * enforced by this line not containing it. `AdSlotPolicyTest` and `AdCadenceGuardTest` are the
- * proofs; a future edit that adds it back fails both.
+ * Session 126 (audit bug a): the More sheet was missing from this list, so the
+ * chrome auto-hid three seconds into a More-sheet browse and the viewer had to
+ * tap back in to read the rows they had just opened. Every sheet that can hold
+ * the viewer's attention belongs here — including More, which is a sheet like
+ * any other. (The old paragraph about the sponsor slot is gone with the slot
+ * itself: PL-2 removed the placeholder ad entirely, and there is no ad state
+ * left in this file to exclude.)
  */
 private val PlayerUiState.dialogBlocking: Boolean
     get() = resumeOfferMs != null || calibration != null || giveUp != null ||
         speedSheetVisible || tracksSheetVisible || subtitleSheetVisible ||
         subtitleOffsetSheetVisible || printSheetVisible || sleepSheetVisible ||
-        playFromDialogVisible || qualitySheetVisible
+        playFromDialogVisible || qualitySheetVisible || moreSheetVisible
 
 // ── 1. Surface ─────────────────────────────────────────────────────────────────
 
@@ -716,10 +848,24 @@ private val PlayerUiState.dialogBlocking: Boolean
 // Kotlin form here compiled clean and left 20 lint errors.
 @androidx.annotation.OptIn(UnstableApi::class)
 @Composable
-private fun PlayerSurface(vm: PlayerViewModel, state: PlayerUiState) {
+private fun PlayerSurface(
+    vm: PlayerViewModel,
+    state: PlayerUiState,
+    // PL-10: the surface reports its own bounds so the PiP window can grow
+    // out of the picture.
+    onBounds: ((androidx.compose.ui.geometry.Rect) -> Unit)? = null,
+) {
     val player by vm.player.collectAsState()
     AndroidView(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .then(
+                if (onBounds != null) {
+                    Modifier.onGloballyPositioned { onBounds(it.boundsInWindow()) }
+                } else {
+                    Modifier
+                },
+            ),
         factory = { ctx ->
             PlayerView(ctx).apply {
                 useController = false // all chrome is Compose
@@ -1154,13 +1300,20 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                 val hlsTag = stringResource(R.string.player_tag_hls)
                 val expiringTag = stringResource(R.string.player_tag_expiring)
                 val autoTag = state.autoQualityBand?.let { band -> stringResource(R.string.player_tag_auto, band) }
-                // Session 121 (P-7): the subtitle is quality language only. When the
-                // quality is unknown the display label is a rank ("Rank #1"), not a
-                // rung — printing it would repeat the title's job badly. The tags
-                // (HLS / expiring / Auto) are still worth showing on their own, and
-                // the line is dropped entirely when there is nothing to say.
+                // D-37: the subtitle is metadata — year · quality · source — never
+                // the title again. The year comes from the staged title metadata;
+                // the quality is the rung label; the "source" half is the playback
+                // kind (HLS / expiring / Auto), never a host name or a raw link.
+                // Session 121 (P-7): when the quality is unknown the display label
+                // is a rank ("Rank #1"), not a rung — printing it would repeat the
+                // title's job badly. The tags are still worth showing on their own,
+                // and the line is dropped entirely when there is nothing to say.
                 val subtitle = buildString {
-                    print.displayLabel().takeIf { looksLikeQualityLabel(it) }?.let { append(it) }
+                    state.titleYear?.let { append(it.toString()) }
+                    print.displayLabel().takeIf { looksLikeQualityLabel(it) }?.let {
+                        if (isNotEmpty()) append(" · ")
+                        append(it)
+                    }
                     if (print.playback.isHls()) {
                         if (isNotEmpty()) append(" · ")
                         append(hlsTag)
@@ -1378,15 +1531,43 @@ private fun BottomControls(
     vm: PlayerViewModel,
     onEnterPip: () -> Unit,
     onActivity: () -> Unit,
+    // SC §3: tapping an actor on the pause strip searches them, the same
+    // route the detail screen's cast chips take.
+    onActorClick: (String) -> Unit = {},
+    // 25c: the single-rung Quality button explains itself through the
+    // screen's snackbar, which lives in the content scope, not here.
+    onMessage: (String) -> Unit = {},
 ) {
     var showVolumeDialog by remember { mutableStateOf(false) }
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
+    val context = LocalContext.current
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
         Column(
             Modifier
                 .fillMaxWidth()
                 .background(chrome.bar),
         ) {
+            // SC §3: pause is discovery — the cast strip. Tapping an actor
+            // searches them. Only while paused: a strip that appears mid-play
+            // is a strip that steals the picture. The cast list itself is the
+            // loaded signal — it is empty until the title stages it.
+            if (!state.isPlaying && state.castNames.isNotEmpty()) {
+                LazyRow(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, top = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    items(state.castNames, key = { it }) { actor ->
+                        FilterChip(
+                            selected = false,
+                            onClick = { onActorClick(actor) },
+                            label = { Text(actor, maxLines = 1) },
+                            colors = raddFilterChipColors(),
+                        )
+                    }
+                }
+            }
             // Session 121 (P-35): the keep chip's own row, above the scrubber. It is
             // not a seventh transport button, so the six-primaries rule still holds —
             // and here it cannot crowd the title the way it did in the top bar.
@@ -1444,6 +1625,9 @@ private fun BottomControls(
                     .fillMaxWidth()
                     .padding(horizontal = 4.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
+                // D-43: the labels need room to breathe — the six primaries
+                // spread across the bar instead of packing left.
+                horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
                 val subtitleWord = subtitleStatusLabel(state, stringResource(R.string.player_off))
                 val volumePercent = (state.userVolume * 100).toInt()
@@ -1455,6 +1639,7 @@ private fun BottomControls(
                 PlayerControlButton(
                     { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
                     if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
+                    shortLabel = if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
                 ) {
                     Icon(
                         painter = if (state.isPlaying) painterResource(R.drawable.ic_player_pause) else painterResource(R.drawable.ic_player_play),
@@ -1467,6 +1652,7 @@ private fun BottomControls(
                     if (state.userVolume > 0f) stringResource(R.string.player_volume, volumePercent)
                     else stringResource(R.string.player_volume_muted),
                     onLongClick = { showVolumeDialog = true },
+                    shortLabel = stringResource(R.string.player_volume_title),
                 ) {
                     if (state.userVolume > 0f) {
                         Icon(
@@ -1484,15 +1670,43 @@ private fun BottomControls(
                         )
                     }
                 }
-                PlayerControlButton({ vm.showSubtitleSheet() }, stringResource(R.string.player_subtitles_label, subtitleWord)) {
+                PlayerControlButton(
+                    { vm.showSubtitleSheet() },
+                    stringResource(R.string.player_subtitles_label, subtitleWord),
+                    selected = subtitleActive(state),
+                    shortLabel = stringResource(R.string.player_subtitles_title),
+                ) {
                     Icon(painterResource(R.drawable.ic_player_subtitles), null, tint = if (subtitleActive(state)) RaddCurrent500 else Color.White)
                 }
+                // 25c: the Quality primary never vanishes — on a single-rung title
+                // it stays visible, dimmed, and tapping it says why instead of
+                // opening a sheet with one row. Six primaries, always.
                 if (state.canSwitchQuality) {
-                    PlayerControlButton({ vm.showQualitySheet() }, stringResource(R.string.player_quality_label, state.qualityLabel)) {
+                    PlayerControlButton(
+                        { vm.showQualitySheet() },
+                        stringResource(R.string.player_quality_label, state.qualityLabel),
+                        selected = !state.qualityAuto,
+                        shortLabel = stringResource(R.string.player_quality_title),
+                    ) {
                         Icon(
                             painterResource(R.drawable.ic_player_quality),
                             null,
                             tint = if (state.qualityAuto) Color.White else RaddCurrent500,
+                        )
+                    }
+                } else {
+                    // Single rung: the button stays, dimmed, and tapping it says
+                    // why instead of opening a sheet with one row. It is not
+                    // disabled in the clickable sense — a dead tap explains nothing.
+                    PlayerControlButton(
+                        { onMessage(context.getString(R.string.player_quality_single)) },
+                        stringResource(R.string.player_quality_label, state.qualityLabel),
+                        shortLabel = stringResource(R.string.player_quality_title),
+                    ) {
+                        Icon(
+                            painterResource(R.drawable.ic_player_quality),
+                            null,
+                            tint = Color.White.copy(alpha = 0.4f),
                         )
                     }
                 }
@@ -1500,6 +1714,7 @@ private fun BottomControls(
                     { vm.toggleFullscreen() },
                     if (state.fullscreen) stringResource(R.string.player_exit_fullscreen)
                     else stringResource(R.string.player_fullscreen),
+                    shortLabel = stringResource(R.string.player_fullscreen),
                 ) {
                     if (state.fullscreen) {
                         // No brand icon for exit: the expand-corners mark would lie
@@ -1509,7 +1724,11 @@ private fun BottomControls(
                         Icon(painterResource(R.drawable.ic_player_fullscreen), null, tint = Color.White)
                     }
                 }
-                PlayerControlButton({ vm.showMoreSheet() }, stringResource(R.string.player_more)) {
+                PlayerControlButton(
+                    { vm.showMoreSheet() },
+                    stringResource(R.string.player_more),
+                    shortLabel = stringResource(R.string.player_more),
+                ) {
                     Icon(Icons.Default.MoreVert, null, tint = Color.White)
                 }
             }
@@ -1529,6 +1748,30 @@ private fun BottomControls(
                             onValueChange = { vm.setUserVolume(it) },
                             valueRange = 0f..1f,
                             modifier = Modifier.fillMaxWidth(),
+                        )
+                        // Volume boost, honest UI only (Session 126): the slider lets
+                        // the viewer request up to 200%, but this build has no software
+                        // gain stage, so the setter clamps at the 100% player ceiling
+                        // and the summary below says what was requested and what was
+                        // actually applied. The requested level lives in this dialog
+                        // only — the stored level is the clamped one, and a request
+                        // that was never applied is not a setting to persist.
+                        var requestedBoost by remember { mutableStateOf(state.audioBoostLevel) }
+                        Spacer(Modifier.height(12.dp))
+                        Text(stringResource(R.string.player_volume_boost))
+                        Slider(
+                            value = requestedBoost,
+                            onValueChange = {
+                                requestedBoost = it
+                                vm.setAudioBoostLevel(it)
+                            },
+                            valueRange = 0f..AudioBoost.MAX,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            AudioBoostUi.honestSummary(requestedBoost, state.userVolume),
+                            color = Color.White.copy(alpha = 0.6f),
+                            fontSize = brandSp(12),
                         )
                     }
                 },
@@ -1574,22 +1817,31 @@ private fun ControlTarget(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     onLongClick: (() -> Unit)? = null,
+    // D-43: a selected control shows a filled state — a jade disc behind the
+    // icon — so the viewer can see at a glance which control is active. A
+    // disabled control dims and does not fire.
+    selected: Boolean = false,
+    enabled: Boolean = true,
     content: @Composable () -> Unit,
 ) {
     val spoken = label
     // Long-press is opt-in per control (the Volume button's level slider). A control
     // without one keeps the plain clickable below — the press the semantics test pins.
+    val base = modifier
+        .size(MinControlTarget)
+        .clip(CircleShape)
+        .background(
+            if (selected) RaddCurrent500.copy(alpha = 0.25f) else Color.Transparent,
+            CircleShape,
+        )
+        .alpha(if (enabled) 1f else 0.4f)
     val pressModifier = if (onLongClick != null) {
-        modifier
-            .size(MinControlTarget)
-            .clip(CircleShape)
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button)
+        base
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick, role = Role.Button, enabled = enabled)
             .semantics { contentDescription = spoken }
     } else {
-        modifier
-            .size(MinControlTarget)
-            .clip(CircleShape)
-            .clickable(onClick = onClick, role = Role.Button)
+        base
+            .clickable(onClick = onClick, role = Role.Button, enabled = enabled)
             .semantics { contentDescription = spoken }
     }
     Box(
@@ -1603,10 +1855,28 @@ private fun PlayerControlButton(
     onClick: () -> Unit,
     label: String,
     onLongClick: (() -> Unit)? = null,
+    // D-43: the filled selected state, and the visible label under the icon —
+    // the control bar finally says what each glyph does, where space allows.
+    // The label duplicates the button's spoken label, so it is cleared from the
+    // semantics tree rather than announced twice.
+    selected: Boolean = false,
+    enabled: Boolean = true,
+    shortLabel: String? = null,
     content: @Composable () -> Unit,
 ) {
-    ControlTarget(label = label, onClick = onClick, onLongClick = onLongClick) {
-        Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { content() }
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        ControlTarget(label = label, onClick = onClick, onLongClick = onLongClick, selected = selected, enabled = enabled) {
+            Box(Modifier.size(26.dp), contentAlignment = Alignment.Center) { content() }
+        }
+        if (shortLabel != null) {
+            Text(
+                shortLabel,
+                color = if (selected) RaddCurrent500 else Color.White.copy(alpha = 0.75f),
+                fontSize = brandSp(10),
+                maxLines = 1,
+                modifier = Modifier.clearAndSetSemantics { },
+            )
+        }
     }
 }
 
@@ -1625,11 +1895,33 @@ private fun Scrubber(
     // Chapter ticks (plan §5 step 11): the pack's episode boundaries, from the same
     // pure function the print sheet's chapter list uses, so the two can never disagree.
     val ticks = remember(episodes, durationMs) { chapterTicks(episodes, durationMs) }
+    // PL-8: the scrubber is a progress bar to a screen reader — its description
+    // names the position and the chapter the position is inside, and setProgress
+    // lets a switch or voice user seek without ever touching the track.
+    val currentChapter = ticks.lastOrNull { it.offsetMs <= positionMs }?.title
+    val seekDescription = stringResource(
+        R.string.player_seek,
+        formatTime(positionMs),
+        formatTime(durationMs),
+    ) + (currentChapter?.let { ", $it" } ?: "")
     BoxWithConstraints(
         Modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 10.dp)
-            .height(20.dp),
+            .height(20.dp)
+            .semantics(mergeDescendants = true) {
+                contentDescription = seekDescription
+                if (enabled && durationMs > 0) {
+                    progressBarRangeInfo = ProgressBarRangeInfo(
+                        current = positionMs.toFloat() / durationMs.coerceAtLeast(1L),
+                        range = 0f..1f,
+                    )
+                    setProgress { value ->
+                        onSeek((value.coerceIn(0f, 1f) * durationMs).toLong())
+                        true
+                    }
+                }
+            },
     ) {
         val trackWidthPx = constraints.maxWidth.toFloat().coerceAtLeast(1f)
         val duration = durationMs.coerceAtLeast(1L)
@@ -1722,7 +2014,18 @@ private fun UnlockFab(chrome: PlayerChromeTheme, onUnlock: () -> Unit) {
 }
 
 @Composable
-private fun EndedButtons(chrome: PlayerChromeTheme, showNextEpisode: Boolean, onPlayAgain: () -> Unit, onNextEpisode: () -> Unit) {
+private fun EndedButtons(
+    chrome: PlayerChromeTheme,
+    showNextEpisode: Boolean,
+    onPlayAgain: () -> Unit,
+    onNextEpisode: () -> Unit,
+    // PL-12: the "Up next" preview — the next episode's title, number and still,
+    // so the end card shows what is coming instead of only a bare button.
+    nextEpisodeTitle: String? = null,
+    nextEpisodeSeason: Int? = null,
+    nextEpisodeEpisode: Int? = null,
+    nextEpisodePosterUrl: String? = null,
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(
@@ -1743,6 +2046,48 @@ private fun EndedButtons(chrome: PlayerChromeTheme, showNextEpisode: Boolean, on
             // episode ends on this button instead of advancing on its own (plan §5
             // step 10). Same card, same tap — a choice, not an ambush.
             if (showNextEpisode) {
+                if (nextEpisodeTitle != null || nextEpisodePosterUrl != null) {
+                    val number = listOfNotNull(
+                        nextEpisodeSeason?.let { "S$it" },
+                        nextEpisodeEpisode?.let { "E$it" },
+                    ).joinToString(" ")
+                    Surface(
+                        color = chrome.card,
+                        shape = MaterialTheme.shapes.medium,
+                        modifier = Modifier.clickableNoRipple(onNextEpisode),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (nextEpisodePosterUrl != null) {
+                                CatalogImage(
+                                    url = nextEpisodePosterUrl,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(56.dp, 32.dp),
+                                )
+                                Spacer(Modifier.width(10.dp))
+                            }
+                            Column {
+                                Text(
+                                    stringResource(R.string.player_up_next),
+                                    color = Color.White.copy(alpha = 0.6f),
+                                    fontSize = brandSp(12),
+                                )
+                                Text(
+                                    text = listOfNotNull(
+                                        number.ifBlank { null },
+                                        nextEpisodeTitle,
+                                    ).joinToString(" · "),
+                                    color = Color.White,
+                                    fontSize = brandSp(14),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                }
                 Surface(
                     color = chrome.card,
                     shape = MaterialTheme.shapes.medium,
@@ -1767,9 +2112,18 @@ private fun EndedButtons(chrome: PlayerChromeTheme, showNextEpisode: Boolean, on
  * the ten seconds between an episode's end and the advance. One line stating
  * the wait, one Cancel that stops it — the same card language as the ended
  * buttons, so it reads as part of the player, not a popup.
+ *
+ * Session 126 (PL-12): the countdown names the episode it is counting toward,
+ * and Play now skips the wait — the countdown is a convenience, not a hold.
  */
 @Composable
-private fun AutoplayCountdownCard(chrome: PlayerChromeTheme, secondsLeft: Int, onCancel: () -> Unit) {
+private fun AutoplayCountdownCard(
+    chrome: PlayerChromeTheme,
+    secondsLeft: Int,
+    onCancel: () -> Unit,
+    nextEpisodeTitle: String? = null,
+    onPlayNow: (() -> Unit)? = null,
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Surface(
@@ -1789,8 +2143,26 @@ private fun AutoplayCountdownCard(chrome: PlayerChromeTheme, secondsLeft: Int, o
                     )
                 }
             }
-            TextButton(onClick = onCancel) {
-                Text(stringResource(R.string.player_cancel), color = Color.White, fontSize = brandSp(14))
+            if (nextEpisodeTitle != null) {
+                Text(
+                    text = "${stringResource(R.string.player_up_next)}: $nextEpisodeTitle",
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = brandSp(13),
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.padding(horizontal = 32.dp),
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                onPlayNow?.let {
+                    TextButton(onClick = it) {
+                        Text(stringResource(R.string.player_autoplay_play_now), color = RaddCurrent500, fontSize = brandSp(14))
+                    }
+                }
+                TextButton(onClick = onCancel) {
+                    Text(stringResource(R.string.player_cancel), color = Color.White, fontSize = brandSp(14))
+                }
             }
         }
     }
@@ -1821,7 +2193,56 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
     }
 }
 
-// ── Give-up card (§5 handoff reasons) ──────────────────────────────────────────
+// PL-3: an offline start or an offline failure shows this immediately, with
+// Retry — not just the 30-second deadline card. Waiting half a minute to be
+// told there is no network is not a wait, it is a lie.
+@Composable
+private fun OfflineCard(onRetry: () -> Unit) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(
+            Modifier.padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Icon(Icons.Default.WifiOff, null, tint = RaddCoral400, modifier = Modifier.size(40.dp))
+            Spacer(Modifier.height(10.dp))
+            Text(
+                stringResource(R.string.player_offline_title),
+                color = Color.White,
+                style = MaterialTheme.typography.titleMedium,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                stringResource(R.string.player_offline_body),
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = brandSp(13),
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(12.dp))
+            OutlinedButton(onClick = onRetry) { Text(stringResource(R.string.player_retry), color = Color.White) }
+        }
+    }
+}
+
+// PL-4: a locked player keeps a small time chip visible — position and
+// remaining, without unlocking. Frosted glass on a capable device, solid on a
+// low-RAM one (BM rule 9).
+@Composable
+private fun LockedTimeChip(positionMs: Long, durationMs: Long, lowRam: Boolean, modifier: Modifier = Modifier) {
+    val spec = PlayerGlass.spec(lowRam)
+    Box(
+        modifier
+            .background(spec.tint, spec.shape)
+            .border(spec.borderWidth, spec.border, spec.shape)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+    ) {
+        Text(
+            text = "${formatTime(positionMs)} / ${formatTime(durationMs)}",
+            color = Color.White,
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
 
 /**
  * First-run gesture coach (plan §5 step 7): the three hints the player teaches nowhere
@@ -1915,10 +2336,14 @@ private fun StartNoticeCard(
     slowHint: Boolean = false,
     rungLabel: String? = null,
     attemptLabel: String? = null,
+    // 26: the three-step progress story — the viewer always knows what the wait
+    // is for: finding the best print, warming the link, then buffering. When the
+    // caller passes a step label it replaces the phase's generic label.
+    stepLabel: String? = null,
     onRetry: (() -> Unit)? = null,
     onTryAnother: (() -> Unit)? = null,
 ) {
-    val label = phase.label
+    val label = stepLabel ?: phase.label
     val spoken = if (title.isNullOrBlank()) label else stringResource(R.string.player_notice_spaced, label, title)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         // The logo-mark (§4.7): 32 dp, top-left, only while nothing is playing.
@@ -1989,17 +2414,21 @@ private fun StartNoticeCard(
             }
             // The actions (§5 P5, past eight seconds): retry the same attempt, or jump to
             // the next print now instead of waiting for the silent failover to get there.
+            // D-40: real buttons, not plain green text links — a press target the
+            // viewer can see is a press target the viewer will find.
             if (onRetry != null || onTryAnother != null) {
                 Spacer(Modifier.height(12.dp))
-                Row(horizontalArrangement = Arrangement.Center) {
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
+                ) {
                     onRetry?.let {
-                        TextButton(onClick = it) {
-                            Text(stringResource(R.string.player_retry), color = RaddCurrent500)
+                        OutlinedButton(onClick = it) {
+                            Text(stringResource(R.string.player_retry), color = Color.White)
                         }
                     }
                     onTryAnother?.let {
-                        TextButton(onClick = it) {
-                            Text(stringResource(R.string.player_start_try_another), color = RaddCurrent500)
+                        OutlinedButton(onClick = it) {
+                            Text(stringResource(R.string.player_start_try_another), color = Color.White)
                         }
                     }
                 }
@@ -2017,14 +2446,22 @@ private fun GiveUpCard(
     onDismiss: () -> Unit,
     onBackToDetails: () -> Unit,
     onTryAnother: (() -> Unit)? = null,
+    // NAV-4: an expired shared link gets its own way home. Only the expired
+    // card shows it — the other failures already have their own way out.
+    onHomeClick: (() -> Unit)? = null,
 ) {
-    // Back, and a tap outside the card, both leave the player (Session 114):
-    // a failed play must never trap the viewer — the old dismiss meant "keep
-    // waiting", so Back only dismissed the card and the card came back. "Keep
-    // waiting" below still means keep waiting, for a viewer who wants to give
-    // the slow link more time; it is no longer the only way out.
+    // PL-13: a tap outside the card means "keep waiting" — it dismisses the card
+    // and playback continues. Back still exits the player (Session 114): a failed
+    // play must never trap the viewer. AlertDialog's onDismissRequest fires for
+    // both, so the two are split here: dismissOnBackPress is false and the
+    // screen-level BackHandler owns Back, leaving onDismissRequest to mean only
+    // the outside tap.
     AlertDialog(
-        onDismissRequest = onBackToDetails,
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(
+            dismissOnBackPress = false,
+            dismissOnClickOutside = true,
+        ),
         // D-48: the dialog reads as a surface, not a slab on black — a 1dp
         // outline in the dialog's own shape, over the tonal container.
         modifier = Modifier.border(
@@ -2052,6 +2489,9 @@ private fun GiveUpCard(
                     HandoffWhy.DOWNLOAD_ONLY -> stringResource(R.string.player_giveup_download_only)
                     HandoffWhy.NO_CANDIDATE_LEFT -> stringResource(R.string.player_giveup_no_candidate)
                     HandoffWhy.START_TIMEOUT -> stringResource(R.string.player_giveup_timeout)
+                    // NAV-4: an expired shared link is not a generic error — it
+                    // says so, plainly, in the title.
+                    HandoffWhy.EXPIRED_LINK -> stringResource(R.string.player_giveup_expired)
                 },
                 color = Color.White,
             )
@@ -2068,6 +2508,8 @@ private fun GiveUpCard(
                             stringResource(R.string.player_giveup_no_candidate_body)
                         HandoffWhy.START_TIMEOUT ->
                             stringResource(R.string.player_giveup_timeout_body)
+                        HandoffWhy.EXPIRED_LINK ->
+                            stringResource(R.string.player_giveup_expired_body)
                     },
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),
@@ -2107,6 +2549,15 @@ private fun GiveUpCard(
                 }
                 TextButton(onClick = onBackToDetails, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.player_back_to_details), color = RaddCurrent500)
+                }
+                // NAV-4: the expired card's way home — a shared link that died
+                // should not strand the viewer on a dead card.
+                if (why == HandoffWhy.EXPIRED_LINK) {
+                    onHomeClick?.let { goHome ->
+                        TextButton(onClick = goHome, modifier = Modifier.fillMaxWidth()) {
+                            Text(stringResource(R.string.player_home), color = RaddCurrent500)
+                        }
+                    }
                 }
                 // Session 121 (P-19): "Close" said nothing about what happens next
                 // — this button dismisses the card and keeps waiting on the slow
@@ -2204,7 +2655,21 @@ private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
                 .padding(horizontal = 8.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(Icons.Default.Download, null, tint = Color.White, modifier = Modifier.size(14.dp))
+            // SC.7: the living progress ring while keeping — real %, from the
+            // pure keepingProgress, shown only when the total is known. A ring
+            // at 0% with an unknown total would be the same lie Session 120
+            // fixed in the chip text ("Keeping 0 B of 3.05 GB"), in a circle.
+            val progress = CacheAffordance.keepingProgress(keep)
+            if (progress != null) {
+                CircularProgressIndicator(
+                    progress = progress,
+                    modifier = Modifier.size(14.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp,
+                )
+            } else {
+                Icon(Icons.Default.Download, null, tint = Color.White, modifier = Modifier.size(14.dp))
+            }
             Spacer(Modifier.width(4.dp))
             Text(
                 CacheAffordance.chipText(keep),
@@ -2248,33 +2713,11 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
 }
 
 /**
- * A break rendered only in the two slots [AdSlot] permits. The copy states the placement
- * rule instead of inventing an ad that the app does not yet serve.
+ * PL-2: the sponsor break dialog is gone, with the placeholder ad it rendered.
+ * Episode advance no longer gates on a fake ad — the countdown advances directly
+ * — and the policy seam (AdSlotPolicy, AdSlot) stays in the player package
+ * for the day a real ad is wired, with its pure tests as the proof.
  */
-@Composable
-private fun SponsorBreakDialog(slot: AdSlot, onDismiss: () -> Unit) {
-    val moment = when (slot) {
-        AdSlot.PRE_ROLL -> stringResource(R.string.player_slot_pre_roll)
-        AdSlot.BETWEEN_EPISODES -> stringResource(R.string.player_slot_between)
-        AdSlot.NONE -> return
-    }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        containerColor = RaddPlayerDialog,
-        title = { RaddDialogTitle(stringResource(R.string.player_ad_title), color = Color.White) },
-        text = {
-            Text(
-                stringResource(R.string.player_ad_body, moment),
-                color = Color.White.copy(alpha = 0.8f),
-                fontSize = brandSp(13),
-            )
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.player_continue), color = RaddCurrent500) }
-        },
-    )
-}
-
 @Composable
 private fun CalibrationDialog(
     state: CalibrationState,
@@ -2421,6 +2864,28 @@ private fun QualitySheet(state: PlayerUiState, vm: PlayerViewModel) {
                 selected = state.qualityAuto,
                 onClick = { vm.selectQualityBand("auto") },
             )
+            // 26: Data Saver sits next to Auto — the viewer who is on mobile data
+            // caps Auto at 480p from the same sheet that picks the quality.
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.player_data_saver),
+                        color = Color.White,
+                        fontSize = brandSp(14),
+                    )
+                    Text(
+                        stringResource(R.string.player_data_saver_detail),
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = brandSp(12),
+                    )
+                }
+                Switch(checked = state.dataSaver, onCheckedChange = { vm.toggleDataSaver() })
+            }
             state.qualityRungs.forEach { rung ->
                 val selected = !state.qualityAuto && rung.band == state.qualityBand
                 QualityRow(
@@ -2452,6 +2917,11 @@ private fun QualityRow(title: String, detail: String?, selected: Boolean, onClic
             .fillMaxWidth()
             .clickableNoRipple(onClick)
             .heightIn(min = MinControlTarget)
+            // D-43: a selected rung is filled, not just green text.
+            .background(
+                if (selected) RaddCurrent500.copy(alpha = 0.15f) else Color.Transparent,
+                MaterialTheme.shapes.small,
+            )
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -2844,21 +3314,34 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
                 vm.toggleStereoOnly()
             }
             SheetTitle(stringResource(R.string.player_more_tools))
-            SheetRow(label = stringResource(R.string.player_next_episode)) {
-                vm.hideMoreSheet()
-                vm.requestNextEpisode()
+            // PL-11: "Next episode" and "Calibrate" are series rows — a movie or
+            // a local file has no next episode to play and nothing to calibrate.
+            if (state.isSeriesScope) {
+                SheetRow(label = stringResource(R.string.player_next_episode)) {
+                    vm.hideMoreSheet()
+                    vm.requestNextEpisode()
+                }
             }
             SheetRow(label = stringResource(R.string.player_play_from_row)) {
                 vm.hideMoreSheet()
                 vm.showPlayFromDialog()
             }
-            SheetRow(label = stringResource(R.string.player_calibrate_row)) {
-                vm.hideMoreSheet()
-                vm.openCalibration()
+            if (state.isSeriesScope) {
+                SheetRow(label = stringResource(R.string.player_calibrate_row)) {
+                    vm.hideMoreSheet()
+                    vm.openCalibration()
+                }
             }
             SheetRow(label = stringResource(R.string.player_prints_title)) {
                 vm.hideMoreSheet()
                 vm.showPrintSheet()
+            }
+            // SC.24: share a moment — title, timestamp, deep link — from the
+            // More sheet. The VM hides the row's effect for local bundles (no
+            // handle to link to); the row itself stays, and the tap is a no-op.
+            SheetRow(label = stringResource(R.string.player_share_moment)) {
+                vm.hideMoreSheet()
+                vm.shareMoment()
             }
             SheetRow(label = stringResource(R.string.player_retry_row)) {
                 vm.hideMoreSheet()
@@ -2879,6 +3362,10 @@ private fun MoreSheet(state: PlayerUiState, vm: PlayerViewModel, onEnterPip: () 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
+    // PL-6: the ranks, the failover log and the failover policy are debug, not
+    // viewer-facing — they sit behind a long-press on the "Prints" title. The
+    // sheet itself shows only quality, format and which print is playing.
+    var debugVisible by remember { mutableStateOf(false) }
     ModalBottomSheet(
         onDismissRequest = { vm.hidePrintSheet() },
         sheetState = rememberModalBottomSheetState(),
@@ -2889,7 +3376,13 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
         ) {
-            SheetTitle(stringResource(R.string.player_prints_title))
+            SheetTitle(
+                stringResource(R.string.player_prints_title),
+                modifier = Modifier.combinedClickable(
+                    onClick = {},
+                    onLongClick = { debugVisible = !debugVisible },
+                ),
+            )
             Text(
                 stringResource(R.string.player_prints_note),
                 color = Color.White.copy(alpha = 0.6f),
@@ -2912,15 +3405,19 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
             state.bundle?.renditions?.forEach { r ->
                 val active = r.rank == state.activeRendition?.rank
-                val rankText = stringResource(R.string.player_rune_rank, r.rank, r.displayLabel())
                 val hlsTag = stringResource(R.string.player_tag_hls)
                 val playingTag = stringResource(R.string.player_rune_playing)
+                // PL-6: the row names the quality and the format, and marks the
+                // print that is playing. The rank is debug — it shows only
+                // behind the long-press above.
+                val rowText = buildString {
+                    append(r.displayLabel())
+                    if (r.playback.isHls()) append("  ·  ").append(hlsTag)
+                    if (active) append("   ← ").append(playingTag)
+                    if (debugVisible) append("  ·  #").append(r.rank)
+                }
                 Text(
-                    buildString {
-                        append(rankText)
-                        if (r.playback.isHls()) append("  ·  ").append(hlsTag)
-                        if (active) append("   ← ").append(playingTag)
-                    },
+                    rowText,
                     color = if (active) RaddCurrent500 else Color.White.copy(alpha = 0.8f),
                     fontSize = brandSp(13),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
@@ -2943,7 +3440,10 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     }
                 }
             }
-            if (state.failoverLog.isNotEmpty()) {
+            // PL-6: the failover log and the policy are debug — a viewer needs to
+            // know which print is playing, not the ladder it climbed. They show
+            // only behind the long-press on the "Prints" title.
+            if (debugVisible && state.failoverLog.isNotEmpty()) {
                 Spacer(Modifier.height(10.dp))
                 SheetTitle(stringResource(R.string.player_failover_log))
                 state.failoverLog.forEach { record ->
@@ -2961,13 +3461,15 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                     )
                 }
             }
-            state.bundle?.failurePolicy?.let { p ->
-                Text(
-                    stringResource(R.string.player_failover_policy, p.retrySame, p.backoffMs, p.maxRanks),
-                    color = Color.White.copy(alpha = 0.5f),
-                    fontSize = brandSp(11),
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                )
+            if (debugVisible) {
+                state.bundle?.failurePolicy?.let { p ->
+                    Text(
+                        stringResource(R.string.player_failover_policy, p.retrySame, p.backoffMs, p.maxRanks),
+                        color = Color.White.copy(alpha = 0.5f),
+                        fontSize = brandSp(11),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
             }
             Spacer(Modifier.height(6.dp))
             SheetRow(label = stringResource(R.string.player_play_from_row)) { vm.showPlayFromDialog() }
@@ -2985,13 +3487,13 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
 }
 
 @Composable
-private fun SheetTitle(text: String) {
+private fun SheetTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         color = Color.White,
         fontSize = brandSp(15),
         fontWeight = FontWeight.SemiBold,
-        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+        modifier = modifier.padding(horizontal = 16.dp, vertical = 10.dp),
     )
 }
 
@@ -3016,11 +3518,15 @@ private fun SheetRow(label: String, selected: Boolean = false, enabled: Boolean 
         },
         // A disabled row stays visible and simply does not consume the press: hiding the
         // affordance would leave the viewer hunting for a button that has nothing to do.
-        modifier = if (enabled) {
-            Modifier.clickableNoRipple(onClick).padding(horizontal = 4.dp)
-        } else {
-            Modifier.padding(horizontal = 4.dp)
-        },
+        // D-43: a selected row is filled, not just green text — the state is visible
+        // at a glance, not only when the viewer reads the check mark.
+        modifier = Modifier
+            .padding(horizontal = 4.dp)
+            .background(
+                if (selected) RaddCurrent500.copy(alpha = 0.15f) else Color.Transparent,
+                MaterialTheme.shapes.small,
+            )
+            .then(if (enabled) Modifier.clickableNoRipple(onClick) else Modifier),
     )
 }
 
@@ -3046,20 +3552,52 @@ private fun PlayerEventWatcher(
                 is PlayerEvent.PlayNextEpisode ->
                     onPlayNextEpisode(event.workKey, event.postId, event.season, event.episode)
                 is PlayerEvent.OpenExternalPlayer -> openExternally(context, event.url)
+                // SC.24: share a moment — the VM built the text (title, time,
+                // deep link); the screen only opens the system chooser for it.
+                is PlayerEvent.ShareMoment -> shareMoment(context, event.text)
             }
         }
     }
 }
 
+// SC.24: the share chooser for a moment. No try/catch: the chooser is a system
+// activity, so unlike a video player intent it always resolves.
+private fun shareMoment(context: Context, text: String) {
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, text)
+    }
+    context.startActivity(Intent.createChooser(intent, context.getString(R.string.player_share_moment)))
+}
+
 /** PiP needs Android 8+; older devices get an honest toast. */
 @Composable
-private fun rememberPipLauncher(): () -> Unit {
+private fun rememberPipLauncher(aspectRatio: Float? = null, sourceRect: androidx.compose.ui.geometry.Rect? = null): () -> Unit {
     val context = LocalContext.current
     val activity = remember(context) { context.findActivity() }
     return {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity != null) {
             try {
-                val params = android.app.PictureInPictureParams.Builder().build()
+                // PL-10: the PiP window follows the video's own shape, and the
+                // source rect is the surface's own bounds — the window grows
+                // out of the picture, not out of a corner.
+                val params = android.app.PictureInPictureParams.Builder().apply {
+                    if (aspectRatio != null && aspectRatio > 0f) {
+                        val width = 1000
+                        val height = (1000f / aspectRatio).roundToInt().coerceAtLeast(1)
+                        setAspectRatio(android.util.Rational(width, height))
+                    }
+                    sourceRect?.let {
+                        setSourceRectHint(
+                            android.graphics.Rect(
+                                it.left.roundToInt(),
+                                it.top.roundToInt(),
+                                it.right.roundToInt(),
+                                it.bottom.roundToInt(),
+                            ),
+                        )
+                    }
+                }.build()
                 activity.enterPictureInPictureMode(params)
             } catch (t: Throwable) {
                 Toast.makeText(context, context.getString(R.string.player_pip_refused, t.message), Toast.LENGTH_SHORT).show()
