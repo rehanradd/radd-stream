@@ -24,6 +24,9 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     - Fast_Fetch/test_bundle_handles.py    (Session 111: bundle handles name ledger rows)
 #     - Fast_Fetch/test_provenance_stamping.py(ingest-time provenance)
 #     - Fast_Fetch/test_merge_catalogs.py    (staging → unified merge)
+#     - Fast_Fetch/test_backfill_cast.py     (cast backfill: report-only by
+#                                             default; --apply fills blanks from
+#                                             staging by page URL, never overwrites)
 #     - Fast_Fetch/test_site_scout.py        (site discovery / spec phases)
 #     - Fast_Fetch/test_backup_manager.py    (offsite backup tooling)
 #     - Fast_Fetch/test_usage_stats.py       (operator counters + token gate)
@@ -204,6 +207,9 @@ jobs:
 
       - name: 🧪 test_merge_catalogs.py
         run: python3 -S Fast_Fetch/test_merge_catalogs.py
+
+      - name: 🧪 test_backfill_cast.py
+        run: python3 -S Fast_Fetch/test_backfill_cast.py
 
       - name: 🧪 test_site_scout.py
         run: python3 -S Fast_Fetch/test_site_scout.py
