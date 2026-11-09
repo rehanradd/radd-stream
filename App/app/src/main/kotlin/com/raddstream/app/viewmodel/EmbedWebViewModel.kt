@@ -4,8 +4,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.raddstream.app.network.ApiProvider
+import com.raddstream.app.network.VIP_PASS_HEADER
 import com.raddstream.app.network.isSameOriginAsServer
 import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.Screen.Embed
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -18,8 +20,13 @@ import kotlinx.coroutines.launch
 sealed class EmbedPage {
     data object Resolving : EmbedPage()
 
-    /** The ONE address this screen can ever load — ours, never the provider's. */
-    data class Ready(val url: String) : EmbedPage()
+    /**
+     * The ONE address this screen can ever load — ours, never the provider's.
+     * [headers] rides the initial request only: a VIP pass travels as the
+     * [VIP_PASS_HEADER] header, never in the URL, so it never lands in WebView
+     * history. Empty for guests and free accounts.
+     */
+    data class Ready(val url: String, val headers: Map<String, String> = emptyMap()) : EmbedPage()
 
     /** A refusal with a reason a viewer can act on. Never a blank screen with a spinner. */
     data class Refused(val reason: String) : EmbedPage()
@@ -42,6 +49,7 @@ sealed class EmbedPage {
 class EmbedWebViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val apiProvider: ApiProvider,
+    private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
     private val streamId: String = Embed.decodeStreamId(
@@ -67,6 +75,14 @@ class EmbedWebViewModel @Inject constructor(
                 base.isBlank() || streamId.isBlank() -> null
                 else -> streamRedirectUrl(base, streamId)
             }
+            // Session 126: a VIP user opening a gated premium print via the
+            // Embed player gets 402 without the pass. The pass travels as a
+            // request header on the initial redirector request only — never in
+            // the URL, never in history. Null for guests and free accounts.
+            val headers = runCatching { syncAccountRepository.currentVipPass() }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?.let { mapOf(VIP_PASS_HEADER to it) }
+                .orEmpty()
             _page.value = when {
                 streamId.isBlank() ->
                     EmbedPage.Refused("This source has no handle, so there is nothing to open.")
@@ -76,7 +92,7 @@ class EmbedWebViewModel @Inject constructor(
                     EmbedPage.Refused("This source has no handle, so there is nothing to open.")
                 !isSameOriginAsServer(url, base) ->
                     EmbedPage.Refused("That address is not on the server you connected to.")
-                else -> EmbedPage.Ready(url)
+                else -> EmbedPage.Ready(url, headers)
             }
         }
     }

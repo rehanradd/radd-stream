@@ -83,6 +83,8 @@ data class UserPreferences(
     val autoplayNext: Boolean = true,
     /** Let the Home hero move on its own (plan §5 step 10); off stops the carousel. */
     val autoplayPreviews: Boolean = true,
+    /** PL-10: keep playing in a small window when the viewer leaves the player. Off by default. */
+    val autoPip: Boolean = false,
     /** The rung a new title starts on when Play was Auto; "auto" = no default. */
     val defaultQuality: String = "auto",
     /** Subtitle text size, 50..200 % — the same number the player sheet's slider writes. */
@@ -477,6 +479,12 @@ class SettingsViewModel @Inject constructor(
                 _uiState.update { it.copy(prefs = it.prefs.copy(autoplayPreviews = enabled)) }
             }
         }
+        // PL-10: the auto-PiP switch the player obeys when the viewer leaves mid-title.
+        viewModelScope.launch {
+            settingsRepository.autoPip.collect { enabled ->
+                _uiState.update { it.copy(prefs = it.prefs.copy(autoPip = enabled)) }
+            }
+        }
         viewModelScope.launch {
             settingsRepository.defaultQuality.collect { band ->
                 _uiState.update { it.copy(prefs = it.prefs.copy(defaultQuality = band)) }
@@ -675,6 +683,12 @@ class SettingsViewModel @Inject constructor(
     fun setAutoplayPreviews(enabled: Boolean) {
         updatePrefs { it.copy(autoplayPreviews = enabled) }
         viewModelScope.launch { settingsRepository.saveAutoplayPreviews(enabled) }
+    }
+
+    /** PL-10: the auto-PiP switch — off by default, a window the viewer did not open is one they did not ask for. */
+    fun setAutoPip(enabled: Boolean) {
+        updatePrefs { it.copy(autoPip = enabled) }
+        viewModelScope.launch { settingsRepository.saveAutoPip(enabled) }
     }
 
     fun setDefaultQuality(band: String) {

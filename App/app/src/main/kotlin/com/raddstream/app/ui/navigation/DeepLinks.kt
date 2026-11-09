@@ -14,10 +14,9 @@ import com.raddstream.app.brand.Brand
  * against our own redirector at playback time.
  *
  * [parse] is the contract check: it answers what a URI means, so a test can
- * pin the shapes the NavGraph patterns implement. Nothing in the app calls
- * it today — incoming links arrive through the NavController — but the next
- * caller (an incoming-share handler, a notification tap) reads this file,
- * not three.
+ * pin the shapes the NavGraph patterns implement. [MainActivity] calls it for
+ * every incoming `radd://` VIEW intent, and the graph routes what it returns —
+ * or the dead-link destination when it returns nothing.
  */
 sealed interface DeepLink {
     data class Detail(val postId: Int) : DeepLink

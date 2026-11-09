@@ -748,6 +748,18 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                // PL-10: opt-in auto-enter picture-in-picture. Off by default: a
+                // window the viewer did not open is a window they did not ask for.
+                SwitchRow(
+                    checked = state.prefs.autoPip,
+                    onCheckedChange = viewModel::setAutoPip,
+                    label = "Auto picture-in-picture",
+                )
+                Text(
+                    "When this is on, leaving the player while a title is playing keeps it playing in a small window.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
 
                 Spacer(Modifier.height(10.dp))
                 PreferenceRowTitle("Default quality")

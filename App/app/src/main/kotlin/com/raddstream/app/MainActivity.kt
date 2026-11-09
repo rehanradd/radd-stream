@@ -37,6 +37,8 @@ import com.raddstream.app.data.Telemetry
 import com.raddstream.app.network.models.PanelDisclaimer
 import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.repository.CatalogRepository
+import com.raddstream.app.ui.navigation.DeepLink
+import com.raddstream.app.ui.navigation.DeepLinks
 import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
@@ -92,9 +94,20 @@ class MainActivity : ComponentActivity() {
     /** Makes two opens of one file two requests; see [LocalVideoOpen.from]. */
     private var localOpenNonce = 0L
 
+    /**
+     * NAV-5: a `radd://` link this app was opened with, parsed by [DeepLinks.parse]
+     * and waiting for the graph that can route it — mirroring [pendingLocalOpen].
+     * A link that parses to nothing waits separately as the raw URI, for the
+     * catch-all dead-link destination: a link that leads nowhere says so,
+     * instead of silently opening Home.
+     */
+    private var pendingDeepLink by mutableStateOf<DeepLink?>(null)
+    private var pendingUnknownDeepLink by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         takeLocalVideoFrom(intent)
+        takeDeepLinkFrom(intent)
         enableEdgeToEdge()
         setContent {
             // The login streak (plan §5 step 19): one record per day this device opens the app.
@@ -308,6 +321,10 @@ class MainActivity : ComponentActivity() {
                             autoplayPreviews = autoplayPreviews,
                             openRequest = pendingLocalOpen,
                             onOpenConsumed = { pendingLocalOpen = null },
+                            deepLinkRequest = pendingDeepLink,
+                            onDeepLinkConsumed = { pendingDeepLink = null },
+                            unknownDeepLink = pendingUnknownDeepLink,
+                            onUnknownDeepLinkConsumed = { pendingUnknownDeepLink = null },
                         )
                     }
                     // The disclaimer outranks every screen but the maintenance
@@ -394,6 +411,25 @@ class MainActivity : ComponentActivity() {
         // without this the second file a viewer opens would silently stay the first one on screen.
         setIntent(intent)
         takeLocalVideoFrom(intent)
+        takeDeepLinkFrom(intent)
+    }
+
+    /**
+     * NAV-5: one `radd://` Intent in, one parsed link out. Only VIEW intents on
+     * our own scheme are links; anything else is another app's business (a file
+     * open, a share) and [takeLocalVideoFrom] owns it. A URI [DeepLinks.parse]
+     * cannot read is not dropped — it waits as the raw string for the dead-link
+     * destination.
+     */
+    private fun takeDeepLinkFrom(source: Intent?) {
+        val data = source?.data ?: return
+        if (source.action != Intent.ACTION_VIEW) return
+        if (data.scheme?.lowercase() != Brand.deepLinkScheme.lowercase()) return
+        val uri = data.toString()
+        when (val parsed = DeepLinks.parse(uri)) {
+            null -> pendingUnknownDeepLink = uri
+            else -> pendingDeepLink = parsed
+        }
     }
 
     /**

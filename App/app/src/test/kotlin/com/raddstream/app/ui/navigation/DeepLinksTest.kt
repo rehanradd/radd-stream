@@ -30,6 +30,17 @@ class DeepLinksTest {
     }
 
     @Test
+    fun `a stream link missing its title parses to nothing`() {
+        // NAV-5: a half-formed share is a dead link, not a player with no title.
+        assertNull(DeepLinks.parse("radd://stream/s-abc123"))
+    }
+
+    @Test
+    fun `a bare scheme parses to nothing`() {
+        assertNull(DeepLinks.parse("radd://"))
+    }
+
+    @Test
     fun `a detail link with a non-numeric id parses to nothing`() {
         assertNull(DeepLinks.parse("radd://detail/abc"))
     }

@@ -114,4 +114,11 @@ sealed class Screen(val route: String) {
 
     /** The phone's own videos (Movies/ and Download/), listed from MediaStore. */
     object LocalFiles : Screen("local_files")
+
+    /**
+     * NAV-4/NAV-5: the catch-all for a deep link that parses to nothing — a
+     * `radd://` URI with no known shape. A link that leads nowhere says so,
+     * with a way home, instead of silently opening Home as if nothing happened.
+     */
+    object DeadLink : Screen("dead_link")
 }

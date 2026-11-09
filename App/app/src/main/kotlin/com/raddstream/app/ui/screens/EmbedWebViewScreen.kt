@@ -261,7 +261,14 @@ fun EmbedWebViewScreen(
                                     loadedUrl = target
                                     loadFailure = null
                                     blockedScheme = null
-                                    view.loadUrl(target)
+                                    // Session 126: the VIP pass rides the initial
+                                    // redirector request as a header — never in the
+                                    // URL, never in history. Empty for guests.
+                                    if (state.headers.isNotEmpty()) {
+                                        view.loadUrl(target, state.headers)
+                                    } else {
+                                        view.loadUrl(target)
+                                    }
                                 }
                             },
                         )

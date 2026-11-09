@@ -31,6 +31,7 @@ import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.CheckInScreen
 import com.raddstream.app.ui.screens.CoinsScreen
 import com.raddstream.app.ui.screens.DashboardScreen
+import com.raddstream.app.ui.screens.DeadLinkScreen
 import com.raddstream.app.ui.screens.DetailScreen
 import com.raddstream.app.ui.screens.DownloadsScreen
 import com.raddstream.app.ui.screens.EmbedWebViewScreen
@@ -75,6 +76,10 @@ private data class BottomNavItem(
  * [LocalVideoOpen]; [onOpenConsumed] reports that it has been put on the back stack. The graph
  * does not decide anything about the file — it routes what the activity handed over, on the same
  * `player_local` route a finished download uses.
+ *
+ * NAV-5: [deepLinkRequest] is a `radd://` link [DeepLinks.parse] read, routed the same way;
+ * [unknownDeepLink] is one it could not read, routed to the dead-link destination instead of
+ * silently opening Home.
  */
 @Composable
 fun RaddStreamNavGraph(
@@ -89,6 +94,10 @@ fun RaddStreamNavGraph(
     autoplayPreviews: Boolean = true,
     openRequest: LocalVideoOpen? = null,
     onOpenConsumed: () -> Unit = {},
+    deepLinkRequest: DeepLink? = null,
+    onDeepLinkConsumed: () -> Unit = {},
+    unknownDeepLink: String? = null,
+    onUnknownDeepLinkConsumed: () -> Unit = {},
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
@@ -101,6 +110,38 @@ fun RaddStreamNavGraph(
         val request = openRequest ?: return@LaunchedEffect
         navController.navigate(request.route) { launchSingleTop = true }
         onOpenConsumed()
+    }
+
+    // NAV-5: a parsed deep link routes exactly once, the same way. Stream links
+    // also match the player route's own navDeepLink, so the NavController may
+    // already be there — launchSingleTop makes the second navigate a no-op,
+    // not a duplicate player. Detail and Browse have no navDeepLink pattern,
+    // so this effect is their only way in.
+    LaunchedEffect(deepLinkRequest) {
+        val request = deepLinkRequest ?: return@LaunchedEffect
+        when (request) {
+            is DeepLink.Detail -> navController.navigate(Screen.Detail.createRoute(request.postId)) {
+                launchSingleTop = true
+            }
+            is DeepLink.Stream -> navController.navigate(
+                Screen.Player.createRoute(request.streamId, request.title),
+            ) {
+                launchSingleTop = true
+            }
+            is DeepLink.Browse -> navController.navigate(Screen.Browse.createRoute(request.type)) {
+                launchSingleTop = true
+            }
+        }
+        onDeepLinkConsumed()
+    }
+
+    // NAV-5: a link that parsed to nothing still goes somewhere — the dead-link
+    // destination, which says so with a way home, instead of silently opening
+    // Home as if nothing happened.
+    LaunchedEffect(unknownDeepLink) {
+        if (unknownDeepLink == null) return@LaunchedEffect
+        navController.navigate(Screen.DeadLink.route) { launchSingleTop = true }
+        onUnknownDeepLinkConsumed()
     }
 
     // The operator's tab order, resolved against what this build can show: Home is always
@@ -439,6 +480,19 @@ fun RaddStreamNavGraph(
                             }
                         }
                     },
+                    // SC §3: an actor tapped on the pause strip searches them,
+                    // the same route the detail screen's cast chips take.
+                    onActorClick = { actor ->
+                        navController.navigate(Screen.Search.createRoute(actor)) {
+                            launchSingleTop = true
+                        }
+                    },
+                    // NAV-4: the expired-link card's way home.
+                    onHomeClick = {
+                        navController.navigate(Screen.Home.route) {
+                            launchSingleTop = true
+                        }
+                    },
                 )
             }
 
@@ -475,6 +529,17 @@ fun RaddStreamNavGraph(
                     title = title,
                     localUri = localUri,
                     onBackClick = { navController.popBackStack() },
+                )
+            }
+
+            // NAV-5: the catch-all for a deep link that parsed to nothing.
+            composable(route = Screen.DeadLink.route) {
+                DeadLinkScreen(
+                    onHomeClick = {
+                        navController.navigate(Screen.Home.route) {
+                            launchSingleTop = true
+                        }
+                    },
                 )
             }
         }

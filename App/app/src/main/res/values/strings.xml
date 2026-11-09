@@ -88,6 +88,9 @@
     <string name="player_saved_on_device">Saved on device</string>
     <string name="player_seek">Seek: %1$s of %2$s</string>
     <string name="player_quality_single">Only one quality is available for this title</string>
+    <!-- Session 126 (NAV-4/NAV-5): the catch-all deep-link destination. -->
+    <string name="dead_link_title">This link didn’t lead anywhere</string>
+    <string name="dead_link_body">The link doesn’t name a title this app knows. It may be mistyped, or from an older share. Go back home and find the title again.</string>
     <string name="player_start_slow">Taking longer than usual — your link is being found</string>
     <string name="player_start_try_another">Try another print</string>
     <string name="player_attempt_counter">Trying copy %1$d of %2$d</string>

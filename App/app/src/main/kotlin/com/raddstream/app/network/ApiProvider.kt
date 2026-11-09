@@ -129,6 +129,17 @@ class ApiProvider @Inject constructor(
 }
 
 /**
+ * The VIP pass as a request header (Session 126): `X-Radd-Vip-Pass: <pass>`.
+ * The same verification as `?vip=` on the server side (`redact.VIP_PASS_HEADER`),
+ * but the pass never enters a URL — so it never lands in WebView history, a
+ * back-stack argument, or a bug report. Only the Embed WebView uses this form:
+ * it loads our own redirector directly, so the header rides the one request
+ * that needs it. The player and the download engine keep [withVipPass], because
+ * they follow the 302 outside this process and a header cannot ride along.
+ */
+const val VIP_PASS_HEADER: String = "X-Radd-Vip-Pass"
+
+/**
  * Our own redirector address for an opaque stream handle: `<server>/api/v1/stream?id=<handle>`.
  * This is the ONLY playable address this app ever builds, hands to an external player, or writes
  * into a download task. The server answers it with a 302, so no upstream host ever appears here.

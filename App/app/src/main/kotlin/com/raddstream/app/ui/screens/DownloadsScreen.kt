@@ -41,9 +41,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.R
 import com.raddstream.app.data.downloads.DeviceDownload
 import com.raddstream.app.data.downloads.DeviceDownloadState
 import com.raddstream.app.ui.components.EmptyState
@@ -369,18 +371,19 @@ private fun deviceStatusLine(item: DeviceDownload): String {
         DeviceDownloadState.QUEUED -> "Queued$percent"
         DeviceDownloadState.DOWNLOADING -> "Downloading$percent"
         DeviceDownloadState.PAUSED -> "Paused — resume when you are ready"
-        DeviceDownloadState.READY -> "Saved — plays here or in any video player"
+        DeviceDownloadState.READY -> "Saved on device — plays here or in any video player"
         DeviceDownloadState.FAILED -> "Download failed — resume, or cancel and try again"
     }
 }
 
 @Composable
 private fun DeviceStatusPill(state: DeviceDownloadState) {
+    // SC.8: a finished download wears "Saved on device", not the bare "Saved".
     val text = when (state) {
         DeviceDownloadState.QUEUED -> "Queued"
         DeviceDownloadState.DOWNLOADING -> "Downloading"
         DeviceDownloadState.PAUSED -> "Paused"
-        DeviceDownloadState.READY -> "Saved"
+        DeviceDownloadState.READY -> stringResource(R.string.player_saved_on_device)
         DeviceDownloadState.FAILED -> "Failed"
     }
     val error = state == DeviceDownloadState.FAILED
@@ -440,7 +443,7 @@ private fun statusLine(item: KeptItem): String {
         KeepState.DOWNLOADING -> "Downloading$percent"
         KeepState.PAUSED -> "Paused"
         KeepState.NO_SPACE -> "Not enough space to finish — free room and retry"
-        KeepState.READY -> "Kept — available offline"
+        KeepState.READY -> "Saved on device — available offline"
         KeepState.EXPIRING -> "Kept — expires soon and auto-deletes"
         KeepState.EXPIRED -> "Expired — auto-deleted to respect link rot"
         KeepState.FAILED -> "Download failed — retry to resume"
@@ -449,11 +452,12 @@ private fun statusLine(item: KeptItem): String {
 
 @Composable
 private fun StatusPill(state: KeepState) {
+    // SC.8: same badge as the device downloads — "Saved on device".
     val text = when (state) {
         KeepState.QUEUED -> "Queued"
         KeepState.DOWNLOADING -> "Downloading"
         KeepState.PAUSED -> "Paused"
-        KeepState.READY -> "Kept"
+        KeepState.READY -> stringResource(R.string.player_saved_on_device)
         KeepState.EXPIRING -> "Expiring soon"
         KeepState.EXPIRED -> "Expired"
         KeepState.NO_SPACE -> "No space"
