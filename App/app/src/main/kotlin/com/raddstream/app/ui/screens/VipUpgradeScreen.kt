@@ -96,6 +96,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun VipUpgradeScreen(
     onBackClick: () -> Unit,
+    /** Session 123: the wallet here opens the coins screen, where the balance and the history live. */
+    onOpenCoins: () -> Unit = {},
     viewModel: VipViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -137,6 +139,11 @@ fun VipUpgradeScreen(
                 expiresAt = state.rewardedVipExpiresAt,
                 onActivatePass = { viewModel.grantRewardedVip() },
             )
+            // Session 123: the balance beside this pass is only a number —
+            // the coins screen shows it with the history behind it.
+            TextButton(onClick = onOpenCoins, modifier = Modifier.fillMaxWidth()) {
+                Text("Coins and history")
+            }
             if (state.streak.isConfigured) {
                 StreakCard(
                     streak = state.streak,

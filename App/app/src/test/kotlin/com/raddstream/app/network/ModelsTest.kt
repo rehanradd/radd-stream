@@ -2,8 +2,10 @@ package com.raddstream.app.network
 
 import com.raddstream.app.data.local.FavoritePost
 import com.raddstream.app.network.models.Codec
+import com.raddstream.app.network.models.AccountOverviewResponse
 import com.raddstream.app.network.models.CoinBalanceResponse
 import com.raddstream.app.network.models.CoinCapsResponse
+import com.raddstream.app.network.models.CoinHistoryResponse
 import com.raddstream.app.network.models.CoinDownloadCreditRequest
 import com.raddstream.app.network.models.CoinDownloadCreditResponse
 import com.raddstream.app.network.models.CoinEarnRequest
@@ -599,6 +601,41 @@ class ModelsTest {
         assertEquals(20, response.passes["day"]?.pkr)
         assertEquals(70, response.passes["weekend"]?.coins)
         assertEquals(200, response.passes["monthly_vip"]?.coins)
+    }
+
+    @Test
+    fun `coin history response decodes the ledger rows newest first`() {
+        val response = gson.fromJson(
+            """{"entries":[{"id":7,"delta":-500,"reason":"redeem_pass","source":"server","ref":"day","created_at":1790000000.0},{"id":6,"delta":20,"reason":"streak_day","source":"server","ref":"day2","created_at":1789913600.0}],"count":2}""",
+            CoinHistoryResponse::class.java,
+        )
+
+        assertEquals(2, response.count)
+        assertEquals(2, response.entries.size)
+        assertEquals(7, response.entries[0].id)
+        assertEquals(-500, response.entries[0].delta)
+        assertEquals("redeem_pass", response.entries[0].reason)
+        assertEquals("day", response.entries[0].ref)
+        assertEquals(1790000000.0, response.entries[0].createdAt)
+        assertEquals(20, response.entries[1].delta)
+        assertEquals("streak_day", response.entries[1].reason)
+    }
+
+    @Test
+    fun `account overview response decodes the balance streak and cadence`() {
+        val response = gson.fromJson(
+            """{"balance":370,"streak":{"current_streak":3,"best_streak":5,"last_counted_day":"2026-11-09","tz":"Asia/Karachi","day_boundary_hour":4},"cadence":{"last_preroll_at":0.0,"last_app_open_at":1790000000.0,"native_poster_cursor":2}}""",
+            AccountOverviewResponse::class.java,
+        )
+
+        assertEquals(370, response.balance)
+        assertEquals(3, response.streak.currentStreak)
+        assertEquals(5, response.streak.bestStreak)
+        assertEquals("2026-11-09", response.streak.lastCountedDay)
+        assertEquals("Asia/Karachi", response.streak.tz)
+        assertEquals(4, response.streak.dayBoundaryHour)
+        assertEquals(1790000000.0, response.cadence.lastAppOpenAt)
+        assertEquals(2, response.cadence.nativePosterCursor)
     }
 
     @Test

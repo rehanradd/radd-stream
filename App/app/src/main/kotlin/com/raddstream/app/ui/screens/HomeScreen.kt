@@ -101,6 +101,8 @@ fun HomeScreen(
     onOpenLocalFiles: () -> Unit = {},
     /** Kept-for-offline titles (Media Vault). */
     onOpenDownloads: () -> Unit = {},
+    /** Session 123: the check-in card opens the standalone check-in screen. */
+    onOpenCheckIn: () -> Unit = {},
     /** The operator's hero knobs from the panel theme: 0 hides the hero slot. */
     heroMax: Int = HERO_LIMIT,
     heroAutoplay: Boolean = true,
@@ -187,6 +189,7 @@ fun HomeScreen(
                     isClaiming = state.isClaiming,
                     claimMessage = state.claimMessage,
                     onClaim = viewModel::claimDailyLogin,
+                    onOpenCheckIn = onOpenCheckIn,
                 )
                 Spacer(Modifier.height(12.dp))
             }
@@ -520,6 +523,7 @@ private fun DailyCheckInCard(
     isClaiming: Boolean,
     claimMessage: String?,
     onClaim: () -> Unit,
+    onOpenCheckIn: () -> Unit = {},
 ) {
     val targetDays = streakLadder.keys.maxOrNull() ?: 7
     Card(
@@ -579,6 +583,11 @@ private fun DailyCheckInCard(
                         )
                     }
                 }
+            }
+            // Session 123: the card claims, the screen shows the week — one
+            // tap opens the standalone check-in with the 7-day ladder.
+            TextButton(onClick = onOpenCheckIn) {
+                Text("See all 7 days")
             }
         }
     }

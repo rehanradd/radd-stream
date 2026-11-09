@@ -44,6 +44,11 @@ sealed class Screen(val route: String) {
     object Settings : Screen("settings")
     object Downloads : Screen("downloads")
     object VipUpgrade : Screen("vip_upgrade")
+    /** Session 123: the account screens — the dashboard, the standalone check-in, the coins, and the profile. */
+    object Dashboard : Screen("dashboard")
+    object CheckIn : Screen("check_in")
+    object Coins : Screen("coins")
+    object Profile : Screen("profile")
     object Browse : Screen("browse/{type}") {
         const val ARG_TYPE = "type"
         fun createRoute(type: String?): String = "browse/${type ?: "all"}"

@@ -548,7 +548,8 @@ class Reads(Wallet):
         self.claim()
         self.grant(300)
         bodies = [self.get(COINS), self.get(COINS + "/caps"),
-                  self.get(COINS + "/history"), self.claim(),
+                  self.get(COINS + "/history"), self.get(P + "/overview"),
+                  self.claim(),
                   self.redeem("day")]
         haystack = " ".join(answered[2].decode("utf-8") for answered in bodies
                            if answered[2])
@@ -588,6 +589,43 @@ class Reads(Wallet):
 
 
 # ── the redeem route ───────────────────────────────────────────────────────────
+
+
+class Overview(Wallet):
+    def test_the_overview_is_the_ledgers_own_balance_streak_and_cadence(self):
+        """One read for the dashboard: the derived balance, the streak state
+        the check-in screen shows, and the ad cadence — all the function's own
+        answers, none restated by the route."""
+        self.claim()
+        self.grant(300)
+        overview = self.body(self.get(P + "/overview"))
+        self.assertEqual(overview["balance"],
+                         engagement.resolve_streak_grants()["coins"][1] + 300)
+        self.assertEqual(overview["streak"]["current_streak"], 1)
+        self.assertEqual(overview["streak"]["best_streak"], 1)
+        self.assertEqual(overview["streak"]["last_counted_day"], self.bucket())
+        self.assertIn("last_preroll_at", overview["cadence"])
+        self.assertIn("native_poster_cursor", overview["cadence"])
+        self.assertNotIn("account_id", json.dumps(overview))
+
+    def test_the_overview_without_a_key_is_a_401(self):
+        self.assertEqual(self.get(P + "/overview", key=None)[0], 401)
+
+    def test_the_overview_is_scoped_to_the_key_that_asked_for_it(self):
+        self.claim()
+        other_key = self.enroll()
+        overview = self.body(self.get(P + "/overview", key=other_key))
+        self.assertEqual(overview["balance"], 0)
+        self.assertEqual(overview["streak"]["current_streak"], 0)
+        self.assertIsNone(overview["streak"]["last_counted_day"])
+
+    def test_the_overview_read_mints_nothing(self):
+        """Reading the streak is free: two reads leave the ledger byte-for-byte."""
+        self.claim()
+        before = self.wallet_state()
+        self.get(P + "/overview")
+        self.get(P + "/overview")
+        self.assertEqual(self.wallet_state(), before)
 
 
 class Redeem(Wallet):

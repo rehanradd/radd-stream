@@ -3,8 +3,10 @@ package com.raddstream.app.network
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountCreateResponse
 import com.raddstream.app.network.models.AccountInfoResponse
+import com.raddstream.app.network.models.AccountOverviewResponse
 import com.raddstream.app.network.models.CoinBalanceResponse
 import com.raddstream.app.network.models.CoinCapsResponse
+import com.raddstream.app.network.models.CoinHistoryResponse
 import com.raddstream.app.network.models.CoinDownloadCreditRequest
 import com.raddstream.app.network.models.CoinDownloadCreditResponse
 import com.raddstream.app.network.models.CoinEarnRequest
@@ -368,6 +370,27 @@ interface RaddStreamApi {
     suspend fun getCoinCaps(
         @Header("Authorization") authorization: String?,
     ): CoinCapsResponse
+
+    /**
+     * GET /api/v2/account/overview — the account's own wallet in one read:
+     * the derived balance, the streak state and the ad cadence. Reading it
+     * costs nothing and mints nothing.
+     */
+    @GET("api/v2/account/overview")
+    suspend fun getAccountOverview(
+        @Header("Authorization") authorization: String?,
+    ): AccountOverviewResponse
+
+    /**
+     * GET /api/v2/account/coins/history — the account's own ledger rows,
+     * newest first, on the server's bounded page. The limit is the page size
+     * the caller asks for; the server clamps anything unreasonable.
+     */
+    @GET("api/v2/account/coins/history")
+    suspend fun getCoinHistory(
+        @Header("Authorization") authorization: String?,
+        @Query("limit") limit: Int = 20,
+    ): CoinHistoryResponse
 
     /**
      * POST /api/v2/account/coins/earn — claim today's check-in. The body carries

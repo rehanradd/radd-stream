@@ -92,6 +92,10 @@ fun SettingsScreen(
     onOpenDownloads: () -> Unit = {},
     onOpenVipUpgrade: () -> Unit = {},
     onOpenRegionChoice: () -> Unit = {},
+    /** Session 123: the account screens — dashboard, profile, coins. */
+    onOpenDashboard: () -> Unit = {},
+    onOpenProfile: () -> Unit = {},
+    onOpenCoins: () -> Unit = {},
     viewModel: SettingsViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -313,6 +317,20 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                // Session 123: the account screens live here — the dashboard
+                // that answers "where do I stand?", the profile, and the coins.
+                Row {
+                    TextButton(onClick = onOpenDashboard) {
+                        Text("Dashboard")
+                    }
+                    TextButton(onClick = onOpenProfile) {
+                        Text("Profile")
+                    }
+                    TextButton(onClick = onOpenCoins) {
+                        Text("Coins")
+                    }
+                }
 
                 // ── the free days this install was granted ───────────────────────
                 account.trialSecondsLeft?.let { secondsLeft ->

@@ -15,9 +15,12 @@ import com.raddstream.app.network.bearerHeader
 import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.network.models.AccountCreateRequest
 import com.raddstream.app.network.models.AccountEntitlement
+import com.raddstream.app.network.models.AccountInfo
+import com.raddstream.app.network.models.AccountOverviewResponse
 import com.raddstream.app.network.models.AccountProblem
 import com.raddstream.app.network.models.CoinEarnRequest
 import com.raddstream.app.network.models.CoinEarned
+import com.raddstream.app.network.models.CoinLedgerEntry
 import com.raddstream.app.network.models.CoinDownloadCredit
 import com.raddstream.app.network.models.CoinDownloadCreditRequest
 import com.raddstream.app.network.models.CoinMovieRequest
@@ -699,6 +702,70 @@ class SyncAccountRepository @Inject constructor(
         val key = currentKey() ?: return null
         return try {
             apiProvider.current().getCoinBalance(bearerHeader(key)).balance
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /**
+     * This account's wallet in one read — the derived balance, the streak
+     * state and the ad cadence — or null when there is no key or the server
+     * cannot be reached. Reading it costs nothing and mints nothing.
+     */
+    suspend fun loadAccountOverview(): AccountOverviewResponse? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().getAccountOverview(bearerHeader(key))
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    null
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    null
+                }
+                else -> null
+            }
+        }
+    }
+
+    /** The account's own ledger rows, newest first — empty when unread. */
+    suspend fun loadCoinHistory(limit: Int = 20): List<CoinLedgerEntry> {
+        val key = currentKey() ?: return emptyList()
+        return try {
+            apiProvider.current().getCoinHistory(bearerHeader(key), limit).entries
+        } catch (error: Exception) {
+            when (verdictOf(error, hadWorkRef = false)) {
+                ServerVerdict.SIGN_OUT -> {
+                    signOutLocally()
+                    emptyList()
+                }
+                ServerVerdict.PAUSE_SESSION -> {
+                    pausedByThrottle = true
+                    emptyList()
+                }
+                else -> emptyList()
+            }
+        }
+    }
+
+    /** The account's own record (created, last seen), or null when unread. */
+    suspend fun loadAccountInfo(): AccountInfo? {
+        val key = currentKey() ?: return null
+        return try {
+            apiProvider.current().getAccount(bearerHeader(key)).account
         } catch (error: Exception) {
             when (verdictOf(error, hadWorkRef = false)) {
                 ServerVerdict.SIGN_OUT -> {

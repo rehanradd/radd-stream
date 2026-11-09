@@ -25,7 +25,13 @@ import com.google.gson.annotations.SerializedName
  *   POST api/v2/account/progress/remove     -> {removed}
  *   POST api/v2/account/payment             -> payment{payment_id, status, plan, amount_pkr, method, submitted_at}
  *   GET  api/v2/account/entitlement         -> entitlement{vip, vip_until, pending}
+ *   GET  api/v2/account/overview             -> {balance, streak{current_streak, best_streak,
+ *                                                      last_counted_day, tz, day_boundary_hour},
+ *                                                cadence{last_preroll_at, last_app_open_at,
+ *                                                          native_poster_cursor}}
  *   GET  api/v2/account/coins               -> {balance, rewarded_grants_today, caps}
+ *   GET  api/v2/account/coins/history?limit=n -> {entries[{id, delta, reason, source, ref,
+ *                                                          created_at}], count}
  *   GET  api/v2/account/coins/caps          -> {caps, passes, streak{coins, pass_seconds}}
  *   POST api/v2/account/coins/earn          -> earned{status, current_streak, best_streak,
  *                                                      day, coins_granted, pass?, pass_expires_at?}
@@ -385,6 +391,61 @@ data class CoinRedeemed(
 
 data class CoinRedeemResponse(
     val redeemed: CoinRedeemed? = null,
+)
+
+/**
+ * One `coin_ledger` row, as `GET /api/v2/account/coins/history` publishes it:
+ * the signed amount, the closed-vocabulary reason and source, and the ref —
+ * a ladder tier or a streak day, never a title. `created_at` is the ledger's
+ * own epoch seconds, a Double like every other timestamp on this wire.
+ */
+data class CoinLedgerEntry(
+    val id: Int = 0,
+    val delta: Int = 0,
+    val reason: String = "",
+    val source: String = "",
+    val ref: String? = null,
+    @SerializedName("created_at") val createdAt: Double = 0.0,
+)
+
+data class CoinHistoryResponse(
+    val entries: List<CoinLedgerEntry> = emptyList(),
+    val count: Int = 0,
+)
+
+/**
+ * The streak state `GET /api/v2/account/overview` publishes: the server's own
+ * count of consecutive claimed days, the best it ever reached, and the civil
+ * day the last claim counted for. The route strips the server primary key
+ * before it answers, so no `account_id` appears here — a client has nothing
+ * to point at.
+ */
+data class AccountStreakState(
+    @SerializedName("current_streak") val currentStreak: Int = 0,
+    @SerializedName("best_streak") val bestStreak: Int = 0,
+    @SerializedName("last_counted_day") val lastCountedDay: String? = null,
+    val tz: String = "",
+    @SerializedName("day_boundary_hour") val dayBoundaryHour: Int = 0,
+)
+
+/** The ad cadence `GET /api/v2/account/overview` publishes: last slot times and the poster cursor. */
+data class AccountCadenceState(
+    @SerializedName("last_preroll_at") val lastPrerollAt: Double = 0.0,
+    @SerializedName("last_app_open_at") val lastAppOpenAt: Double = 0.0,
+    @SerializedName("native_poster_cursor") val nativePosterCursor: Int = 0,
+)
+
+/**
+ * `GET /api/v2/account/overview` — the account's own wallet in one read: the
+ * derived balance, the streak state the check-in screen shows, and the ad
+ * cadence. The balance is the same `SUM(delta)` the spender checks before it
+ * debits, so a reply and a refusal cannot disagree about what this account
+ * holds.
+ */
+data class AccountOverviewResponse(
+    val balance: Int = 0,
+    val streak: AccountStreakState = AccountStreakState(),
+    val cadence: AccountCadenceState = AccountCadenceState(),
 )
 
 /**

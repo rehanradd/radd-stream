@@ -714,6 +714,29 @@ def route_get(path, query, *, db_path, catalog_path, secret, headers) -> tuple |
                     # constant, and a row-resolved cap here would be a number this
                     # server does not actually hold anyone to.
                     "caps": dict(engagement.remote_view()["wallet"])})
+        if tail == ["overview"]:
+            # The account's own wallet in one read: the derived balance, the
+            # streak state the check-in screen shows, and the ad cadence the
+            # player reads. Every number is `engagement.account_overview`'s own
+            # answer — the route carries no balance, price or cap of its own —
+            # so a reply and the ledger cannot disagree about what this account
+            # holds. The streak state is what the phone could previously only
+            # learn by claiming a day; reading it costs nothing and mints nothing.
+            if not key:
+                return _problem("unauthorised", 401,
+                                "a bearer sync key is required", path)
+            account = accounts.authenticate(db_path, key, tracker=LIMITER)
+            overview = engagement.account_overview(db_path, account["account_id"])
+            # `account_overview` carries the server primary key in its own
+            # blocks; a client gets nothing to point at (§16.9), so the route
+            # projects the three blocks without it. The numbers are still the
+            # function's own answers, never restated here.
+            streak = dict(overview["streak"])
+            streak.pop("account_id", None)
+            cadence = dict(overview["cadence"])
+            cadence.pop("account_id", None)
+            return _respond({"balance": overview["balance"],
+                             "streak": streak, "cadence": cadence})
         if tail == ["coins", "history"]:
             # The account's own ledger rows, newest first, on the owner's bounded page.
             # `ref` comes along because a `ref` is a ladder tier or a streak day and
