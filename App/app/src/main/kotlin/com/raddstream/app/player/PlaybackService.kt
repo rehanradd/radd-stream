@@ -2,8 +2,10 @@ package com.raddstream.app.player
 
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
@@ -77,6 +79,9 @@ class PlaybackService : MediaSessionService() {
     private var lastKnownPositionMs: Long = 0
     private var titleHint: String = Brand.name
 
+    /** Thermal listener (API 29+), removed in onDestroy; null on older phones. */
+    private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
+
     override fun onCreate() {
         super.onCreate()
         // Cross-protocol redirects ON: resolver 302s are the normal path on this backend.
@@ -146,6 +151,30 @@ class PlaybackService : MediaSessionService() {
         }
         startAutoQualityTicker()
         startPlayheadPump()
+        startThermalListener()
+    }
+
+    /**
+     * Thermal-aware ABR (Session 126, research item 15): the phone's own thermal
+     * state caps the director's climbs (MODERATE → 720p, SEVERE/CRITICAL → 480p)
+     * and lifts again when it cools. API 29+ only — older phones simply never cap.
+     * The listener only writes the director's thermal status; the cap itself is
+     * pure policy in [ThermalCap], applied in `targetBand`.
+     */
+    private fun startThermalListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val powerManager = getSystemService(PowerManager::class.java) ?: return
+        val listener = PowerManager.OnThermalStatusChangedListener { status ->
+            store.autoQuality.thermalStatus = when (status) {
+                PowerManager.THERMAL_STATUS_CRITICAL -> ThermalStatus.CRITICAL
+                PowerManager.THERMAL_STATUS_SEVERE -> ThermalStatus.SEVERE
+                PowerManager.THERMAL_STATUS_MODERATE -> ThermalStatus.MODERATE
+                PowerManager.THERMAL_STATUS_LIGHT -> ThermalStatus.LIGHT
+                else -> ThermalStatus.NONE
+            }
+        }
+        thermalListener = listener
+        powerManager.addThermalStatusListener(mainExecutor, listener)
     }
 
     private var lastHandledNonce: Long = -1L
@@ -175,9 +204,12 @@ class PlaybackService : MediaSessionService() {
         val exo = player ?: return
         exo.pause()
         if (bundle.isStale(System.currentTimeMillis())) {
+            // NAV-4: a stale bundle is an expired shared link, not a dead print — the
+            // card says the link expired and offers Home, so the viewer fetches a fresh
+            // link instead of tapping "try another print" at a rotted handle.
             store.markGaveUp(
                 "Play bundle expired — fetch a fresh link",
-                HandoffWhy.NO_CANDIDATE_LEFT,
+                HandoffWhy.EXPIRED_LINK,
             )
             return
         }
@@ -235,8 +267,62 @@ class PlaybackService : MediaSessionService() {
                 ),
             )
         } else {
-            loadRendition(bundle, start)
+            // Session 126 start-low, part 3 of 3: the director already armed on the
+            // cheapest rung, but the bundle still points at the rung the server called
+            // best — open the cheap one instead, so the first frame arrives fast and
+            // the step-up climbs from evidence. A local copy above keeps precedence.
+            val startLow = startLowBundle(bundle, start)
+            loadRendition(startLow ?: bundle, start)
         }
+    }
+
+    /**
+     * Start-low, part 3 of 3 (Session 126): rewrite the initial rendition onto the
+     * cheapest rung of the staged ladder, mirroring [switchRungTo] exactly — same
+     * handle swap on our own redirector, same failover-plan rebuild with the same
+     * `selectInitial == index` guard, same store writes — but at load time, before
+     * the first byte is requested. Null when there is nothing to swap: Auto off,
+     * no ladder, already on the cheapest rung, or no address of ours on it.
+     *
+     * Parts 1 and 2 are the policy: `AdaptiveQualitySwitcher.pickBand` cold-picks the
+     * lowest rung, and `AutoQualityDirector.configure` arms Auto there. This part is
+     * needed because `evaluateAutoQuality` re-syncs the director to the rung actually
+     * playing (`markPlaying`) first — a director-only change would be overwritten by
+     * the top rung the bundle still points at.
+     */
+    private fun startLowBundle(bundle: PlaybackBundle, index: Int): PlaybackBundle? {
+        val director = store.autoQuality
+        if (!director.isEnabled()) return null
+        val active = bundle.renditions.getOrNull(index) ?: return null
+        val lowest = director.currentBand ?: return null
+        if (lowest == bandOfRendition(active)) return null
+        val rung = director.rungFor(lowest) ?: return null
+        if (rung.streamId == active.playback.streamId) return null
+        val newUrl = streamUrlForHandle(active.playback.playUrl, rung.streamId) ?: return null
+        val swapped = active.copy(
+            playback = active.playback.copy(
+                playUrl = newUrl,
+                streamId = rung.streamId,
+                backupStreamIds = rung.backupHandles,
+            ),
+            print = active.print.copy(resolution = lowest),
+        )
+        val updated = bundle.copy(renditions = bundle.renditions.toMutableList().also { it[index] = swapped })
+        val machine = FailoverStateMachine(updated.renditions, updated.failurePolicy)
+        if (machine.selectInitial() != index) return null
+        failover = machine
+        store.replaceRendition(index, swapped)
+        store.setAutoBand(lowest)
+        store.appendFailover(
+            listOf(
+                FailoverRecord(
+                    swapped.rank, swapped.releaseId, swapped.displayLabel(),
+                    "start-low (no measurement yet)",
+                    "auto opened on $lowest",
+                ),
+            ),
+        )
+        return updated
     }
 
     /**
@@ -278,9 +364,11 @@ class PlaybackService : MediaSessionService() {
         val exo = player ?: return
         rendition ?: return
         if (rendition.playback.isExpired(System.currentTimeMillis())) {
-            // Never play a rotted URL silently — §5: re-request instead.
+            // Never play a rotted URL silently — §5: re-request instead. An expired
+            // handle is not a failure to retry: the machine hands off as EXPIRED_LINK
+            // (NAV-4) so the card names the expired link, not a dead print.
             failover?.let { machine ->
-                val decision = machine.onFailure("link expired before load")
+                val decision = machine.onFailure("link expired before load", isExpiry = true)
                 applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
             }
             return
@@ -685,6 +773,12 @@ class PlaybackService : MediaSessionService() {
 
     override fun onDestroy() {
         scope.cancel()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            thermalListener?.let { listener ->
+                getSystemService(PowerManager::class.java)?.removeThermalStatusListener(listener)
+            }
+            thermalListener = null
+        }
         mediaSession?.run {
             player.release()
             release()

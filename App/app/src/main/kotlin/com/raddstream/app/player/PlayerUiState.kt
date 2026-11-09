@@ -188,12 +188,25 @@ data class PlayerUiState(
     // service connection
     val connected: Boolean = false,
     val connectionError: String? = null,
+    /**
+     * PL-3: no network at load time (or when the service bind fails) — the screen shows
+     * the offline card with Retry at once, not the 30-second deadline card.
+     */
+    val isOffline: Boolean = false,
     // transport
     val isPlaying: Boolean = false,
     val isBuffering: Boolean = false,
     val isEnded: Boolean = false,
     /** The ended episode has a numbered successor and autoplay-next is off: the ended overlay offers the Next Episode button instead of advancing. */
     val endedHasNextEpisode: Boolean = false,
+    /**
+     * PL-12: the next episode's title, number and still, for the end card's "Up next"
+     * preview and the countdown card. Nulls when there is no next episode.
+     */
+    val nextEpisodeTitle: String? = null,
+    val nextEpisodeSeason: Int? = null,
+    val nextEpisodeEpisode: Int? = null,
+    val nextEpisodePosterUrl: String? = null,
     /**
      * The autoplay-next countdown, in seconds — null when no countdown is
      * running. Session 123 (PL-1): an episode no longer advances the instant
@@ -277,6 +290,30 @@ data class PlayerUiState(
     val resumeOfferMs: Long? = null,
     val pendingResumeKey: String? = null,
     val pendingTitle: String? = null,
+    /**
+     * D-35 / D-37 / SC §3: the title's poster, year and cast, staged by the detail
+     * screen alongside the sync scope. The loading state shows the poster, never a
+     * black void; the TopBar subtitle prints year · quality · source, never the
+     * title again; the pause strip shows the cast. Null/empty until staged — a
+     * deep-linked playback honestly has no poster to show.
+     */
+    val posterUrl: String? = null,
+    val titleYear: Int? = null,
+    val castNames: List<String> = emptyList(),
+    /**
+     * PL-11: true when the playing scope is a series (a series-like work type, or an
+     * episode number) — the "Next episode" and "Calibrate" More rows only exist then.
+     */
+    val isSeriesScope: Boolean = false,
+    /** Data saver in force (Settings; default on) — the Quality sheet shows it next to Auto. */
+    val dataSaver: Boolean = true,
+    /**
+     * PL-10: the video's own aspect ratio (width / height) from onVideoSizeChanged —
+     * PiP builds its params from this. Null until the first frame reports a size.
+     */
+    val videoAspectRatio: Float? = null,
+    /** PL-10: opt-in auto-enter PiP on leaving the player while playing (Settings; default off). */
+    val autoPip: Boolean = false,
     // tracks
     val audioTracks: List<TrackUiOption> = emptyList(),
     val subtitleTracks: List<TrackUiOption> = emptyList(),
@@ -301,12 +338,6 @@ data class PlayerUiState(
     val playFromDialogVisible: Boolean = false,
     val qualitySheetVisible: Boolean = false,
     val moreSheetVisible: Boolean = false,
-    /**
-     * The sponsor slot currently on screen, if any. Only [AdSlotPolicy.decide] can raise it,
-     * and that policy has no value for a title that is playing — so this field can never be
-     * the reason a scene is interrupted.
-     */
-    val adBreak: AdSlot = AdSlot.NONE,
     /**
      * The rungs the CURRENT scope offers, staged by the detail screen and read back through
      * [PlayerSessionStore.peekAutoLadder]: band + handle + caption only. Empty for a
@@ -345,6 +376,7 @@ data class PlayerUiState(
      */
     val startPhase: StartPhase
         get() = when {
+            isOffline -> StartPhase.NONE
             connectionError != null -> StartPhase.NONE
             giveUp != null -> StartPhase.NONE
             resumeOfferMs != null -> StartPhase.NONE

@@ -325,6 +325,39 @@ class PlayerSessionStore(
         streamId?.trim()?.takeIf { it.isNotEmpty() }?.let { stagedWorkRefs[it] }
 
     /**
+     * D-35: the title's display metadata, staged by the detail screen beside the
+     * sync scope and read by the player when it opens the handle — the loading
+     * state shows the poster, never a black void; the TopBar subtitle prints the
+     * year; the pause strip shows the cast. Same discipline as the scope staging:
+     * handles only, in memory only, nothing survives a process death, and a
+     * deep-linked playback simply has no entry, so it shows no poster rather than
+     * guessing one. Cast names arrive already parsed (`parseCastNames`, cap 12).
+     */
+    private val stagedTitleMeta = LinkedHashMap<String, TitleMeta>()
+
+    fun stageTitleMeta(streamId: String, meta: TitleMeta?) {
+        if (streamId.isBlank() || meta == null) return
+        stagedTitleMeta.remove(streamId)
+        stagedTitleMeta[streamId] = meta
+        while (stagedTitleMeta.size > MAX_STAGED_SCOPES) {
+            stagedTitleMeta.remove(stagedTitleMeta.keys.first())
+        }
+    }
+
+    fun peekTitleMeta(streamId: String?): TitleMeta? =
+        streamId?.trim()?.takeIf { it.isNotEmpty() }?.let { stagedTitleMeta[it] }
+
+    /** The title metadata for what is currently playing, or null when nothing was staged. */
+    fun currentTitleMeta(): TitleMeta? = peekTitleMeta(activeRendition()?.playback?.streamId)
+
+    /** Display metadata for one title: poster, year, cast — nothing that identifies a host. */
+    data class TitleMeta(
+        val posterUrl: String?,
+        val year: Int?,
+        val castNames: List<String>,
+    )
+
+    /**
      * A pasted direct video link, staged by the search screen under a one-time
      * opaque key and read by the player when it opens that key.
      *

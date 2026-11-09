@@ -17,6 +17,7 @@ import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.PostDetail
+import com.raddstream.app.network.models.parseCastNames
 import com.raddstream.app.network.streamRedirectUrl
 import com.raddstream.app.network.withVipPass
 import com.raddstream.app.player.AdoptRequest
@@ -932,6 +933,17 @@ class DetailViewModel @Inject constructor(
         )
         PlayerSessionStore.Instance.stageWorkRef(streamId = streamId, scope = scope)
         backupHandles.forEach { PlayerSessionStore.Instance.stageWorkRef(it, scope) }
+        // D-35: stage the display metadata beside the scope, so the player can show
+        // the poster behind its loading state instead of a black void. The poster is
+        // the detail's own posterUrl; the cast is parsed the same way the detail
+        // screen parses it (parseCastNames, cap 12).
+        val meta = PlayerSessionStore.TitleMeta(
+            posterUrl = post?.posterUrl,
+            year = post?.year,
+            castNames = parseCastNames(post?.castNames),
+        )
+        PlayerSessionStore.Instance.stageTitleMeta(streamId = streamId, meta = meta)
+        backupHandles.forEach { PlayerSessionStore.Instance.stageTitleMeta(it, meta) }
         return scope
     }
 

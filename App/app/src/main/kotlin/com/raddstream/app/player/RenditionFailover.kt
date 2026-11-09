@@ -30,7 +30,18 @@ data class FailoverRecord(
  * [START_TIMEOUT] is the third: no candidate failed, but none produced a frame within the start
  * deadline, so the player stops waiting and hands the viewer the choice.
  */
-enum class HandoffWhy { DOWNLOAD_ONLY, NO_CANDIDATE_LEFT, START_TIMEOUT }
+enum class HandoffWhy {
+    DOWNLOAD_ONLY,
+    NO_CANDIDATE_LEFT,
+    START_TIMEOUT,
+    /**
+     * NAV-4 (Session 126): the shared link itself rotted — a signed handle whose
+     * window closed, or a bundle the server says is stale. The give-up card must
+     * say exactly that ("this shared link has expired"), not the generic "nothing
+     * playable", because the fix is a fresh link, not another print.
+     */
+    EXPIRED_LINK,
+}
 
 sealed class FailoverDecision {
     /** Keep the same rendition, prepare again after [backoffMs] (policy.retry_same). */
@@ -163,8 +174,16 @@ class FailoverStateMachine(
         return FailoverRecord(r.rank, r.releaseId, r.displayLabel(), why, "skipped")
     }
 
-    /** Call when the active rendition fails with [errorSummary]. Returns the mandated next step. */
-    fun onFailure(errorSummary: String): FailoverDecision {
+    /**
+     * Call when the active rendition fails with [errorSummary]. Returns the mandated next step.
+     *
+     * [isExpiry] marks a failure the machine must not retry: a rotted handle will not heal
+     * on a second try, and a silent hop onto a runner-up of the same rotted handle is the
+     * same failure wearing a different address. An expiry goes straight to the handoff with
+     * [HandoffWhy.EXPIRED_LINK], so the card can say the link expired instead of the
+     * generic "nothing playable".
+     */
+    fun onFailure(errorSummary: String, isExpiry: Boolean = false): FailoverDecision {
         // Session 121 (P-6): the summary may be a raw ExoPlayer code; the machine is the
         // single funnel every failure passes through, so translate it here — the Handoff
         // detail (the give-up card's message) and the FailoverRecord reason (the print
@@ -173,6 +192,11 @@ class FailoverStateMachine(
         val index = activeIndex
         val current = renditions.getOrNull(index)
             ?: return FailoverDecision.Handoff(HandoffWhy.NO_CANDIDATE_LEFT, displaySummary, null)
+        if (isExpiry) {
+            val record = FailoverRecord(current.rank, current.releaseId, current.displayLabel(), displaySummary, "expired")
+            _log.add(record)
+            return FailoverDecision.Handoff(HandoffWhy.EXPIRED_LINK, displaySummary, record)
+        }
         // Read-modify-write instead of `HashMap.merge`: `merge` is a Java 8 default method and
         // lint correctly refuses it against minSdk 21 (it ships in API 24). The count below is
         // only ever read on this thread, so the atomicity `merge` would have bought is not a

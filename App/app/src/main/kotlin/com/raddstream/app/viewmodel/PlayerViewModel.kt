@@ -13,17 +13,12 @@ import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.common.TrackSelectionOverride
 import androidx.media3.common.Tracks
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.player.AbRepeat
-import com.raddstream.app.player.AdCadenceGovernor
-import com.raddstream.app.player.AdDecision
-import com.raddstream.app.player.AdSlot
-import com.raddstream.app.player.AdSlotPolicy
-import com.raddstream.app.player.AdSlotState
-import com.raddstream.app.player.AdSurface
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
@@ -59,6 +54,7 @@ import com.raddstream.app.player.PlayTarget
 import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.PrintInfo
 import com.raddstream.app.player.SessionInfo
+import com.raddstream.app.player.ShareMoment
 import com.raddstream.app.player.PlayerUiState
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.RippleState
@@ -92,11 +88,13 @@ import com.raddstream.app.data.cache.ConnectivityProbe
 import com.raddstream.app.data.cache.NetworkClass
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.ApiProvider
+import com.raddstream.app.network.models.parseCastNames
 import com.raddstream.app.network.streamRedirectUrl
 import com.raddstream.app.network.withVipPass
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
 import com.raddstream.app.sync.SyncAccountRepository
+import com.raddstream.app.ui.navigation.DeepLinks
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -136,7 +134,6 @@ class PlayerViewModel @Inject constructor(
     private val syncAccountRepository: SyncAccountRepository,
     private val watchHistoryDao: WatchHistoryDao,
     private val localResumeRepository: LocalResumeRepository,
-    private val adCadence: AdCadenceGovernor,
     private val connectivityProbe: ConnectivityProbe,
 ) : ViewModel() {
 
@@ -210,17 +207,31 @@ class PlayerViewModel @Inject constructor(
         val startBand: String?,
         val auto: Boolean,
         val resolved: Boolean = false,
+        /** PL-12: the successor's still, year and cast — the end card's "Up next" preview. */
+        val posterUrl: String? = null,
+        val year: Int? = null,
+        val castNames: List<String> = emptyList(),
     )
 
     private var preparedNextEpisode: PreparedNextEpisode? = null
 
     /**
-     * The one hand-off waiting on a sponsor break. A between-episodes slot is the only placement
-     * this build raises, and it is raised *at* the moment the successor would otherwise open, so
-     * the advance has to be held rather than reordered. Nothing is invented here: a null action is
-     * "no break was granted", and the successor opens exactly as it did before this field existed.
+     * PL-12: publish the prepared successor's title, number and still into the state —
+     * the end card's "Up next" preview and the countdown card read it from here — or
+     * clear all four when nothing is prepared. Called wherever `preparedNextEpisode`
+     * is assigned or cleared, so the state can never name a successor that is gone.
      */
-    private var pendingCrossEpisode: NextEpisodeAction.NextBundleRequest? = null
+    private fun publishNextEpisode() {
+        val prepared = preparedNextEpisode
+        _ui.update {
+            it.copy(
+                nextEpisodeTitle = prepared?.title,
+                nextEpisodeSeason = prepared?.season,
+                nextEpisodeEpisode = prepared?.episode,
+                nextEpisodePosterUrl = prepared?.posterUrl,
+            )
+        }
+    }
 
     /**
      * The autoplay-next countdown (Session 123, PL-1): the job ticking the ten
@@ -279,9 +290,6 @@ class PlayerViewModel @Inject constructor(
     /** A confirmed member, or everyone while the operator has not turned gating on. */
     private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, syncEntitled)
 
-    /** The rewarded pass's own deadline, in epoch milliseconds; `0` means none was ever granted. */
-    private var rewardedVipExpiresAt: Long = 0L
-
     private val _ui = MutableStateFlow(PlayerUiState())
     val uiState: StateFlow<PlayerUiState> = _ui.asStateFlow()
 
@@ -330,11 +338,6 @@ class PlayerViewModel @Inject constructor(
             }
         }
         viewModelScope.launch {
-            settingsRepository.rewardedVipExpiresAt.collect { expiresAt ->
-                rewardedVipExpiresAt = expiresAt
-            }
-        }
-        viewModelScope.launch {
             settingsRepository.qualityGateEnabled.collect { enabled ->
                 qualityGateEnabled = enabled
                 armQualityChoices()
@@ -349,7 +352,13 @@ class PlayerViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.dataSaver.collect { enabled ->
                 dataSaver = enabled
+                _ui.update { it.copy(dataSaver = enabled) }
                 armQualityChoices()
+            }
+        }
+        viewModelScope.launch {
+            settingsRepository.autoPip.collect { enabled ->
+                _ui.update { it.copy(autoPip = enabled) }
             }
         }
         viewModelScope.launch {
@@ -363,17 +372,6 @@ class PlayerViewModel @Inject constructor(
             }
         }
     }
-
-    /**
-     * Whether a sponsor slot may be raised at all right now. Both doors are already promises
-     * the app made out loud — paid VIP is sold as "no sponsor cards", and the rewarded card
-     * reads "four hours of ad-free" — so either one silences the slot. What VIP alone buys and
-     * a device pass does not is the server-side capability — a higher rung behind the
-     * operator's quality gate, a download marked VIP — and nothing here pretends a rewarded
-     * pass can grant that.
-     */
-    fun isAdFree(now: Long = System.currentTimeMillis()): Boolean =
-        RewardedVipPass.isAdFree(syncEntitled, rewardedVipExpiresAt, now)
 
     /**
      * The preferences the policy classes read. Collected, not sampled, so the settings
@@ -497,14 +495,31 @@ class PlayerViewModel @Inject constructor(
                 _ui.update { it.copy(connected = true) }
                 startTicker()
             } catch (t: Throwable) {
-                _ui.update { it.copy(connectionError = "Playback service unavailable: ${t.message}") }
+                _ui.update {
+                    it.copy(
+                        connectionError = "Playback service unavailable: ${t.message}",
+                        // PL-3: a bind failure with no network is the offline card, not the
+                        // generic service error — the viewer can act on the first, not the second.
+                        isOffline = connectivityProbe.current() == NetworkClass.NONE,
+                    )
+                }
             }
         }, ContextCompat.getMainExecutor(appContext))
     }
 
     private val playerListener = object : Player.Listener {
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            _ui.update { it.copy(isPlaying = isPlaying) }
+            // PL-3: a first frame playing is the proof the network is back — the
+            // offline card clears itself, no retry tap needed.
+            _ui.update { it.copy(isPlaying = isPlaying, isOffline = if (isPlaying) false else it.isOffline) }
+        }
+
+        override fun onVideoSizeChanged(videoSize: VideoSize) {
+            // PL-10: the video's own aspect ratio, for the PiP params. A zero height
+            // is a size that says nothing — keep the previous ratio, never a NaN.
+            if (videoSize.height > 0) {
+                _ui.update { it.copy(videoAspectRatio = videoSize.width.toFloat() / videoSize.height.toFloat()) }
+            }
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
@@ -571,9 +586,7 @@ class PlayerViewModel @Inject constructor(
                     bingePlanner.reset()
                     nextEpisodeHandle = null
                     preparedNextEpisode = null
-                    // A new file is a new lifecycle: a hand-off held for a break belongs to the
-                    // episode that ended, and must not fire against this one.
-                    pendingCrossEpisode = null
+                    publishNextEpisode()
                     bingeResolveJob?.cancel()
                     bingePrefetchJob?.cancel()
                     if (b != null) prepareBingePrefetch(b)
@@ -763,8 +776,13 @@ class PlayerViewModel @Inject constructor(
      * came from a scraper, and never one that names where the file lives.
      */
     fun startStreamHandle(streamId: String, title: String, startOverrideMs: Long? = null) {
-        if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.streamId == streamId) return
         viewModelScope.launch {
+            // Session 126 (audit bug d): re-seed BEFORE the early-return guard — the
+            // position may have moved on another device since this handle was opened,
+            // and the old code returned without ever asking. The seed only writes
+            // when the fresh row is strictly later (see ResumeSeed.newerSeed).
+            seedResumeFromStoredPositions(streamId, startOverrideMs)
+            if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.streamId == streamId) return@launch
             // A pasted direct link, staged under its opaque key by the search
             // screen: no redirector, no server round-trip, no resume history —
             // the address itself is the whole ladder, one rung.
@@ -792,7 +810,6 @@ class PlayerViewModel @Inject constructor(
                                                        backupHandles = store.peekFailover(streamId))
                 .withStagedTarget(streamId)
                 .withStagedCoverage(streamId)
-            seedResumeFromStoredPositions(streamId, startOverrideMs)
             beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
     }
@@ -912,7 +929,7 @@ class PlayerViewModel @Inject constructor(
      */
     private suspend fun seedResumeFromStoredPositions(resumeKey: String, explicitStartMs: Long?) {
         if (explicitStartMs != null) return
-        if (resumeByTarget[resumeKey] != null) return
+        val existing = resumeByTarget[resumeKey]
         val scope = store.peekWorkRef(resumeKey)
         if (scope == null) {
             // A local file has no work ref for Room or the sync account to hang a
@@ -920,10 +937,16 @@ class PlayerViewModel @Inject constructor(
             // a device address may read it (a staged direct-URL key never does).
             if (!isLocalResumeUri(resumeKey)) return
             val localMs = localResumeRepository.positionFor(resumeKey) ?: return
-            val seed = ResumeSeed.seedFor(explicitStartMs, resumeByTarget[resumeKey], null, localMs)
-                ?: return
-            // Re-checked: a position measured while this lookup was running outranks it.
-            if (resumeByTarget[resumeKey] == null) resumeByTarget[resumeKey] = seed
+            val seed = if (existing == null) {
+                ResumeSeed.seedFor(explicitStartMs, existing, null, localMs)
+            } else {
+                // Session 126 (audit bug d): the position moved elsewhere — take the
+                // newer row, never move the seed backwards.
+                ResumeSeed.newerSeed(existing, null, localMs)
+            } ?: return
+            // Re-checked: write only while the map still holds the value this decision
+            // was based on — a position measured while this lookup was running outranks it.
+            if (resumeByTarget[resumeKey] == existing) resumeByTarget[resumeKey] = seed
             return
         }
         val syncedMs = if (syncSignedIn) {
@@ -933,10 +956,13 @@ class PlayerViewModel @Inject constructor(
         }
         val localMs = watchHistoryDao.findScope(scope.workRef, scope.season, scope.episode)
             ?.positionMs
-        val seed = ResumeSeed.seedFor(explicitStartMs, resumeByTarget[resumeKey], syncedMs, localMs)
-            ?: return
+        val seed = if (existing == null) {
+            ResumeSeed.seedFor(explicitStartMs, existing, syncedMs, localMs)
+        } else {
+            ResumeSeed.newerSeed(existing, syncedMs, localMs)
+        } ?: return
         // Re-checked: a position measured while these lookups were running outranks either row.
-        if (resumeByTarget[resumeKey] == null) resumeByTarget[resumeKey] = seed
+        if (resumeByTarget[resumeKey] == existing) resumeByTarget[resumeKey] = seed
     }
 
     // ── The visible quality switch (Auto + one row per rung of this scope) ─────────
@@ -1017,8 +1043,22 @@ class PlayerViewModel @Inject constructor(
         } else {
             band
         }
-        val rung = plan.rungs.firstOrNull { it.band == targetBand } ?: return
-        if (!VipQualityGate.allowsBand(rung.band, premiumAccess, freeQualityCap)) return
+        val rung = plan.rungs.firstOrNull { it.band == targetBand }
+        if (rung == null) {
+            // Audit bug (b): the old code returned silently, so a tap on a band the
+            // scope does not offer did nothing at all — no switch, no message. The
+            // viewer is told, in the same snackbar every other player message uses.
+            viewModelScope.launch {
+                _events.emit(PlayerEvent.Message("That quality is not offered for this title"))
+            }
+            return
+        }
+        if (!VipQualityGate.allowsBand(rung.band, premiumAccess, freeQualityCap)) {
+            viewModelScope.launch {
+                _events.emit(PlayerEvent.Message(VipQualityGate.lockedMessage(freeQualityCap)))
+            }
+            return
+        }
         val active = _ui.value.activeRendition
         val auto = wantedAuto
         store.autoQuality.configure(plan.rungs, rung.band, auto)
@@ -1038,6 +1078,12 @@ class PlayerViewModel @Inject constructor(
             store.stageWorkRef(rung.streamId, scope)
             rung.backupHandles.forEach { store.stageWorkRef(it, scope) }
         }
+        // D-35: carry the display metadata with the scope, so the loading state after a
+        // quality switch still shows the poster instead of a black void.
+        store.peekTitleMeta(active?.playback?.streamId)?.let { meta ->
+            store.stageTitleMeta(rung.streamId, meta)
+            rung.backupHandles.forEach { store.stageTitleMeta(it, meta) }
+        }
         startStreamHandle(rung.streamId, title, startOverrideMs = positionMs.takeIf { it > 1_000 })
     }
 
@@ -1048,6 +1094,26 @@ class PlayerViewModel @Inject constructor(
 
     fun hideQualitySheet() {
         _ui.update { it.copy(qualitySheetVisible = false) }
+    }
+
+    /** The Quality sheet's Data Saver row (Session 126): one tap, persisted, felt at once. */
+    fun toggleDataSaver() {
+        viewModelScope.launch { settingsRepository.saveDataSaver(!dataSaver) }
+    }
+
+    /**
+     * SC.24: share a moment — the title, the timestamp, and the app's own deep link,
+     * handed to the share sheet by the screen. A local file has no stream handle to
+     * link to, so there is nothing to share: the row is hidden for local bundles and
+     * this guard is the second door.
+     */
+    fun shareMoment() {
+        val streamId = _ui.value.activeRendition?.playback?.streamId?.trim()?.takeIf { it.isNotBlank() }
+            ?: return
+        if (streamId == "local") return
+        val title = _ui.value.pendingTitle ?: _ui.value.activeRendition?.displayLabel() ?: Brand.name
+        val text = ShareMoment.shareText(title, _ui.value.positionMs, DeepLinks.streamUri(streamId, title))
+        viewModelScope.launch { _events.emit(PlayerEvent.ShareMoment(text)) }
     }
 
     private fun beginBundle(
@@ -1069,6 +1135,20 @@ class PlayerViewModel @Inject constructor(
         }
         store.installBundle(bundle)
         activeResumeKey = resumeKey
+        // D-35 / PL-11: publish the title's display metadata and the series scope for
+        // this bundle — the loading state shows the staged poster, the More sheet
+        // shows its series rows only for a series scope. A deep link or a local file
+        // has nothing staged, so the poster clears and the rows hide, honestly.
+        val meta = store.peekTitleMeta(resumeKey)
+        _ui.update {
+            it.copy(
+                posterUrl = meta?.posterUrl,
+                titleYear = meta?.year,
+                castNames = meta?.castNames.orEmpty(),
+                isSeriesScope = EpisodeProgression.seriesLikeWorkType(bundle.target.workType) ||
+                    bundle.target.episode > 0,
+            )
+        }
         val resume = resumeByTarget[resumeKey] ?: 0L
         when {
             // A quality switch lands on a new address mid-scene: the position is the one
@@ -1086,6 +1166,10 @@ class PlayerViewModel @Inject constructor(
         store.requestLoad(title = title, resumePositionMs = resumePosition, startOverrideMs = override)
         startAttemptAtMs = SystemClock.elapsedRealtime()
         playedReportHandle = null // a new attempt may play a handle that already failed
+        // PL-3: ask the probe at the moment of the load — offline at start shows the
+        // offline card with Retry at once, not the 30-second deadline card. A retry
+        // re-asks, so the card clears the moment the network is back.
+        val offlineNow = connectivityProbe.current() == NetworkClass.NONE
         _ui.update {
             it.copy(
                 resumeOfferMs = null,
@@ -1094,6 +1178,7 @@ class PlayerViewModel @Inject constructor(
                 pendingTitle = title,
                 startElapsedMs = 0,
                 deadlineGiveUp = false,
+                isOffline = offlineNow,
             )
         }
         activeResumeKey = resumeKey
@@ -1423,102 +1508,9 @@ class PlayerViewModel @Inject constructor(
         }
     }
 
-    // ── Sponsor placement ────────────────────────────────────────────────────────
-
-    /**
-     * The only door a sponsor break can come through. A pre-roll or interstitial caller must
-     * ask this instead of deciding placement itself; a running title always gets
-     * [AdSlot.NONE], which is what makes "never mid-scene" structural rather than a promise.
-     *
-     * Placement is only the first half. A legal slot still has to clear the operator's cadence —
-     * one interstitial per 25 minutes of wall clock — and a surface no ad network filled answers
-     * [AdSlot.NONE] like any other refusal, so there is no state in which this returns "an ad is
-     * coming". Both interstitial placements draw on that one budget, deliberately: a binge that
-     * treated the between-episodes slot as "not a pre-roll" could otherwise buy a break every
-     * episode with a policy written to allow one.
-     *
-     * Suspending, because the cadence lives in Room and a cap read from memory alone would not
-     * survive the process being killed between episodes. Its caller is the cross-episode hand-off
-     * below: the app still ships no ad SDK or creative, so the seam is asked and answers
-     * [AdSlot.NONE], which is the same behaviour this file had before anything called it.
-     */
-    suspend fun requestAdBreak(): AdSlot = grantCadence(
-        AdSlotPolicy.decide(
-            AdSlotState(
-                isSeriesEpisode = currentEpisodeNumber() > 0,
-                isEnded = _ui.value.isEnded,
-                isPlaying = _ui.value.isPlaying,
-                positionMs = _ui.value.positionMs,
-                durationMs = _ui.value.durationMs,
-                hasNextEpisode = _ui.value.isEnded && hasSuccessorAtEnd(_ui.value),
-                isEntitled = isAdFree(),
-            ),
-        ),
-    )
-
-    /**
-     * The between-episodes question, asked from the facts the hand-off itself carries rather than
-     * from the UI snapshot.
-     *
-     * The difference is not cosmetic: a [NextEpisodeAction.NextBundleRequest] is published by the
-     * service on its own ended signal, and the ViewModel's `isEnded` arrives through a player
-     * listener on a different path, so reading the state here could ask the question one tick too
-     * early and get [AdSlot.NONE] for a reason that has nothing to do with the policy. The action
-     * is the evidence — the file ended, and a numbered successor exists, because that is what this
-     * action means.
-     */
-    private suspend fun requestBetweenEpisodesBreak(): AdSlot = grantCadence(
-        AdSlotPolicy.decide(
-            AdSlotState(
-                isSeriesEpisode = true,
-                isEnded = true,
-                isPlaying = false,
-                positionMs = _ui.value.durationMs,
-                durationMs = _ui.value.durationMs,
-                hasNextEpisode = true,
-                isEntitled = isAdFree(),
-            ),
-        ),
-    )
-
-    /** The episode number the running bundle names, or 0 when nothing on screen says one. */
-    private fun currentEpisodeNumber(): Int {
-        val target = store.bundle.value?.target
-        val scope = store.currentSyncScope()
-        return target?.episode?.takeIf { it > 0 } ?: scope?.episode ?: 0
-    }
-
-    /**
-     * Cadence for a placement the policy already allowed. One budget, one write to the UI state,
-     * and one answer that is either a slot the screen may show or nothing at all: a surface the
-     * network did not fill is [AdSlot.NONE] exactly like a surface that is not due yet, so a
-     * caller has no third state to build a spinner around.
-     */
-    private suspend fun grantCadence(slot: AdSlot): AdSlot {
-        if (slot == AdSlot.NONE) {
-            _ui.update { it.copy(adBreak = AdSlot.NONE) }
-            return AdSlot.NONE
-        }
-        // Both placements this seam can raise are billed to the pre-roll budget on purpose: the
-        // server's AD_SLOTS has exactly three names and none of them is "between episodes", and a
-        // hand-off break plays immediately before the next episode starts, which is what a pre-roll
-        // IS. Inventing a fourth surface would be an ad the server cannot grant.
-        val offer = adCadence.offer(AdSurface.PRE_ROLL, adFree = isAdFree())
-        val answer = if (offer is AdDecision.Serve) slot else AdSlot.NONE
-        _ui.update { it.copy(adBreak = answer) }
-        return answer
-    }
-
-    fun dismissAdBreak() {
-        _ui.update { it.copy(adBreak = AdSlot.NONE) }
-        val held = pendingCrossEpisode ?: return
-        pendingCrossEpisode = null
-        viewModelScope.launch { advanceCrossEpisode(held) }
-    }
-
     /**
      * Whether the END that just happened leads anywhere. A packed file's in-file successor
-     * counts, so a between-episodes break is never shown before a dead end.
+     * counts, so the advance is never offered before a dead end.
      */
     private fun hasSuccessorAtEnd(state: PlayerUiState): Boolean {
         val bundle = store.bundle.value ?: return false
@@ -1575,6 +1567,7 @@ class PlayerViewModel @Inject constructor(
             if (bingeBundleKey(store.bundle.value) != expectedKey) return@launch
             nextEpisodeHandle = prepared.handle
             preparedNextEpisode = prepared
+            publishNextEpisode()
         }
     }
 
@@ -1612,6 +1605,9 @@ class PlayerViewModel @Inject constructor(
             rungs = rungs,
             startBand = option.band,
             auto = ladder.autoBand != null && option.band == ladder.autoBand,
+            posterUrl = detail.posterUrl,
+            year = detail.year,
+            castNames = parseCastNames(detail.castNames),
         )
     }
 
@@ -1763,12 +1759,24 @@ class PlayerViewModel @Inject constructor(
                 .distinct()
                 .forEach { store.stageWorkRef(it, scope) }
         }
+        // D-35: carry the successor's display metadata with its scope, so the loading
+        // state of the next episode shows its poster instead of a black void.
+        val nextMeta = PlayerSessionStore.TitleMeta(
+            posterUrl = prepared.posterUrl,
+            year = prepared.year,
+            castNames = prepared.castNames,
+        )
+        (listOf(prepared.handle) + prepared.backupHandles +
+            prepared.rungs.flatMap { listOf(it.streamId) + it.backupHandles })
+            .distinct()
+            .forEach { store.stageTitleMeta(it, nextMeta) }
         store.stageFailover(prepared.handle, prepared.backupHandles)
         if (prepared.rungs.isNotEmpty()) {
             store.stageAutoLadder(prepared.handle, prepared.rungs, prepared.startBand, prepared.auto)
         }
         preparedNextEpisode = null
         nextEpisodeHandle = null
+        publishNextEpisode()
         startStreamHandle(prepared.handle, prepared.title)
     }
 
@@ -2208,8 +2216,8 @@ class PlayerViewModel @Inject constructor(
                     return@launch
                 }
                 // Session 123 (PL-1): the episode no longer advances the instant it
-                // ends. The viewer gets ten seconds and a Cancel first — the ad
-                // decision and the advance both wait for the countdown to finish.
+                // ends. The viewer gets ten seconds and a Cancel first — the advance
+                // waits for the countdown to finish.
                 startAutoplayCountdown(action)
             }
 
@@ -2251,14 +2259,9 @@ class PlayerViewModel @Inject constructor(
             val held = pendingAutoplayAction
             pendingAutoplayAction = null
             if (held == null) return@launch
-            // The one placement raised without being asked: the file ended and a successor
-            // exists, which is the only moment the policy allows a break and the viewer was
-            // already about to be handed to the next episode. A refusal — cadence off, not due,
-            // no network to fill it — takes the held branch never and the advance runs now.
-            if (requestBetweenEpisodesBreak() != AdSlot.NONE) {
-                pendingCrossEpisode = held
-                return@launch
-            }
+            // Session 126 (PL-2): the countdown used to ask the sponsor seam here and
+            // hold the advance behind a fake ad. There is no ad to show and no network
+            // to fill one, so the advance runs now, exactly as the viewer expected.
             advanceCrossEpisode(held)
         }
     }
@@ -2279,9 +2282,7 @@ class PlayerViewModel @Inject constructor(
 
     /**
      * The successor hand-off itself: the prepared bundle opened at 85% wins, then a cold resolve,
-     * and only then the app route. Extracted because a granted between-episodes break holds this
-     * until the viewer dismisses it — the hand-off is the same work either way, and a second copy
-     * of it is how an ad path and a no-ad path start advancing to different episodes.
+     * and only then the app route.
      */
     private suspend fun advanceCrossEpisode(action: NextEpisodeAction.NextBundleRequest) {
         // The prepared successor (resolved at 85%) opens without a catalog lookup;
@@ -2376,7 +2377,9 @@ class PlayerViewModel @Inject constructor(
         latestSnapshot = null
         val engine = CacheEngineHolder.engine
         val key = store.cacheKey()
-        if (engine == null || key == null || !downloadsAllowed) {
+        if (engine == null || key == null || !downloadsAllowed ||
+            store.bundle.value?.target?.kind == "local"
+        ) {
             _ui.update { it.copy(keep = KeepUiState.Unavailable, keepRequested = false) }
             return
         }
@@ -2392,6 +2395,14 @@ class PlayerViewModel @Inject constructor(
 
     /** The *Keep this* button. Hands engine position + already-fetched bytes, never restarts. */
     fun keepCurrent() {
+        // PL-5: a local file is already on this device — there is nothing to keep, and
+        // the tap says so instead of offering a download of a file that is already here.
+        if (store.bundle.value?.target?.kind == "local") {
+            viewModelScope.launch {
+                _events.emit(PlayerEvent.Message("Already on this device"))
+            }
+            return
+        }
         if (!downloadsAllowed) {
             viewModelScope.launch {
                 _events.emit(PlayerEvent.Message("Keeping files for offline is switched off for this server"))
@@ -2530,6 +2541,8 @@ sealed class PlayerEvent {
     data class Message(val text: String) : PlayerEvent()
     data class PlayNextEpisode(val workKey: String?, val postId: Int?, val season: Int, val episode: Int) : PlayerEvent()
     data class OpenExternalPlayer(val url: String) : PlayerEvent()
+    /** SC.24: share-a-moment text for the system share sheet. */
+    data class ShareMoment(val text: String) : PlayerEvent()
 }
 
 @OptIn(UnstableApi::class)

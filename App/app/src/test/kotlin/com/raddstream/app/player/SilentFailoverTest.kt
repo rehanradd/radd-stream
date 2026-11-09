@@ -42,6 +42,32 @@ class SilentFailoverTest {
     )
 
     @Test
+    fun `an expired handle hands off at once, never retries or hops`() {
+        // NAV-4 (Session 126): a rotted handle will not heal on a second try, and a
+        // silent hop onto a runner-up of the same rotted handle is the same failure
+        // wearing a different address — so the machine hands off as EXPIRED_LINK
+        // immediately, with its retry budget untouched.
+        val subject = machine(
+            rung(1, "h-a", backups = listOf("b-a1", "b-a2")),
+            rung(2, "h-b"),
+        )
+        assertEquals(0, subject.selectInitial())
+        val decision = subject.onFailure("link expired before load", isExpiry = true)
+        decision as FailoverDecision.Handoff
+        assertEquals(HandoffWhy.EXPIRED_LINK, decision.why)
+    }
+
+    @Test
+    fun `an expiry hands off as expired even after the retry budget is spent`() {
+        val subject = machine(rung(1, "h-a"), rung(2, "h-b"))
+        assertEquals(0, subject.selectInitial())
+        assertTrue(subject.onFailure("HTTP 403") is FailoverDecision.RetrySame)
+        val decision = subject.onFailure("link expired before load", isExpiry = true)
+        decision as FailoverDecision.Handoff
+        assertEquals(HandoffWhy.EXPIRED_LINK, decision.why)
+    }
+
+    @Test
     fun `a rung hops to its own runner-up before any quality changes`() {
         val subject = machine(
             rung(1, "h-a", backups = listOf("b-a1", "b-a2")),

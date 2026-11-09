@@ -792,6 +792,19 @@ class ServerSettingsRepository @Inject constructor(
         dataStore.edit { preferences -> preferences[AUTO_DELETE_WATCHED_KEY] = enabled }
     }
 
+    /**
+     * PL-10: enter picture-in-picture automatically when the viewer leaves the player
+     * while it is playing. OFF by default — PiP unasked for is a window the viewer did
+     * not open, and the manual PiP button is always there for the one time they want it.
+     */
+    val autoPip: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[AUTO_PIP_KEY] ?: false
+    }
+
+    suspend fun saveAutoPip(enabled: Boolean) {
+        dataStore.edit { preferences -> preferences[AUTO_PIP_KEY] = enabled }
+    }
+
     /** How long an offline keep survives before the sweeper deletes it: 3 or 6 hours. */
     val keepTtlHours: Flow<Int> = dataStore.data.map { preferences ->
         preferences[KEEP_TTL_KEY]?.takeIf { it == KEEP_TTL_HOURS_3 || it == KEEP_TTL_HOURS_6 }
@@ -993,6 +1006,7 @@ class ServerSettingsRepository @Inject constructor(
         private val LOGIN_STREAK_COUNT_KEY = intPreferencesKey("login_streak_count")
         private val COACH_SEEN_VERSION_KEY = stringPreferencesKey("player_coach_seen_version")
         private val AUTOPLAY_NEXT_KEY = booleanPreferencesKey("player_autoplay_next")
+        private val AUTO_PIP_KEY = booleanPreferencesKey("player_auto_pip")
         private val AUTOPLAY_PREVIEWS_KEY = booleanPreferencesKey("player_autoplay_previews")
         private val DEFAULT_QUALITY_KEY = stringPreferencesKey("player_default_quality")
         private val ACCOUNT_LABEL_KEY = stringPreferencesKey("account_label")
