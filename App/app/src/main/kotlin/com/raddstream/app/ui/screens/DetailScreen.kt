@@ -83,6 +83,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import kotlinx.coroutines.launch
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
+import com.raddstream.app.network.models.WireText
 import com.raddstream.app.ui.components.AudioBadge
 import com.raddstream.app.ui.components.CapabilityChip
 import com.raddstream.app.ui.components.CamBadge
@@ -98,6 +99,7 @@ import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.ui.navigation.DeepLinks
@@ -122,6 +124,8 @@ fun DetailScreen(
     onOpenProviderPage: (streamId: String, title: String) -> Unit = { _, _ -> },
     onOpenDownloads: () -> Unit = {},
     onOpenVipUpgrade: () -> Unit = {},
+    /** Session 121 (P-26): the hero's Watch Now — start the best print once the title loads. */
+    autoplay: Boolean = false,
     viewModel: DetailViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -199,15 +203,31 @@ fun DetailScreen(
         }
     }
 
+    // Session 121 (P-26): the hero's Watch Now. Once per title, when the title has
+    // loaded: the best print starts, and a title with nothing playable (or a locked
+    // print) simply stays here with the reason in front of the viewer — `playBest`
+    // never navigates, so there is nothing to unwind.
+    var autoPlayedFor by remember { mutableStateOf<Int?>(null) }
+    LaunchedEffect(state.post?.id, autoplay) {
+        val post = state.post ?: return@LaunchedEffect
+        if (autoplay && autoPlayedFor != post.id) {
+            autoPlayedFor = post.id
+            viewModel.playBest()
+        }
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = {
+                    // Session 121 (P-32): one line truncated long titles to a stub;
+                    // two lines at titleMedium still fit the 64 dp bar.
                     Text(
                         state.post?.cleanTitle ?: state.post?.title ?: "Details",
-                        maxLines = 1,
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 },
@@ -444,7 +464,11 @@ private fun DetailContent(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
             top = contentPadding.calculateTopPadding(),
-            bottom = 40.dp,
+            // Session 121 (P-22): the bottom VIP card sat half-hidden behind the
+            // system nav bar because this was a fixed 40 dp while the Scaffold's
+            // own bottom padding (nav bar + bottom nav) was ignored. Keep the
+            // 40 dp of breathing room on top of what the Scaffold already asks for.
+            bottom = contentPadding.calculateBottomPadding() + 40.dp,
             start = 16.dp,
             end = 16.dp,
         ),
@@ -489,11 +513,11 @@ private fun DetailContent(
             }
         }
 
-        // A first-party sponsor slot: no third-party SDK, no hidden network call, and it
-        // says who paid for the space. The upgrade is the same flow Settings offers.
-        // Removing it for an entitled viewer is the purchase: both the paid card and the
-        // rewarded one promise exactly this, on screen, in words.
-        if (!adFree) {
+        // A first-party VIP house card: no third-party SDK, no hidden network call.
+        // It is our own membership, not a sponsored slot, so it carries no
+        // "Sponsored" label — and it is shown only when the VIP-sources card is
+        // not, so the two upsells never stack (Session 121, P-10).
+        if (!adFree && !premiumSourcesLocked) {
             item { SponsorCard(onOpenVipUpgrade = onOpenVipUpgrade) }
         }
 
@@ -646,7 +670,10 @@ private fun PosterHeader(
             val meta = listOfNotNull(
                 post.year?.takeIf { it > 0 }?.toString(),
                 post.typeLabel,
-                post.language?.takeIf(String::isNotBlank),
+                // P-5 (Session 121): normalize again at the render site — a language that
+                // arrives as a raw JSON array string ("[\"Tamil\", \"English\"]") reads
+                // "Tamil, English". Idempotent with the mapper-side normalization.
+                WireText.listOf(post.language).joinToString(", ").takeIf { it.isNotBlank() },
                 formatRuntimeMinutes(post.runtimeMinutes),
                 if (seasonCount > 0) "$seasonCount ${if (seasonCount == 1) "season" else "seasons"}" else null,
             )
@@ -730,10 +757,9 @@ private fun RankedPrint.playLabel(): String = when {
 }
 
 /**
- * The native sponsor slot. It is a first-party house card: the app renders no remote HTML,
- * loads no third-party script, and sends no ad-network request, so it cannot quietly become
- * a tracker. The space is honestly labelled, and the action is the same VIP flow the
- * Settings screen opens.
+ * The first-party VIP house card: the app renders no remote HTML, loads no third-party
+ * script, and sends no ad-network request, so it cannot quietly become a tracker. The
+ * action is the same VIP flow the Settings screen opens.
  */
 @Composable
 private fun SponsorCard(onOpenVipUpgrade: () -> Unit) {
@@ -762,12 +788,7 @@ private fun SponsorCard(onOpenVipUpgrade: () -> Unit) {
         }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(
-                text = "Sponsored",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                text = Brand.copy("sponsor_title", "Go VIP — no sponsor cards"),
+                text = Brand.copy("sponsor_title", "Go VIP"),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -864,6 +885,7 @@ private fun SeasonChips(seasons: List<SeasonGroup>, selectedSeason: Int?, onSele
         ) {
             seasons.forEach { s ->
                 FilterChip(
+                    colors = raddFilterChipColors(),
                     selected = selectedSeason == s.number,
                     onClick = { onSelect(s.number) },
                     label = { Text("Season ${s.number} · ${s.episodeCount}") },

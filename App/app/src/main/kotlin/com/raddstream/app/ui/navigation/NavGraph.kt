@@ -190,6 +190,11 @@ fun RaddStreamNavGraph(
                     onSearchClick = { navController.navigate(Screen.Search.route) },
                     searchEnabled = features.search,
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
+                    // Session 121 (P-26): the hero's Watch Now opens the title and
+                    // starts it, instead of only opening the title.
+                    onWatchNowClick = { postId ->
+                        navController.navigate(Screen.Detail.createRoute(postId, autoplay = true))
+                    },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
                     onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
@@ -220,7 +225,6 @@ fun RaddStreamNavGraph(
 
             composable(Screen.Search.route) {
                 SearchScreen(
-                    onBackClick = { navController.popBackStack() },
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onPlayDirectUrl = { url, title ->
                         // The address is staged, never routed: the player
@@ -291,12 +295,19 @@ fun RaddStreamNavGraph(
                 route = Screen.Detail.route,
                 arguments = listOf(
                     navArgument(Screen.Detail.ARG_POST_ID) { type = NavType.IntType },
+                    // Session 121 (P-26): the hero's Watch Now opens the title and starts
+                    // it — an optional flag, so every existing detail link still works.
+                    navArgument(Screen.Detail.ARG_AUTOPLAY) {
+                        type = NavType.BoolType
+                        defaultValue = false
+                    },
                 ),
                 deepLinks = listOf(
                     androidx.navigation.navDeepLink { uriPattern = Brand.deepLinkUri("detail/{postId}") },
                 ),
-            ) {
+            ) { backStackEntry ->
                 DetailScreen(
+                    autoplay = backStackEntry.arguments?.getBoolean(Screen.Detail.ARG_AUTOPLAY) ?: false,
                     onBackClick = { navController.popBackStack() },
                     onPlayStream = { streamId, title ->
                         navController.navigate(Screen.Player.createRoute(streamId, title)) {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
@@ -629,7 +630,12 @@ class PlaybackService : MediaSessionService() {
             val bundle = store.bundle.value ?: return
             lastKnownPositionMs = maxOf(lastKnownPositionMs, errorGetMs())
             val machine = failover ?: return
-            val decision = machine.onFailure(summarize(error))
+            // Session 121 (P-6): the raw ExoPlayer code is written to logcat here and
+            // nowhere else — the failover machine translates it to human words before
+            // any user-visible surface shows it, so diagnosis loses nothing.
+            val rawSummary = summarize(error)
+            Log.d("PlaybackService", "player error: $rawSummary")
+            val decision = machine.onFailure(rawSummary)
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
         }
 

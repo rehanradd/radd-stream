@@ -220,13 +220,20 @@ fun PosterCard(
                         text = details,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.labelSmall,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                // Dub status decides whether this title is watchable at all for a
-                // Hindi/Urdu-first viewer, so it is said on the tile, not after a tap.
-                AudioBadgeChipRow(badges = TileAudioBadges.forPost(post))
+                // Session 121 (P-28): the badge row only exists when a title has
+                // badges, so cards in one rail had different heights and a badge
+                // could straddle the rail's clip edge ("Dual Audio" cut mid-glyph).
+                // The slot is always 24 dp — the pill's own height — so card height
+                // is invariant to badge presence and rails stay uniform.
+                Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.CenterStart) {
+                    // Dub status decides whether this title is watchable at all for a
+                    // Hindi/Urdu-first viewer, so it is said on the tile, not after a tap.
+                    AudioBadgeChipRow(badges = TileAudioBadges.forPost(post))
+                }
 
                 progressLabel?.let { label ->
                     Text(

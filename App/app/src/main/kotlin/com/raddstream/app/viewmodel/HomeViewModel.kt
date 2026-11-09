@@ -118,6 +118,8 @@ data class HomeUiState(
     val claimedToday: Boolean = false,
     val isClaiming: Boolean = false,
     val claimMessage: String? = null,
+    /** Session 121 (P-26): the ids on this device's My List, so the hero's toggle reads live. */
+    val favoriteIds: Set<Int> = emptySet(),
 )
 
 /**
@@ -239,6 +241,7 @@ class HomeViewModel @Inject constructor(
 
     init {
         observeContinueWatching()
+        observeFavorites()
         observeDailyCheckIn()
         // Only rails v1 can honestly serve today. `type = null` == recently added
         // (the API default order is `p.id DESC` per viewer.py:1905, i.e. freshest scrape).
@@ -378,6 +381,29 @@ class HomeViewModel @Inject constructor(
                     val items = rows.mapNotNull { ResumeTile.of(it) }
                     _uiState.update { it.copy(continueWatching = items) }
                 }
+        }
+    }
+
+    /**
+     * Session 121 (P-26): the hero's My List toggle reads live — a favorite added
+     * on the details page flips the hero's button without a reload, and vice versa.
+     */
+    private fun observeFavorites() {
+        viewModelScope.launch {
+            favoritesRepository.getAllFavorites().collect { favorites ->
+                _uiState.update { it.copy(favoriteIds = favorites.map { fav -> fav.id }.toSet()) }
+            }
+        }
+    }
+
+    /** Session 121 (P-26): the hero's My List toggle — the same add/remove the details page uses. */
+    fun toggleFavorite(post: Post) {
+        viewModelScope.launch {
+            if (favoritesRepository.isFavorite(post.id).first()) {
+                favoritesRepository.removeFavorite(post.id)
+            } else {
+                favoritesRepository.addFavorite(post)
+            }
         }
     }
 

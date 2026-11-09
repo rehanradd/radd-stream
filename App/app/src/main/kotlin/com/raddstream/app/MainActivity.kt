@@ -325,7 +325,15 @@ class MainActivity : ComponentActivity() {
                     // telemetry snapshot at once, so a "yes" turns the
                     // headers on without a restart and a "no" leaves the app
                     // exactly as it was.
-                    if (analyticsConsentKnown && analyticsConsent == null) {
+                    // Session 121 (P-21): the question used to appear over whatever
+                    // the first paint was — on a first install, over the genre
+                    // picker, before the viewer had seen anything of the app. It
+                    // now waits until Home is the destination, so the first thing
+                    // a viewer meets is the app, not a question; a first-run
+                    // viewer answers it on the next launch instead. (The branded
+                    // loading screen from Session 120 already covers the wait
+                    // before any route exists.)
+                    if (analyticsConsentKnown && analyticsConsent == null && destination == Screen.Home.route) {
                         AnalyticsConsentDialog(
                             onAccept = {
                                 activityScope.launch {

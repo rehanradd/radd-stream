@@ -34,6 +34,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -79,6 +80,10 @@ fun RegionSelectionScreen(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 28.dp),
+        // Session 121 (P-23): on a tall phone the content ended mid-screen and the
+        // bottom ~40% sat empty and black. Short content is centred; tall content
+        // still scrolls from the top.
+        verticalArrangement = Arrangement.Center,
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         RaddStreamMark(diameter = 56.dp)
@@ -133,6 +138,15 @@ fun RegionSelectionScreen(
             } else {
                 Text("Continue")
             }
+        }
+        // Session 121 (P-24): the question is a convenience, never a door — a viewer
+        // who does not want to choose skips straight to the default (Desi).
+        TextButton(
+            onClick = { viewModel.skip(onContinue) },
+            enabled = !state.isSaving,
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text("Skip")
         }
         if (state.saveFailed) {
             Spacer(Modifier.height(10.dp))

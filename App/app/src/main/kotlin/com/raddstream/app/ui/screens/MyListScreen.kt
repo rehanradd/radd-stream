@@ -37,6 +37,7 @@ import com.raddstream.app.ui.components.CatalogGridColumns
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.PosterCard
 import com.raddstream.app.ui.components.PosterGridSkeleton
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.ListSort
 import com.raddstream.app.viewmodel.MyListViewModel
 
@@ -131,6 +132,7 @@ fun MyListScreen(
                 ) {
                     ListSort.entries.forEach { sort ->
                         FilterChip(
+                            colors = raddFilterChipColors(),
                             selected = state.sort == sort,
                             onClick = { viewModel.setSort(sort) },
                             label = { Text(sort.label) },

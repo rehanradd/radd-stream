@@ -56,6 +56,40 @@ sealed class FailoverDecision {
     data class Handoff(val why: HandoffWhy, val detail: String?, val record: FailoverRecord?) : FailoverDecision()
 }
 
+/**
+ * Session 121 (P-6): human words for a raw player error summary. `PlaybackService.summarize`
+ * returns ExoPlayer's `errorCodeName` plus the exception's first line — e.g.
+ * "ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ..." — which the give-up card used to print
+ * verbatim, wrapped mid-word. A viewer cannot act on a constant name, so the machine
+ * translates the known codes into sentences and the raw text never reaches a
+ * user-visible surface. Anything without an `ERROR_CODE_` token is already human
+ * ("link expired before load", "Reached max_ranks=…") and passes through untouched, so
+ * this is idempotent. The raw code is still written to logcat by `PlaybackService`
+ * before it calls `onFailure`, so diagnosis loses nothing.
+ */
+internal fun humanizeErrorSummary(raw: String): String {
+    if (!raw.contains("ERROR_CODE_")) return raw
+    return when {
+        raw.contains("ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT") ->
+            "The connection timed out. Check your connection and try again."
+        raw.contains("ERROR_CODE_IO_NETWORK_CONNECTION_FAILED") ->
+            "Could not reach the server. Check your connection and try again."
+        raw.contains("ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE") ->
+            "The server sent something that is not a video."
+        raw.contains("ERROR_CODE_IO_BAD_HTTP_STATUS") ->
+            "The server refused this link."
+        raw.contains("ERROR_CODE_IO_FILE_NOT_FOUND") ->
+            "This copy is no longer on the server."
+        raw.contains("ERROR_CODE_IO_NO_PERMISSION") ->
+            "The server refused access to this copy."
+        raw.contains("ERROR_CODE_DECODER") ->
+            "This device could not play this video."
+        raw.contains("ERROR_CODE_IO_") ->
+            "The video could not be loaded. Check your connection and try again."
+        else -> "Playback failed. Retry, or try another print."
+    }
+}
+
 class FailoverStateMachine(
     private val renditions: List<PlaybackRendition>,
     private val policy: PlaybackFailurePolicy,
@@ -131,16 +165,21 @@ class FailoverStateMachine(
 
     /** Call when the active rendition fails with [errorSummary]. Returns the mandated next step. */
     fun onFailure(errorSummary: String): FailoverDecision {
+        // Session 121 (P-6): the summary may be a raw ExoPlayer code; the machine is the
+        // single funnel every failure passes through, so translate it here — the Handoff
+        // detail (the give-up card's message) and the FailoverRecord reason (the print
+        // sheet's failover log) are both user-visible and both get human words.
+        val displaySummary = humanizeErrorSummary(errorSummary)
         val index = activeIndex
         val current = renditions.getOrNull(index)
-            ?: return FailoverDecision.Handoff(HandoffWhy.NO_CANDIDATE_LEFT, errorSummary, null)
+            ?: return FailoverDecision.Handoff(HandoffWhy.NO_CANDIDATE_LEFT, displaySummary, null)
         // Read-modify-write instead of `HashMap.merge`: `merge` is a Java 8 default method and
         // lint correctly refuses it against minSdk 21 (it ships in API 24). The count below is
         // only ever read on this thread, so the atomicity `merge` would have bought is not a
         // behaviour this class depends on.
         val usedSoFar = (attemptsByIndex[index] ?: 0) + 1
         attemptsByIndex[index] = usedSoFar
-        val record = FailoverRecord(current.rank, current.releaseId, current.displayLabel(), errorSummary, "")
+        val record = FailoverRecord(current.rank, current.releaseId, current.displayLabel(), displaySummary, "")
 
         return when {
             // retry_same budget still available for THIS candidate
@@ -151,7 +190,7 @@ class FailoverStateMachine(
 
             !policy.thenNextRank -> {
                 _log.add(record.copy(action = "stopped (policy)"))
-                FailoverDecision.Handoff(HandoffWhy.NO_CANDIDATE_LEFT, errorSummary, record.copy(action = "stopped"))
+                FailoverDecision.Handoff(HandoffWhy.NO_CANDIDATE_LEFT, displaySummary, record.copy(action = "stopped"))
             }
 
             else -> {
@@ -193,7 +232,7 @@ class FailoverStateMachine(
                     }
                     else -> FailoverDecision.Handoff(
                         HandoffWhy.NO_CANDIDATE_LEFT,
-                        errorSummary,
+                        displaySummary,
                         record.copy(action = "no candidates remain"),
                     )
                 }

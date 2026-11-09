@@ -67,6 +67,7 @@ import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.player.AudioBoost
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.AccountCardCopy
 import com.raddstream.app.viewmodel.AccountUiState
 import com.raddstream.app.viewmodel.ContactUiState
@@ -934,7 +935,7 @@ private fun ChipRow(options: List<String>, selectedIndex: Int, onSelect: (Int) -
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         options.forEachIndexed { idx, label ->
-            FilterChip(selected = idx == selectedIndex, onClick = { onSelect(idx) }, label = { Text(label) })
+            FilterChip(colors = raddFilterChipColors(), selected = idx == selectedIndex, onClick = { onSelect(idx) }, label = { Text(label) })
         }
     }
 }
@@ -1070,6 +1071,7 @@ internal fun ContactDialog(contact: ContactUiState, viewModel: SettingsViewModel
                 ) {
                     ContactUiState.CATEGORY_LABELS.forEachIndexed { idx, label ->
                         FilterChip(
+                            colors = raddFilterChipColors(),
                             selected = ContactUiState.CATEGORY_IDS[idx] == contact.category,
                             onClick = { viewModel.onContactCategoryChanged(ContactUiState.CATEGORY_IDS[idx]) },
                             label = { Text(label) },

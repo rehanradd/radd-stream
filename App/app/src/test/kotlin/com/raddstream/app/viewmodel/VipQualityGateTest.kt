@@ -1,6 +1,8 @@
 package com.raddstream.app.viewmodel
 
 import com.raddstream.app.network.models.CoverageType
+import com.raddstream.app.network.models.LinkState
+import com.raddstream.app.network.models.Playability
 import com.raddstream.app.network.models.PrintDescriptor
 import com.raddstream.app.network.models.ReleaseLabelParsing
 import com.raddstream.app.network.models.Resolution
@@ -175,6 +177,63 @@ class VipQualityGateTest {
         assertTrue(VipQualityGate.hasPremiumPrints(layout))
         assertFalse(VipQualityGate.hasPremiumPrints(gated))
     }
+
+    @Test
+    fun `a premium print only counts for the upsell when it can actually play`() {
+        // Session 121 (P-10): a 1080p download-only copy is not a VIP unlock, it is
+        // a keep — the old check counted resolution alone, so a title whose every
+        // premium print was download-only still got the "4K and 1080p are part of
+        // VIP" card while nothing on it could play at all.
+        val downloadable = print(1, "1080p")
+        val layout = ReleaseLayout(
+            isSeriesLike = false,
+            seasons = emptyList(),
+            workPrints = listOf(downloadable),
+            capabilities = listOf("1080p"),
+            officialPrintCount = 1,
+            camPrintCount = 0,
+            totalPrints = 1,
+        )
+        assertTrue(VipQualityGate.hasPremiumPrints(layout, "720p"))
+        assertFalse(VipQualityGate.hasPlayablePremiumPrints(layout, "720p"))
+
+        val playable = print(2, "1080p").copy(links = listOf(playableLink()))
+        assertTrue(
+            VipQualityGate.hasPlayablePremiumPrints(layout.copy(workPrints = listOf(playable)), "720p")
+        )
+
+        // A provider page is watchable too — it opens, even though Media3 never plays it.
+        val page = print(3, "1080p").copy(links = listOf(pageLink()))
+        assertTrue(
+            VipQualityGate.hasPlayablePremiumPrints(layout.copy(workPrints = listOf(page)), "720p")
+        )
+    }
+
+    private fun playableLink() = RankedLink(
+        streamId = "h-play",
+        linkId = 1,
+        health = LinkState.ACTIVE,
+        ephemeral = false,
+        resumable = true,
+        playUrl = "http://127.0.0.1:8080/api/v1/stream?id=h-play",
+        label = "Fast direct",
+        kind = "direct",
+        playability = Playability.STREAM,
+        score = 100,
+    )
+
+    private fun pageLink() = RankedLink(
+        streamId = "h-page",
+        linkId = 2,
+        health = LinkState.ACTIVE,
+        ephemeral = false,
+        resumable = true,
+        playUrl = "http://127.0.0.1:8080/api/v1/stream?id=h-page",
+        label = "Provider page",
+        kind = "external",
+        playability = Playability.WEBVIEW,
+        score = 50,
+    )
 
     @Test
     fun `a season with only premium prints disappears instead of becoming an empty row`() {

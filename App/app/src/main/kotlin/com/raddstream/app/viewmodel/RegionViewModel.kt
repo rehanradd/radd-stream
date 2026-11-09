@@ -55,6 +55,16 @@ class RegionViewModel @Inject constructor(
         _ui.update { it.copy(selectedId = UserRegion.normalize(id), saveFailed = false) }
     }
 
+    /**
+     * Skip the question: the default is saved exactly as if it had been picked, so a
+     * viewer who does not want to choose is never stuck at this screen — the choice
+     * is a convenience, never a door (Session 121, P-24).
+     */
+    fun skip(onSaved: () -> Unit) {
+        select(UserRegion.DEFAULT)
+        saveAndContinue(onSaved)
+    }
+
     /** The card's own words about what picking it does — never re-invented by the caller. */
     fun choiceFor(id: String) = RegionChoices.byId(id)
 
