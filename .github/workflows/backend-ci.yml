@@ -533,6 +533,16 @@ jobs:
       - name: 🧪 test_moviesdrive_import.py
         run: python3 -S Fast_Fetch/test_moviesdrive_import.py
 
+      # Legal catalog (Archive.org Feature Films, public-domain only, no TMDb
+      # key): the license gate (PD Mark / old public-domain dedication / CC0 /
+      # CC BY / CC BY-SA in, BY-NC / BY-ND / sampling out), the dark + no-mp4
+      # + probe gates, the >1 GB .ia.mp4 cap, the title/year fallbacks and
+      # the review-flag wordlist. Offline — fixtures shaped from the
+      # 2026-11-09 live proof run; the small live batch is in the session
+      # checkpoint, not in these tests.
+      - name: 🧪 test_archive_import.py
+        run: python3 -S Fast_Fetch/importers/test_archive_import.py
+
       # The admin panel feed for the app (sections / broadcasts / hides): the
       # resolver, the adult fail-closed rule, the hide expiry/restore rules,
       # and the posts-route hide enforcement. Offline — temp SQLite files.
