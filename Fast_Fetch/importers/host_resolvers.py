@@ -525,31 +525,54 @@ def _open(request: urllib.request.Request, timeout: float = DEFAULT_TIMEOUT,
     return opener.open(request, timeout=timeout)
 
 
+#: Transport retries for ``http_request`` (Session 126 follow-up). The
+#: MovieBox edge resets ~2 of 3 handshakes from this host, so a single
+#: attempt succeeds about a third of the time and the first TLS reset
+#: used to surface at press time as an "unknown" verdict on a title whose
+#: streams exist (proven by re-probe: 8/9 series rows active on retry).
+#: The importer retries the same edge 6x for bulk harvest; the press path
+#: is latency-bounded, so this defaults to 3 (4 attempts, ~80% first-pass
+#: success on a 1/3-per-attempt edge). Only transport failures (status 0)
+#: are retried — an HTTP answer is evidence about the URL and returns at
+#: once, exactly as before.
+TRANSPORT_RETRIES = 3
+
+
 def http_request(url: str, headers: dict | None = None, timeout: float = DEFAULT_TIMEOUT,
                  method: str = "GET", follow: bool = True,
-                 data: bytes | None = None):
+                 data: bytes | None = None,
+                 transport_retries: int = TRANSPORT_RETRIES):
     """
     (status, body, headers, final_url) for one request.
 
     A redirect that was asked not to be followed comes back as its 3xx with the
     Location in `headers`; a transport failure comes back as status 0 with the
     reason in the body, because a resolver's job is to name what it saw.
+    A transport failure (DNS, TLS reset, timeout, refused — the ``except
+    Exception`` branch) is retried up to ``transport_retries`` times with a
+    short backoff, because on this edge a reset says nothing about the URL.
+    An HTTP answer, including a 429, is never retried.
     """
     fields = {"User-Agent": USER_AGENT}
     fields.update(headers or {})
     request = urllib.request.Request(url, headers=fields, method=method,
                                      data=data)
-    try:
-        with _open(request, timeout=timeout, follow=follow) as response:
-            return (int(response.status), response.read(PROBE_READ_BYTES),
-                    {k.lower(): v for k, v in response.getheaders()},
-                    response.geturl())
-    except urllib.error.HTTPError as exc:
-        return (int(exc.code), exc.read(PROBE_READ_BYTES),
-                {k.lower(): v for k, v in (exc.headers.items() if exc.headers else [])},
-                url)
-    except Exception as exc:                      # DNS, TLS, timeout, refused
-        return 0, str(exc), {}, url
+    last: tuple = (0, "", {}, url)
+    for attempt in range(max(1, transport_retries + 1)):
+        if attempt:
+            time.sleep(0.25 + 0.15 * (attempt % 4))
+        try:
+            with _open(request, timeout=timeout, follow=follow) as response:
+                return (int(response.status), response.read(PROBE_READ_BYTES),
+                        {k.lower(): v for k, v in response.getheaders()},
+                        response.geturl())
+        except urllib.error.HTTPError as exc:
+            return (int(exc.code), exc.read(PROBE_READ_BYTES),
+                    {k.lower(): v for k, v in (exc.headers.items() if exc.headers else [])},
+                    url)
+        except Exception as exc:                      # DNS, TLS, timeout, refused
+            last = (0, str(exc), {}, url)
+    return last
 
 
 def _cookie_jar_fetch():

@@ -5,6 +5,17 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-10 — Muse [PHASE-E-MOVIEBOX-FOLLOWUPS]: MovieBox search
+  recovery + year+genre gap-fill + resolver transport retry — search flow
+  implemented (`client_token` / `fetch_bearer_token` / `search_subjects`,
+  Bearer alone; proven live: "aquaman" 3 hits, exact title first);
+  `recover` queues the 168 no-subject rows + 43 metadata-only posts into
+  a separate follow-up vault for the crawl to fill; `gapfill` harvests
+  year+genre cells (`sort=Latest`, source-key dedup); `http_request`
+  retries transport failures (default 3). Tests: search 19 + gapfill 9 +
+  resolvers 222 OK; 🧪 69 → 72. Data merge is a separate parent gate —
+  [20261110-muse-session-moviebox-followups.md](20261110-muse-session-moviebox-followups.md)
+
 - 2026-11-09 — Muse [MUSE-SESSION-LEGAL-CATALOG]: Archive.org legal
   catalog importer (Archive-only, no TMDb key): license gate (PD Mark /
   old public-domain dedication / CC0 / CC BY / CC BY-SA in; BY-NC / BY-ND

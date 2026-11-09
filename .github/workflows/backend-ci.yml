@@ -352,6 +352,17 @@ jobs:
       - name: 🧪 test_themoviebox_import.py
         run: python3 -S Fast_Fetch/importers/test_themoviebox_import.py
 
+      # The MovieBox follow-ups (Session 126 follow-up): search recovery —
+      # the client-token mint, Bearer-alone search, slug-stem keywords,
+      # exact-title hit picking, and recover queueing the no-subject rows
+      # and metadata-only posts it finds; and the year+genre gap-fill —
+      # genre tokens from the source vault, source-key dedup, sort=Latest
+      # cells. Offline — urlopen replaced with a fake, temp DBs only.
+      - name: 🧪 test_themoviebox_search.py
+        run: python3 -S Fast_Fetch/importers/test_themoviebox_search.py
+      - name: 🧪 test_themoviebox_gapfill.py
+        run: python3 -S Fast_Fetch/importers/test_themoviebox_gapfill.py
+
       # The mp4moviez converters (Session 126 follow-up): the legacy crawl
       # wrote a private schema (posts.source_url, no canonical identity, no
       # source rows), so the converters rebuild it as a staging vault in the
@@ -379,6 +390,14 @@ jobs:
       # so a real socket attempt fails the run rather than the internet.
       - name: 🧪 test_host_serialiser.py
         run: python3 -S Fast_Fetch/test_host_serialiser.py
+
+      # The resolver HTTP path (Session 126 follow-up): `http_request`
+      # retries transport failures only (default 3), an HTTP answer —
+      # including 429 — returns at once, and `transport_retries=0` means
+      # one attempt. Offline: `_open` is mocked and `time.sleep` is
+      # stubbed, so no socket is ever opened.
+      - name: 🧪 test_host_resolvers.py
+        run: python3 -S Fast_Fetch/importers/test_host_resolvers.py
 
       # The documentation diet's guard (2026-10-30). The diet moved ~690 KB of LOG and SPEC out of
       # the files every agent auto-loads; this suite is what proves no LAW sentence was lost in the

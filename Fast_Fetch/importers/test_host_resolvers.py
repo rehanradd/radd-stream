@@ -402,6 +402,65 @@ class TestTransport(unittest.TestCase):
             status, body, headers, final = hr.http_request("https://x.test/a")
         self.assertEqual((status, body, headers, final), (0, "dns down", {}, "https://x.test/a"))
 
+    def test_transport_failure_is_retried_then_succeeds(self):
+        # Session 126 follow-up: the MovieBox edge resets ~2 of 3 handshakes,
+        # so the first reset must not be the verdict — a retry that answers
+        # is a success, not a transport failure.
+        calls = {"n": 0}
+
+        def flaky_open(request, timeout, follow=True):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise OSError("TLS reset")
+            return FakeResponse(200, "ok", {}, "https://x.test/a")
+
+        with mock.patch.object(hr, "_open", flaky_open), \
+                mock.patch.object(time, "sleep"):
+            status, body, _headers, _final = hr.http_request("https://x.test/a")
+        self.assertEqual((status, body, calls["n"]), (200, b"ok", 3))
+
+    def test_transport_failure_after_all_retries_reports_status_zero(self):
+        calls = {"n": 0}
+
+        def dead_open(request, timeout, follow=True):
+            calls["n"] += 1
+            raise OSError("TLS reset")
+
+        with mock.patch.object(hr, "_open", dead_open), \
+                mock.patch.object(time, "sleep"):
+            status, _body, _headers, _final = hr.http_request("https://x.test/a")
+        self.assertEqual((status, calls["n"]),
+                         (0, hr.TRANSPORT_RETRIES + 1))
+
+    def test_http_error_is_never_retried(self):
+        # An HTTP answer is evidence about the URL, not the network: a 429
+        # returns at once, however many transport retries are budgeted.
+        error = urllib.error.HTTPError("https://x.test/a", 429, "Slow down",
+                                       {}, io.BytesIO(b"slow"))
+        calls = {"n": 0}
+
+        def counting_open(request, timeout, follow=True):
+            calls["n"] += 1
+            raise error
+
+        with mock.patch.object(hr, "_open", counting_open), \
+                mock.patch.object(time, "sleep"):
+            status, _body, _headers, _final = hr.http_request("https://x.test/a")
+        self.assertEqual((status, calls["n"]), (429, 1))
+
+    def test_explicit_zero_retries_means_one_attempt(self):
+        calls = {"n": 0}
+
+        def dead_open(request, timeout, follow=True):
+            calls["n"] += 1
+            raise OSError("TLS reset")
+
+        with mock.patch.object(hr, "_open", dead_open), \
+                mock.patch.object(time, "sleep"):
+            status, _body, _headers, _final = hr.http_request(
+                "https://x.test/a", transport_retries=0)
+        self.assertEqual((status, calls["n"]), (0, 1))
+
     def test_open_picks_the_opener_the_caller_asked_for(self):
         calls = []
 

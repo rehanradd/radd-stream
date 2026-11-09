@@ -72,7 +72,12 @@ unlocked the same day: any API call made with the ``X-Client-Token`` header
 (``<unix-seconds>,<md5(reversed seconds)>`` — the site's own YC() from its JS
 bundle) answers with an ``x-user`` response header carrying a Bearer token;
 ``/subject/search`` then works with ``Authorization: Bearer <token>`` alone
-(sending both headers answers 400 'invalid token').
+(sending both headers answers 400 'invalid token'). Search is implemented
+here now (``client_token`` / ``fetch_bearer_token`` / ``search_subjects``):
+``recover`` uses it to queue the 168 no-subject rows and the 43
+metadata-only posts the HTML crawl could not reach, and ``gapfill``
+harvests the year+genre cells the year-only walks capped out on — both
+into a separate follow-up vault, never the merged source vault.
 
 Finally, the edge reset roughly two thirds of TLS handshakes from this host
 (8/24 successes, independent of IP and of HTTP version — four CloudFront
@@ -98,6 +103,8 @@ Usage:
     python3 -S Fast_Fetch/importers/import_themoviebox.py crawl --workers 2 --delay 0.3 --limit 40
     python3 -S Fast_Fetch/importers/import_themoviebox.py verify --limit 200
     python3 -S Fast_Fetch/importers/import_themoviebox.py stats
+    python3 -S Fast_Fetch/importers/import_themoviebox.py recover
+    python3 -S Fast_Fetch/importers/import_themoviebox.py gapfill --years 2024 --genres Action,Drama
 """
 
 from __future__ import annotations
@@ -1598,6 +1605,167 @@ def http_get_json(url: str, payload: dict, timeout: int = API_TIMEOUT,
     return last
 
 
+# ---------------------------------------------------------------------------
+# Search (the authenticated endpoint — Session 126 follow-up)
+# ---------------------------------------------------------------------------
+
+#: Search is the only endpoint that finds a work by name. It is
+#: authenticated, and its token is minted client-side: any API call made
+#: with ``X-Client-Token`` answers with an ``x-user`` response header
+#: carrying a Bearer token, and ``/subject/search`` then works with
+#: ``Authorization: Bearer <token>`` alone. Sending both headers answers
+#: 400 'invalid token'; sending neither also 400s. Measured live
+#: 2026-11-09/10: token call HTTP 200 with x-user present, search
+#: "aquaman" HTTP 200 with 3 items, exact title first.
+API_SEARCH_PATH = "/subject/search"
+API_SEARCH_PER_PAGE = 10
+
+
+def client_token(now: float | None = None) -> str:
+    """The site's own YC() from its JS bundle, in stdlib.
+
+    ``e = floor(Date.now()/1000); t = reverse(String(e)); n = MD5(t)`` —
+    i.e. ``<unix-seconds>,<md5-hex of the reversed decimal seconds>``.
+    ``now`` exists only so tests can pin the value; production passes none.
+    """
+    import hashlib
+
+    seconds = int(time.time() if now is None else now)
+    return f"{seconds},{hashlib.md5(str(seconds)[::-1].encode()).hexdigest()}"
+
+
+def _token_request(delay: float = DEFAULT_DELAY) -> tuple[int, dict | None]:
+    """One API call carrying X-Client-Token; returns (status, x-user JSON).
+
+    Any API call answers with the header, so the call is the cheapest
+    proven one: the filter endpoint, one item. The token itself is never
+    logged or stored — it is returned to the caller, which holds it only
+    for the run. Retried like ``_api_request``: transport failures carry
+    no information about the token, an HTTP answer does.
+    """
+    data = json.dumps({"page": 1, "perPage": 1}).encode("utf-8")
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json",
+               "Content-Type": "application/json",
+               "Origin": BASE_URL, "Referer": f"{BASE_URL}/",
+               "X-Client-Token": client_token()}
+    for attempt in range(TRANSPORT_RETRIES + 1):
+        if attempt:
+            time.sleep(0.25 + 0.15 * (attempt % 4))
+        _throttle(delay)
+        try:
+            request = urllib.request.Request(f"{API_BASE}{API_FILTER_PATH}",
+                                             data=data, headers=headers)
+            with urllib.request.urlopen(request, timeout=API_TIMEOUT) as resp:
+                raw = resp.headers.get("x-user") or resp.headers.get("X-User")
+                if not raw:
+                    return resp.status, None
+                try:
+                    return resp.status, json.loads(raw)
+                except (TypeError, ValueError):
+                    return resp.status, None
+        except urllib.error.HTTPError as exc:
+            return exc.code, None
+        except Exception:
+            continue
+    return 0, None
+
+
+def fetch_bearer_token(delay: float = DEFAULT_DELAY) -> str | None:
+    """Mint a search Bearer token. None when the edge never answered."""
+    status, payload = _token_request(delay=delay)
+    if status != 200 or not isinstance(payload, dict):
+        return None
+    token = payload.get("token")
+    return str(token) if token else None
+
+
+def search_subjects(keyword: str, token: str, page: int = 1,
+                    per_page: int = API_SEARCH_PER_PAGE,
+                    delay: float = DEFAULT_DELAY) -> tuple[int, list]:
+    """POST /subject/search with the Bearer token alone. Never raises.
+
+    Returns (status, items). A 400 means the token is dead ('invalid
+    token') — the caller refetches once and retries; anything else is
+    evidence about the keyword, not the token. Transport failures are
+    retried like ``_api_request``; the token header is the only auth sent.
+    """
+    data = json.dumps({"keyword": keyword, "page": page,
+                       "perPage": per_page}).encode("utf-8")
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json",
+               "Content-Type": "application/json",
+               "Origin": BASE_URL, "Referer": f"{BASE_URL}/",
+               "Authorization": f"Bearer {token}"}
+    last: tuple[int, list] = (0, [])
+    for attempt in range(TRANSPORT_RETRIES + 1):
+        if attempt:
+            time.sleep(0.25 + 0.15 * (attempt % 4))
+        _throttle(delay)
+        try:
+            request = urllib.request.Request(f"{API_BASE}{API_SEARCH_PATH}",
+                                             data=data, headers=headers)
+            with urllib.request.urlopen(request, timeout=API_TIMEOUT) as resp:
+                body = resp.read().decode("utf-8", "replace")
+                try:
+                    parsed = json.loads(body)
+                except (TypeError, ValueError):
+                    return resp.status, []
+                data_body = parsed.get("data") or {}
+                items = data_body.get("items") or data_body.get("list") or []
+                return resp.status, [it for it in items if isinstance(it, dict)]
+        except urllib.error.HTTPError as exc:
+            return exc.code, []
+        except Exception:
+            last = (0, [])
+            continue
+    return last
+
+
+def _keyword_from_slug(slug: str | None) -> str:
+    """A detail slug stem as a search keyword.
+
+    Slugs are ``<title-words>-<12-char id>`` with the title part all
+    lowercase and the id mixed-case alphanumeric (measured on the 168
+    no-subject rows: every id is 12 chars with uppercase). The id is not
+    part of the title, so a last segment carrying any uppercase letter is
+    dropped; a slug with no such segment is used as-is. The dub marker
+    (``hindi``) stays — it names a separate subject, and the search must
+    find that subject, not its original-language twin.
+    """
+    parts = (slug or "").strip("/").split("-")
+    if len(parts) > 1 and any(ch.isupper() for ch in parts[-1]):
+        parts = parts[:-1]
+    return " ".join(p for p in parts if p)
+
+
+def _normalize_title(text: str | None) -> str:
+    """Lowercase alphanumeric words, single-spaced, for title matching."""
+    return " ".join(re.findall(r"[a-z0-9]+", (text or "").lower()))
+
+
+def pick_search_hit(items: list, keyword: str,
+                    year: int | None = None) -> dict | None:
+    """The best search hit for a recovery target, or None.
+
+    Exact normalized-title match among accepted subject types (1 movie,
+    2 series) wins; a same-year accepted hit is next; otherwise the first
+    accepted hit. Type 6 music mixes, type 7 concert mixes and type 9
+    sports clips are never works, however well they match the words.
+    """
+    accepted = [it for it in items if isinstance(it, dict)
+                and it.get("subjectType") in ACCEPTED_SUBJECT_TYPES]
+    if not accepted:
+        return None
+    want = _normalize_title(keyword)
+    for item in accepted:
+        if _normalize_title(_first_text(item, TITLE_KEYS)) == want:
+            return item
+    if year is not None:
+        for item in accepted:
+            if _year_of(_lookup(item, [], DATE_KEYS)) == year:
+                return item
+    return accepted[0]
+
+
 def _detail_url(item: dict) -> str | None:
     """A work's page address, built the way the site itself builds it."""
     path = _as_text(item.get("detailPath"))
@@ -1711,6 +1879,26 @@ def _existing_keys(conn: sqlite3.Connection) -> set:
         return set()
 
 
+def _queue_loc(conn: sqlite3.Connection, loc: str, lastmod=None, slug=None,
+               subject_id=None) -> bool:
+    """Queue one detail page for the crawl. True when it was newly queued.
+
+    The id the feed/search already gave us is kept in raw_json so the
+    crawl can read the 39 KB JSON detail answer instead of the 410 KB
+    HTML page. Shared by ``sync_catalog`` and ``recover_missing`` so the
+    two queue paths cannot drift apart.
+    """
+    if not loc:
+        return False
+    raw = json.dumps({"subjectId": subject_id}) if subject_id else "{}"
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO sitemap_cache (loc, lastmod, slug, scraped,"
+        " raw_json, error_count) VALUES (?, ?, ?, 0, ?, 0)",
+        (loc, lastmod, slug or (loc.rstrip("/").rsplit("/", 1)[-1] or None),
+         raw))
+    return bool(cur.rowcount)
+
+
 def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
                  seeds=(), pages: int = API_MAX_PAGES,
                  per_page: int = API_PAGE_SIZE, verbose: bool = True,
@@ -1733,17 +1921,7 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
         known = _existing_keys(conn)
 
         def queue(loc, lastmod=None, slug=None, subject_id=None):
-            if not loc:
-                return
-            # Keep the id the feed already gave us: the crawl can then ask the
-            # JSON detail endpoint (39 KB) instead of the HTML page (410 KB).
-            raw = json.dumps({"subjectId": subject_id}) if subject_id else "{}"
-            cur = conn.execute(
-                "INSERT OR IGNORE INTO sitemap_cache (loc, lastmod, slug, scraped,"
-                " raw_json, error_count) VALUES (?, ?, ?, 0, ?, 0)",
-                (loc, lastmod, slug or (loc.rstrip("/").rsplit("/", 1)[-1]
-                                        or None), raw))
-            if cur.rowcount:
+            if _queue_loc(conn, loc, lastmod, slug, subject_id):
                 totals["queued"] += 1
             else:
                 totals["duplicates"] += 1
@@ -1791,7 +1969,9 @@ def sync_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None
 
 def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
                     pages: int = API_MAX_PAGES, per_page: int = API_PAGE_SIZE,
-                    verbose: bool = True, filters: dict | None = None) -> dict:
+                    verbose: bool = True, filters: dict | None = None,
+                    known_keys: set | None = None,
+                    delay: float = DEFAULT_DELAY) -> dict:
     """Write catalog rows straight from the feed, and queue each page for enrichment.
 
     This is the ingest that MovieBox can honestly support today: the feed carries
@@ -1801,6 +1981,10 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
     recorded as if it were the film — plus one release per rendition the subject
     declares. ``crawl`` remains for the detail pages, which add season/episode
     structure and any print the site later exposes in HTML.
+
+    ``known_keys`` are canonical keys that already exist elsewhere (the source
+    vault a gap-fill reads from): they count as duplicates here instead of
+    being re-staged, so a follow-up vault holds only works the source lacks.
     """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1813,8 +1997,11 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
     try:
         ensure_schema(conn)
         known = _existing_keys(conn)
+        if known_keys:
+            known |= set(known_keys)
         for item, url in _walk_feed(pages=pages, per_page=per_page,
-                                    state=feed_state, filters=filters):
+                                    state=feed_state, filters=filters,
+                                    delay=delay):
             if STOP_REQUESTED:
                 break
             totals["items"] += 1
@@ -1865,6 +2052,290 @@ def harvest_catalog(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = N
             log(f"[✓] [{SITE}] harvest items={totals['items']} "
                 f"posts={totals['posts']} duplicates={totals['duplicates']} "
                 f"skipped_type={totals['skipped_type']}")
+    return totals
+
+
+# ---------------------------------------------------------------------------
+# Search recovery + year+genre gap-fill (Session 126 follow-up)
+# ---------------------------------------------------------------------------
+
+#: The follow-up vault: recovered + gap-filled works land here, never in the
+#: merged source vault, so the parent's merge gate sees exactly the new rows.
+DEFAULT_FOLLOWUP_DB_PATH = Path(
+    "/home/ubuntu/radd-stream-data/themoviebox_followup.db")
+
+#: Years the feed's year filter answers for (measured 2026-11-09: 2019–2026;
+#: 2018 and older answer 0 items).
+GAPFILL_YEARS = tuple(range(2019, 2027))
+
+#: How many atomic genre tokens the gap-fill enumerates when the operator
+#: names none (by post count in the source vault; see ``_genre_tokens``).
+GAPFILL_MAX_GENRES = 24
+
+
+def _no_subject_targets(conn: sqlite3.Connection) -> list[dict]:
+    """Queued rows whose crawl failed with kind ``no-subject``.
+
+    The detail page answered HTTP 200 but its Nuxt payload carried no
+    titled subject — no ``<title>``, no subject text, no ``subjectId`` —
+    so the crawl parked the row in the failures ledger instead of writing
+    a post. Measured 2026-11-09: 168 of the 172 queued rows (the other 4
+    failed another way). Each carries its slug, which is the search
+    keyword stem.
+    """
+    targets = []
+    try:
+        rows = conn.execute(
+            "SELECT loc, slug, raw_json FROM sitemap_cache"
+            " WHERE scraped IN (0, 2)").fetchall()
+    except sqlite3.Error:
+        return targets
+    for row in rows:
+        try:
+            ledger = json.loads(row["raw_json"] or "{}")
+        except (TypeError, ValueError):
+            continue
+        failures = ledger.get("failures") or []
+        if any(isinstance(f, dict) and f.get("kind") == "no-subject"
+               for f in failures):
+            targets.append({"kind": "no-subject", "loc": row["loc"],
+                            "slug": row["slug"]})
+    return targets
+
+
+def _metadata_only_targets(conn: sqlite3.Connection) -> list[dict]:
+    """Posts whose releases carry no source at all (the stats definition).
+
+    The page/feed yielded a title, year and poster but no tiers, and the
+    HTML crawl cannot reach the detail API without a subjectId — the
+    detail page does not publish one. Search by title recovers the id.
+    """
+    try:
+        rows = conn.execute(
+            "SELECT canonical_key, title, clean_title, year FROM posts p"
+            " WHERE NOT EXISTS (SELECT 1 FROM sources s JOIN releases r"
+            " ON s.release_id = r.id"
+            " WHERE r.post_canonical_key = p.canonical_key)"
+            " ORDER BY title").fetchall()
+    except sqlite3.Error:
+        return []
+    return [{"kind": "metadata-only", "canonical_key": row["canonical_key"],
+             "title": row["title"], "clean_title": row["clean_title"],
+             "year": row["year"]} for row in rows]
+
+
+def recover_missing(db_path: Path | str = DEFAULT_FOLLOWUP_DB_PATH,
+                    source_db: Path | str = DEFAULT_DB_PATH,
+                    limit: int | None = None,
+                    delay: float = DEFAULT_DELAY,
+                    verbose: bool = True) -> dict:
+    """Recover the follow-up targets via search, and queue what it finds.
+
+    Reads the source vault for (a) no-subject queue rows and (b)
+    metadata-only posts, searches each by its keyword (slug stem or clean
+    title), and queues the winning detail page + subjectId into the
+    follow-up vault's sitemap_cache. It writes NO posts itself: the
+    operator then runs ``crawl --db <follow-up>``, which fetches the
+    detail API for each queued id and exports the full record — the same
+    two-step shape as sync-then-crawl, so the recovery cannot stage a
+    half-parsed row. A target whose search finds nothing is counted in
+    ``not_found`` with its keyword, never silently dropped. A Bearer
+    token is minted once per run and refetched once on a 400.
+    """
+    db_path = Path(db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    totals = {"targets": 0, "searched": 0, "found": 0, "queued": 0,
+              "duplicates": 0, "not_found": 0, "not_found_keywords": [],
+              "token": False, "stopped_for_memory": False,
+              "stop_reason": None}
+    source = sqlite3.connect(source_db, timeout=60)
+    source.row_factory = sqlite3.Row
+    try:
+        targets = _no_subject_targets(source) + _metadata_only_targets(source)
+    finally:
+        source.close()
+    if limit:
+        targets = targets[:limit]
+    totals["targets"] = len(targets)
+    if not targets:
+        return totals
+    token = fetch_bearer_token(delay=delay)
+    totals["token"] = bool(token)
+    if not token:
+        totals["stop_reason"] = "no search token minted"
+        return totals
+    conn = sqlite3.connect(db_path, timeout=60)
+    conn.row_factory = sqlite3.Row
+    try:
+        ensure_schema(conn)
+        for target in targets:
+            if STOP_REQUESTED:
+                break
+            ok, reason = memory_ok()
+            if not ok:
+                totals["stopped_for_memory"] = True
+                totals["stop_reason"] = reason
+                log(f"[!] [{SITE}] recover stopped: {reason}")
+                break
+            if target["kind"] == "no-subject":
+                keyword = _keyword_from_slug(target.get("slug"))
+                year = None
+            else:
+                keyword = target.get("clean_title") or target.get("title") or ""
+                year = target.get("year")
+            if not keyword:
+                totals["not_found"] += 1
+                totals["not_found_keywords"].append("")
+                continue
+            totals["searched"] += 1
+            status, items = search_subjects(keyword, token, delay=delay)
+            if status == 400:
+                # 'invalid token' — mint once more and retry this keyword.
+                token = fetch_bearer_token(delay=delay)
+                totals["token"] = bool(token)
+                if token:
+                    status, items = search_subjects(keyword, token,
+                                                    delay=delay)
+            hit = pick_search_hit(items, keyword, year) if status == 200 else None
+            if not hit:
+                totals["not_found"] += 1
+                totals["not_found_keywords"].append(keyword)
+                continue
+            totals["found"] += 1
+            url = _detail_url(hit)
+            subject_id = _as_text(hit.get("subjectId"))
+            if url and _queue_loc(conn, url, None,
+                                  _as_text(hit.get("detailPath")), subject_id):
+                totals["queued"] += 1
+            else:
+                totals["duplicates"] += 1
+        conn.commit()
+    finally:
+        conn.close()
+    if verbose:
+        log(f"[✓] [{SITE}] recover targets={totals['targets']} "
+            f"searched={totals['searched']} found={totals['found']} "
+            f"queued={totals['queued']} duplicates={totals['duplicates']} "
+            f"not_found={totals['not_found']}")
+    return totals
+
+
+def _genre_tokens(conn: sqlite3.Connection,
+                  limit: int = GAPFILL_MAX_GENRES) -> list[str]:
+    """Atomic genre tokens by post count, best casing kept.
+
+    The ``genres`` column holds comma-joined combos (``Drama,Romance``)
+    with case variants (``drama`` vs ``Drama``), so the tokens are split,
+    counted case-insensitively, and each token keeps the casing its most
+    common spelling uses — the casing the feed filter has proven to honor.
+    """
+    counts: dict[str, dict[str, int]] = {}
+    try:
+        rows = conn.execute(
+            "SELECT genres FROM posts WHERE genres IS NOT NULL AND genres != ''"
+        ).fetchall()
+    except sqlite3.Error:
+        return []
+    for row in rows:
+        for token in (row[0] or "").split(","):
+            token = token.strip()
+            if not token:
+                continue
+            key = token.lower()
+            counts.setdefault(key, {}).setdefault(token, 0)
+            counts[key][token] += 1
+    ranked = []
+    for _key, spellings in counts.items():
+        best, best_n = max(spellings.items(), key=lambda kv: kv[1])
+        ranked.append((sum(spellings.values()), best))
+    ranked.sort(key=lambda pair: (-pair[0], pair[1].lower()))
+    return [best for _n, best in ranked[:max(0, limit)]]
+
+
+def _parse_years(spec: str | None) -> tuple[int, ...]:
+    """``2019-2026`` or ``2024,2025`` -> a tuple of years, in order."""
+    if not spec:
+        return GAPFILL_YEARS
+    years: list[int] = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            start, end = part.split("-", 1)
+            years.extend(range(int(start), int(end) + 1))
+        else:
+            years.append(int(part))
+    return tuple(dict.fromkeys(years)) or GAPFILL_YEARS
+
+
+def gapfill_catalog(db_path: Path | str = DEFAULT_FOLLOWUP_DB_PATH,
+                    source_db: Path | str = DEFAULT_DB_PATH,
+                    years: tuple | list | None = None,
+                    genres: list | None = None,
+                    max_genres: int = GAPFILL_MAX_GENRES,
+                    limit: int | None = None,
+                    delay: float = DEFAULT_DELAY,
+                    verbose: bool = True) -> dict:
+    """Enumerate year+genre cells the year-only walks could not reach.
+
+    Every year walk hit the feed's 100-page cap (5,000 items), so each
+    year cell holds more works than the walk returned. A year+genre cell
+    has its own cap, and genre is a proven server-side filter — so this
+    harvests each (year, genre) cell with ``sort=Latest`` (the only sort
+    whose pages are disjoint works) into the follow-up vault, deduping
+    against the source vault's keys so already-staged works are skipped,
+    not re-staged. Genre vocabulary comes from the source vault itself
+    unless the operator names genres. Resumable: a re-run skips every
+    cell's already-staged works the same way.
+    """
+    db_path = Path(db_path)
+    years = tuple(years) if years else GAPFILL_YEARS
+    totals = {"cells": 0, "cells_done": 0, "items": 0, "posts": 0,
+              "duplicates": 0, "skipped_type": 0,
+              "stopped_for_memory": False, "stop_reason": None}
+    source = sqlite3.connect(source_db, timeout=60)
+    source.row_factory = sqlite3.Row
+    try:
+        if genres is None:
+            genres = _genre_tokens(source, limit=max_genres)
+        source_keys = _existing_keys(source)
+    finally:
+        source.close()
+    if not genres:
+        totals["stop_reason"] = "no genre vocabulary in source vault"
+        return totals
+    for year in years:
+        for genre in genres:
+            if STOP_REQUESTED:
+                break
+            ok, reason = memory_ok()
+            if not ok:
+                totals["stopped_for_memory"] = True
+                totals["stop_reason"] = reason
+                log(f"[!] [{SITE}] gapfill stopped: {reason}")
+                break
+            totals["cells"] += 1
+            cell = harvest_catalog(
+                db_path, limit=limit, filters={
+                    "year": str(year), "genre": genre, "sort": "Latest"},
+                known_keys=source_keys, delay=delay, verbose=False)
+            totals["cells_done"] += 1
+            totals["items"] += cell["items"]
+            totals["posts"] += cell["posts"]
+            totals["duplicates"] += cell["duplicates"]
+            totals["skipped_type"] += cell["skipped_type"]
+            if cell.get("stopped_for_memory"):
+                totals["stopped_for_memory"] = True
+                totals["stop_reason"] = cell.get("stop_reason")
+                break
+        if totals["stopped_for_memory"] or STOP_REQUESTED:
+            break
+    if verbose:
+        log(f"[✓] [{SITE}] gapfill cells={totals['cells_done']}/{totals['cells']} "
+            f"items={totals['items']} posts={totals['posts']} "
+            f"duplicates={totals['duplicates']} "
+            f"skipped_type={totals['skipped_type']}")
     return totals
 
 
@@ -2510,6 +2981,41 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     verify.add_argument("--limit", type=int)
     verify.add_argument("--delay", type=float, default=DEFAULT_DELAY)
 
+    recover = sub.add_parser(
+        "recover",
+        help="recover no-subject rows + metadata-only posts via search")
+    recover.add_argument("--db", default=str(DEFAULT_FOLLOWUP_DB_PATH),
+                         help="follow-up vault to queue into"
+                              f" (default {DEFAULT_FOLLOWUP_DB_PATH})")
+    recover.add_argument("--source-db", default=str(DEFAULT_DB_PATH),
+                         help="vault to read targets from"
+                              f" (default {DEFAULT_DB_PATH})")
+    recover.add_argument("--limit", type=int,
+                         help="targets to attempt (default: all)")
+    recover.add_argument("--delay", type=float, default=DEFAULT_DELAY)
+
+    gapfill = sub.add_parser(
+        "gapfill",
+        help="harvest year+genre cells the year walks capped out on")
+    gapfill.add_argument("--db", default=str(DEFAULT_FOLLOWUP_DB_PATH),
+                         help="follow-up vault to write into"
+                              f" (default {DEFAULT_FOLLOWUP_DB_PATH})")
+    gapfill.add_argument("--source-db", default=str(DEFAULT_DB_PATH),
+                         help="vault to dedupe against"
+                              f" (default {DEFAULT_DB_PATH})")
+    gapfill.add_argument("--years", default="2019-2026",
+                         help="years to cover, e.g. 2019-2026 or 2024,2025"
+                              " (default 2019-2026)")
+    gapfill.add_argument("--genres",
+                         help="comma-separated genres to cover (default:"
+                              " top genres by post count in the source vault)")
+    gapfill.add_argument("--max-genres", type=int, default=GAPFILL_MAX_GENRES,
+                         help=f"genres to cover when --genres is omitted"
+                              f" (default {GAPFILL_MAX_GENRES})")
+    gapfill.add_argument("--limit", type=int,
+                         help="new posts to stop at per cell (default: all)")
+    gapfill.add_argument("--delay", type=float, default=DEFAULT_DELAY)
+
     stats_cmd = sub.add_parser("stats", help="count staging rows")
     stats_cmd.add_argument("--db", default=str(DEFAULT_DB_PATH))
     return parser.parse_args(argv)
@@ -2543,6 +3049,17 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "verify":
         totals = verify_sources(db_path=args.db, limit=args.limit,
                                 delay=args.delay)
+    elif args.command == "recover":
+        totals = recover_missing(db_path=args.db, source_db=args.source_db,
+                                 limit=args.limit, delay=args.delay)
+    elif args.command == "gapfill":
+        years = _parse_years(args.years)
+        genres = ([g.strip() for g in args.genres.split(",") if g.strip()]
+                  if args.genres else None)
+        totals = gapfill_catalog(db_path=args.db, source_db=args.source_db,
+                                 years=years, genres=genres,
+                                 max_genres=args.max_genres,
+                                 limit=args.limit, delay=args.delay)
     else:
         totals = stats(args.db)
     print(json.dumps(totals, indent=2, sort_keys=True))

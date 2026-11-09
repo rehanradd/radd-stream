@@ -582,7 +582,7 @@ class WorkflowSuiteCoverageTests(unittest.TestCase):
         "test_engagement.py", "test_filmiyin_import.py", "test_filmyhit_import.py",
         "test_filmywap_import.py", "test_filmyzilla_import.py", "test_hdhub4u_import.py",
         "test_hdtvb_import.py", "test_hindilinks4u.py", "test_hindilinks4u_retry.py",
-        "test_host_resolvers.py", "test_import_humtv.py", "test_import_katmoviehd.py",
+        "test_import_humtv.py", "test_import_katmoviehd.py",
         "test_import_wp_family.py", "test_katmoviehd.py", "test_katmoviehd_import.py",
         "test_kisskh_import.py", "test_kuttymovies_import.py", "test_levidia_import.py",
         "test_moviecok_import.py", "test_moviesmela_import.py", "test_moviezguru.py",
