@@ -121,7 +121,7 @@ class PlayerBackExitTest {
             "player_start_try_another",
             "player_open_external",
             "player_back_to_details",
-            "player_close",
+            "player_keep_waiting",
         ).forEach { action ->
             assertTrue("GiveUpCard must offer $action", giveUpCardBody.contains(action))
         }
