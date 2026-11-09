@@ -4,8 +4,8 @@ import_harpalgeo.py — Dedicated staging importer and scraper for HarPal Geo
 (https://www.harpalgeo.tv), Geo Entertainment's official drama site.
 
 MEASURED LIVE FROM THE ORACLE VM, 2026-11-09 (Session 118):
-  * Homepage 200 (321 KB): program links /program/<Title>, 31 distinct on the
-    homepage; NO .m3u8 on the homepage itself.
+  * Homepage 200 (321 KB): program links /program/<Title>, 11 programs on
+    the homepage (the extractor's count); NO .m3u8 on the homepage itself.
   * Program page /program/Bano 200 (306 KB): 12 episode links
     /program/Bano/<id>, titles carry "Episode N" + air date
     ("Bano Episode 26 | ... - 8th Nov 2026").
@@ -15,7 +15,11 @@ MEASURED LIVE FROM THE ORACLE VM, 2026-11-09 (Session 118):
   * That playlist fetches 200 (830 B): valid HLS master, 720p / 480p / 240p
     variants (h264 + aac); ffprobe confirms format_name=hls. NO crack needed.
   * /sitemap.xml 307s away — there is no sitemap; the catalog surface is the
-    homepage program list + each program page's episode list.
+    homepage program list + each program page's episode list. The homepage
+    lists only the 11 current programs; the fuller catalog is the /programs
+    index (12 pages, ~24-25 per page, ~18 new per page, ~200+ total —
+    measured 2026-11-10, Session 118 sweeps). Pages are /programs,
+    /programs/2, ... — ?page=N returns page 1 again.
   * Teaser pages exist alongside full episodes ("Episode 26 Teaser - 7th
     November 2026") — the importer skips any episode link whose label says
     "teaser"; a teaser is not a playable episode.
@@ -30,7 +34,7 @@ episode-page fetch; the live-play proof is the Session 118 probe above.
 100% Python Standard Library. Zero external pip packages.
 
 Usage:
-    python Fast_Fetch/import_harpalgeo.py --sync-programs           # List programs into sitemap_cache
+    python Fast_Fetch/import_harpalgeo.py --sync-programs           # List programs (homepage + /programs index) into sitemap_cache
     python Fast_Fetch/import_harpalgeo.py --limit 5                 # Scrape 5 pending programs
     python Fast_Fetch/import_harpalgeo.py --workers 3 --delay 0.5   # Full background run
     python Fast_Fetch/import_harpalgeo.py --status                  # Show current database counts
@@ -70,6 +74,10 @@ DEFAULT_DB_PATH = (
     else BASE_DIR / "harpalgeo.db"
 )
 STATUS_FILE = BASE_DIR / "harpalgeo_status.json"
+
+# /programs index pagination cap (the site advertises 12 pages; the sync
+# loop also stops at the first page that adds no new program).
+PROGRAMS_INDEX_MAX_PAGES = 50
 
 STOP_REQUESTED = False
 
@@ -316,9 +324,27 @@ def extract_program_data_harpalgeo(
 
 
 def sync_programs_to_db(client: HarPalGeoClient, db_path: Path) -> int:
-    """Fetches the homepage program list into sitemap_cache (resumable)."""
+    """Fetches the homepage program list AND the /programs index pages into
+    sitemap_cache (resumable).
+
+    Measured 2026-11-10 (Session 118 sweeps): the homepage lists only the
+    11 current programs, while /programs is a 12-page index (~24-25 per
+    page, ~18 new per page, ~200+ total). Pages are /programs, /programs/2,
+    ... — ?page=N returns page 1 again, so the loop walks /programs/<n>
+    and stops at the first page that adds no new program (or a non-200),
+    capped at PROGRAMS_INDEX_MAX_PAGES. The INSERT is ON CONFLICT, so
+    re-syncs are cheap and never reset a program's scraped state.
+    """
     fast_fetch.DB_PATH = db_path
     fast_fetch.init_db()
+
+    seen: dict[str, None] = {}
+
+    def _collect(page_html: str) -> int:
+        new = [u for u in extract_program_links(page_html) if u not in seen]
+        for url in new:
+            seen[url] = None
+        return len(new)
 
     home_url = f"{client.base_url}/"
     print(f"[*] Fetching homepage program list from {home_url}...", flush=True)
@@ -326,8 +352,24 @@ def sync_programs_to_db(client: HarPalGeoClient, db_path: Path) -> int:
     if status != 200 or not home_html:
         print(f"[!] HarPal Geo homepage HTTP {status}; 0 programs.", flush=True)
         return 0
+    _collect(home_html)
 
-    programs = extract_program_links(home_html)
+    page = 1
+    while page <= PROGRAMS_INDEX_MAX_PAGES:
+        index_url = f"{client.base_url}/programs" + (f"/{page}" if page > 1 else "")
+        status, _, index_html = client.get_text(index_url)
+        if status != 200 or not index_html:
+            print(f"[*] /programs page {page}: HTTP {status}; index ends.", flush=True)
+            break
+        added = _collect(index_html)
+        print(f"[*] /programs page {page}: {added} new program(s).", flush=True)
+        if added == 0:
+            break
+        page += 1
+        if STOP_REQUESTED:
+            break
+
+    programs = list(seen)
     print(f"[✓] Discovered {len(programs)} programs.", flush=True)
     records = [
         (url, None, url.rstrip("/").split("/")[-1], 0, SITE_NAME)

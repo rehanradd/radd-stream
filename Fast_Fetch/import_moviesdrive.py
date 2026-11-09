@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 import_moviesdrive.py — Dedicated staging importer and scraper for MoviesDrive
-(https://new1.moviesdrive.cyou), WordPress download catalog (Bollywood,
+(https://new2.moviesdrive.cyou), WordPress download catalog (Bollywood,
 Hollywood Hindi-dubbed, South, web series; 480p–2160p/4K, ESub).
 
 MEASURED LIVE FROM THE ORACLE VM, 2026-11-09 (Session 118):
@@ -17,7 +17,10 @@ MEASURED LIVE FROM THE ORACLE VM, 2026-11-09 (Session 118):
     current domain) and, on other posts, gdflix.vip/file/... (GDFlix).
   * Mirrors seen in discovery: moviesdrives.cfd/.bid, moviedrive.org,
     new4.moviesdrive.beer — the registry tracks them; the importer reads the
-    live base from the registry like the other 19 sites.
+    live base from the registry like the other 19 sites. Domain rotated
+    new1 -> new2 on 2026-11-10 (new1 302s to new2 and DROPS the query
+    string, so a stale base breaks wp-json paging — the registry, not the
+    fallback, must carry the live base).
 
 Shape: one post per WP post (title/year via fast_fetch.parse_post_metadata
 on the WP title), one release per mdrive archive link (quality/size/codec
@@ -61,7 +64,7 @@ if str(BASE_DIR) not in sys.path:
 import fast_fetch
 from domain_resolver import get_active_base_url, resolve_if_dead
 
-DEFAULT_BASE_URL = "https://new1.moviesdrive.cyou"
+DEFAULT_BASE_URL = "https://new2.moviesdrive.cyou"
 SITE_NAME = "moviesdrive"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/moviesdrive.db")
