@@ -7,9 +7,11 @@ import java.nio.charset.StandardCharsets
 /**
  * What text pasted into the search bar is — the answer to "is this a link to
  * play, or a title to search for", as a pure rule with no network, no store,
- * no clock. Only a direct video file over http(s) is playable here: an
- * address that names a page, a short link, or a title is the catalog search's
- * job, and a YouTube address names a page whose file this player cannot open.
+ * no clock. Only a direct video file over http(s) is playable here: a
+ * YouTube address names a page whose file this player cannot open, and any
+ * other http(s) address names a page this app never renders — the viewer is
+ * offered the system browser for it instead. A title, a fragment, or
+ * anything without a scheme is the catalog search's job.
  */
 sealed interface PastedText {
     /** A direct video file the player can open at once: .mp4 or .m3u8 over http(s). */
@@ -18,7 +20,14 @@ sealed interface PastedText {
     /** A YouTube address, which this player cannot open: no direct file behind it. */
     data object YouTube : PastedText
 
-    /** Anything else: a title, a page address, a fragment — the catalog search owns it. */
+    /**
+     * An http(s) address that is not a video file: a page. The app never
+     * renders it — the row offers to open it in the system browser, which
+     * is the browser-identity handoff without building a web browser.
+     */
+    data class PageLink(val url: String) : PastedText
+
+    /** Anything else: a title, a fragment — the catalog search owns it. */
     data object NotAUrl : PastedText
 }
 
@@ -38,7 +47,7 @@ fun classifyPastedText(raw: String): PastedText {
     }
     val path = uri.path?.lowercase() ?: return PastedText.NotAUrl
     val isHls = path.endsWith(".m3u8")
-    if (!isHls && !path.endsWith(".mp4")) return PastedText.NotAUrl
+    if (!isHls && !path.endsWith(".mp4")) return PastedText.PageLink(url = text)
     return PastedText.DirectVideo(url = text, title = directVideoTitle(text), isHls = isHls)
 }
 

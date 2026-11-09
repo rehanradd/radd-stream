@@ -84,8 +84,10 @@ class RemoteConfigWatcher @Inject constructor(
         // The disclaimer rides the same body, under the same rule as the
         // tabs: a failed poll leaves the last good text in place, and a
         // body that carries no disclaimer (an older deployment, or the
-        // operator retracting it) stores empty — and empty means "nothing
-        // published", so the dialog never opens on it.
+        // operator retracting it) stores empty. Empty is stored as the
+        // panel value, and the dialog resolves the shipped default from it
+        // at read time — so a cleared panel field falls back to the default
+        // text instead of leaving the app with no disclaimer at all.
         settings.saveDisclaimer(config.disclaimer)
         // The free quality cap rides the same body, under the same rule: a
         // failed poll leaves the last good cap in place, and a body that

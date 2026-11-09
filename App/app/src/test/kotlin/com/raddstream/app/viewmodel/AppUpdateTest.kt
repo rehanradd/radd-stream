@@ -28,6 +28,15 @@ class AppUpdateTest {
     }
 
     @Test
+    fun `a published size rides the notice to the dialog`() {
+        val update = AppUpdate.from(
+            VipRemoteConfig(apkUpdateUrl = url, apkUpdateSizeBytes = 24228798L),
+        )
+
+        assertEquals(24228798L, update?.sizeBytes)
+    }
+
+    @Test
     fun `a published code newer than this build becomes the notice`() {
         val update = AppUpdate.from(
             VipRemoteConfig(apkUpdateUrl = url, apkUpdateVersionCode = 214),

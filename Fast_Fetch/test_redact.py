@@ -186,6 +186,19 @@ class ProjectionTests(FixtureMixin):
         self.assertNotIn("brand_new_column", redact.project(
             {**row, "brand_new_column": "hubcloud"}, "link"))
 
+    def test_cast_names_is_detail_only(self):
+        # The cast list is a person's name, not provenance: the detail view
+        # publishes it (the app's cast row reads it there), while the list
+        # row never renders cast and must not carry the bytes.
+        row = {
+            "id": 1, "clean_title": "Film One", "title": "Film One (2024)",
+            "cast_names": "Shah Rukh Khan, Kajol",
+        }
+        self.assertEqual(
+            redact.project(row, "post_detail")["cast_names"],
+            "Shah Rukh Khan, Kajol")
+        self.assertNotIn("cast_names", redact.project(row, "post_brief"))
+
     def test_ladder_link_keeps_the_measured_mime_type(self):
         # Session 71: the detail screen's honest source row reads Instant
         # Stream vs Direct File off the winner copy's probe-measured mime.

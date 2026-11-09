@@ -576,7 +576,7 @@ class WorkflowSuiteCoverageTests(unittest.TestCase):
         "test_10xflix_import.py", "test_5movierulz_import.py", "test_7starhd_import.py",
         "test_9xmovies.py",
         "test_all_sites.py", "test_animahd_import.py", "test_aryplus_import.py",
-        "test_audit_staging.py", "test_backfill_animated_flag.py", "test_backfill_tmdb.py",
+        "test_audit_staging.py", "test_backfill_animated_flag.py", "test_backfill_cast.py", "test_backfill_tmdb.py",
         "test_bolly4u_import.py", "test_convert_mp4moviez.py", "test_desicinemas.py",
         "test_desiserials_import.py", "test_download_endpoint.py", "test_dramacool_import.py",
         "test_engagement.py", "test_filmiyin_import.py", "test_filmyhit_import.py",

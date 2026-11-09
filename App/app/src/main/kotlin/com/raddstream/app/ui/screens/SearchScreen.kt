@@ -1,5 +1,7 @@
 package com.raddstream.app.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,15 +19,17 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -52,8 +56,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -87,12 +93,6 @@ private val typeChips = listOf(
     "Seasons" to "complete_season",
 )
 
-/** One line of the facet rail: a quiet group caption or a selectable chip. */
-private sealed interface FilterRailEntry {
-    data class Caption(val label: String) : FilterRailEntry
-    data class Choice(val label: String, val selected: Boolean, val onClick: () -> Unit) : FilterRailEntry
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 // Session 121 (P-30): Search is a bottom-nav tab root — there is nowhere to go back
@@ -101,6 +101,8 @@ private sealed interface FilterRailEntry {
 fun SearchScreen(
     onPostClick: (Int) -> Unit = {},
     onPlayDirectUrl: (url: String, title: String) -> Unit = { _, _ -> },
+    /** A query to run at once — an actor tap on a detail card lands here with the name filled in. */
+    initialQuery: String? = null,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -111,6 +113,13 @@ fun SearchScreen(
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
 
+    // An actor tap runs as a search at once — and is recorded as a recent,
+    // like any search the viewer ran. Keyed on the argument, so a rotation
+    // or a later edit never re-runs it.
+    LaunchedEffect(initialQuery) {
+        if (!initialQuery.isNullOrBlank()) viewModel.runRecent(initialQuery)
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -119,8 +128,18 @@ fun SearchScreen(
                 // the top bar saying "12 results" as well was the same number twice.
                 title = { Text("Search") },
                 actions = {
-                    if (state.hasActiveFilters) {
-                        Pill(text = "Filtered", backgroundColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
+                    if (state.hasFacetFilters) {
+                        // The pill names the facets, never the sort — and it
+                        // opens the sheet, so a viewer can see which filters
+                        // are actually on instead of taking the pill's word.
+                        Box(
+                            modifier = Modifier.clickable(
+                                role = Role.Button,
+                                onClickLabel = "Open filters",
+                            ) { showSheet = true },
+                        ) {
+                            Pill(text = "Filtered", backgroundColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
+                        }
                         Spacer(Modifier.width(8.dp))
                     }
                     IconButton(onClick = { showSheet = true }) {
@@ -147,10 +166,10 @@ fun SearchScreen(
                 onValueChange = viewModel::onQueryChanged,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
-                // The API searches titles only, so the label says so honestly —
-                // "Search titles, actors, or genres" would promise what the
-                // server cannot do.
-                label = { Text("Search for a title") },
+                // The API searches titles and cast names, so the label says
+                // both honestly — "actors or genres" would still promise
+                // what the server cannot do.
+                label = { Text("Search for a title or an actor") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
                     if (state.query.isNotEmpty()) {
@@ -189,16 +208,22 @@ fun SearchScreen(
                     )
                     Spacer(Modifier.height(8.dp))
                 }
+                is PastedText.PageLink -> {
+                    PageLinkRow(url = pasted.url)
+                    Spacer(Modifier.height(8.dp))
+                }
                 PastedText.NotAUrl -> {
                     // The Home tile says "Play a video link", but nothing on
                     // this screen said a link could be pasted here — the field
-                    // only reacts once a URL is typed. One honest line, only
-                    // while the field is empty: a direct .mp4 or .m3u8 link
-                    // plays in the app. No promise of general web browsing;
-                    // the YouTube line above still says no to those.
-                    if (state.query.isEmpty()) {
+                    // only reacts once a URL is typed. One honest line: a
+                    // direct .mp4 or .m3u8 link plays in the app, any other
+                    // web link opens in the browser. It stays up while the
+                    // field holds a half-typed address, not only while it is
+                    // empty — a hint that vanishes the moment typing starts
+                    // teaches nothing.
+                    if (state.query.isEmpty() || looksLikeUrlPrefix(state.query)) {
                         Text(
-                            text = "You can also paste a direct video link (.mp4 or .m3u8) here to play it in the app.",
+                            text = "You can also paste a direct video link (.mp4 or .m3u8) here to play it — or any web link to open it in your browser.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -207,47 +232,62 @@ fun SearchScreen(
                     }
                 }
             }
-            if (pasted is PastedText.NotAUrl) {
-                FilterRail(state = state, viewModel = viewModel)
-            }
+            // The rail stays up whatever is pasted: a link replaces the
+            // results, never the whole search UI.
+            FilterRail(state = state, viewModel = viewModel, onOpenFilters = { showSheet = true })
 
-            // Type-ahead titles for what is being typed. A tap searches for
-            // that title — it never opens a page, because a suggestion names
-            // a work, not a post.
-            if (pasted is PastedText.NotAUrl && state.suggestions.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    // Session 121 (P-14): the last suggestion chip was clipped at the
-                    // right edge — the row needs the same end padding the rail gets.
-                    contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
-                ) {
-                    items(state.suggestions, key = { it.id }) { suggestion ->
-                        FilterChip(
-                            colors = raddFilterChipColors(),
-                            selected = false,
-                            onClick = { viewModel.runSuggestion(suggestion.title) },
-                            label = {
-                                Text(
-                                    if (suggestion.year != null) {
-                                        "${suggestion.title} (${suggestion.year})"
-                                    } else {
-                                        suggestion.title
-                                    },
-                                )
-                            },
-                        )
+            if (pasted is PastedText.NotAUrl) {
+                // Type-ahead titles for what is being typed. A tap searches for
+                // that title — it never opens a page, because a suggestion names
+                // a work, not a post.
+                if (state.suggestions.isNotEmpty()) {
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        // Session 121 (P-14): the last suggestion chip was clipped at the
+                        // right edge — the row needs the same end padding the rail gets.
+                        contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+                    ) {
+                        items(state.suggestions, key = { it.id }) { suggestion ->
+                            FilterChip(
+                                colors = raddFilterChipColors(),
+                                selected = false,
+                                onClick = { viewModel.runSuggestion(suggestion.title) },
+                                label = {
+                                    Text(
+                                        if (suggestion.year != null) {
+                                            "${suggestion.title} (${suggestion.year})"
+                                        } else {
+                                            suggestion.title
+                                        },
+                                    )
+                                },
+                            )
+                        }
                     }
+                } else if (state.suggestionsUnavailable && state.query.length >= 2) {
+                    // The suggest call itself failed — blocked route, old
+                    // server, dead socket. Say so, instead of silently
+                    // showing no chips as if nothing matched.
+                    Text(
+                        text = "Suggestions aren't available on this server — type the full title and search.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    )
                 }
-            }
 
-            if (pasted is PastedText.NotAUrl) {
                 SearchBody(
                     state = state,
                     viewModel = viewModel,
                     onPostClick = onPostClick,
                     onOpenFilters = { showSheet = true },
                 )
+            } else if (state.recents.isNotEmpty()) {
+                // A pasted link replaces the results, not the history: the
+                // recents stay reachable so the viewer is never stranded on
+                // a link row with nowhere to go.
+                RecentsSection(state = state, viewModel = viewModel)
             }
         }
 
@@ -271,7 +311,8 @@ fun SearchScreen(
  * One pasted address, one play button: the row says what will play — the file
  * name, with the pasted address underneath — and nothing about where it came
  * from beyond the address itself. The viewer typed it, so showing it back is
- * showing their own text, not a catalog link.
+ * showing their own text, not a catalog link. One Play control, not two:
+ * the icon button and the text button used to do the same thing.
  */
 @Composable
 private fun DirectVideoRow(url: String, title: String, onPlay: () -> Unit) {
@@ -280,9 +321,6 @@ private fun DirectVideoRow(url: String, title: String, onPlay: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        IconButton(onClick = onPlay) {
-            Icon(Icons.Default.PlayArrow, contentDescription = "Play video link")
-        }
         Column(Modifier.weight(1f)) {
             Text(
                 text = title,
@@ -306,62 +344,78 @@ private fun DirectVideoRow(url: String, title: String, onPlay: () -> Unit) {
 }
 
 /**
- * The whole filter surface in one scrolled line: Type, Industry, Genre, Quality and
- * Sort. Every choice re-runs the debounced server search, so a chip narrows the
- * catalog rather than the handful of rows this device happens to hold.
+ * One pasted page address: what it is, the address itself, and the one
+ * honest action — open it in the system browser. The app never renders the
+ * page: that is the browser's job, and this row is the handoff to it. When
+ * no browser on the device can take the link, the row says so instead of
+ * failing silently.
  */
 @Composable
-private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel) {
-    val entries = buildList {
-        add(FilterRailEntry.Caption("Type"))
-        typeChips.forEach { (label, value) ->
-            add(FilterRailEntry.Choice(label, state.filters.type == value) { viewModel.selectType(value) })
-        }
-        add(FilterRailEntry.Caption("Industry"))
-        IndustryFilter.entries.forEach { industry ->
-            add(
-                FilterRailEntry.Choice(
-                    industry.label,
-                    state.filters.industry == industry,
-                ) { viewModel.selectIndustry(industry) },
+private fun PageLinkRow(url: String) {
+    val context = LocalContext.current
+    var openFailed by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Icon(
+                Icons.Default.OpenInNew,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    text = "This looks like a web page",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(
+                    text = url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Button(onClick = {
+                openFailed = try {
+                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                    false
+                } catch (_: Exception) {
+                    true
+                }
+            }) {
+                Text("Open")
+            }
         }
-        add(FilterRailEntry.Caption("Genre"))
-        GenreFilter.entries.forEach { genre ->
-            add(
-                FilterRailEntry.Choice(
-                    genre.label,
-                    state.filters.genre == genre,
-                ) { viewModel.selectGenre(genre) },
+        if (openFailed) {
+            Text(
+                text = "No browser on this device could open the link.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
             )
-        }
-        add(FilterRailEntry.Caption("Quality"))
-        QualityFilter.entries.forEach { quality ->
-            add(
-                FilterRailEntry.Choice(
-                    quality.label,
-                    state.filters.quality == quality,
-                ) { viewModel.selectQuality(quality) },
-            )
-        }
-        // A VIP viewer has everything included, so the chip would narrow
-        // their catalog for nothing. Free viewers get the one filter that
-        // answers "can I watch this without paying".
-        if (!state.isVip) {
-            add(FilterRailEntry.Caption("Plan"))
-            add(
-                FilterRailEntry.Choice(
-                    "Included in my plan",
-                    state.filters.includedOnly,
-                ) { viewModel.setIncludedOnly(!state.filters.includedOnly) },
-            )
-        }
-        add(FilterRailEntry.Caption("Sort"))
-        SearchSort.entries.forEach { sort ->
-            add(FilterRailEntry.Choice(sort.label, state.sort == sort) { viewModel.setSort(sort) })
         }
     }
+}
 
+/** A half-typed address: the paste hint stays up while the field holds one. */
+private fun looksLikeUrlPrefix(query: String): Boolean {
+    val text = query.trim().lowercase()
+    return text.startsWith("http") || text.startsWith("www.") || text.contains("://")
+}
+
+/**
+ * The rail in one scrolled line: the Type chips the viewer reaches for
+ * most, then the Filters button for everything else (industry, genre,
+ * quality, plan, sort, years). One ungrouped ~30-chip scroll buried the
+ * type choice behind captions; the sheet owns the rest.
+ */
+@Composable
+private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel, onOpenFilters: () -> Unit) {
     LazyRow(
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -371,19 +425,59 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel) {
         // pads 16 dp.
         contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
     ) {
-        items(entries.size) { index ->
-            when (val entry = entries[index]) {
-                is FilterRailEntry.Caption -> Text(
-                    text = entry.label,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(start = if (index == 0) 0.dp else 12.dp),
-                )
-                is FilterRailEntry.Choice -> FilterChip(
+        items(typeChips) { (label, value) ->
+            FilterChip(
+                colors = raddFilterChipColors(),
+                selected = state.filters.type == value,
+                onClick = { viewModel.selectType(value) },
+                label = { Text(label) },
+            )
+        }
+        item {
+            FilterChip(
+                colors = raddFilterChipColors(),
+                selected = false,
+                onClick = onOpenFilters,
+                label = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Text("Filters")
+                    }
+                },
+            )
+        }
+    }
+}
+
+/**
+ * The recent-searches rail: a lazy row (never a fixed Row that clips the
+ * 9th chip) with a Clear action. Used on the empty screen and under a
+ * pasted link, where it is the way back.
+ */
+@Composable
+private fun RecentsSection(state: SearchUiState, viewModel: SearchViewModel) {
+    Column(Modifier.fillMaxWidth()) {
+        SectionHeader(
+            title = "Recent searches",
+            modifier = Modifier.padding(top = 8.dp),
+            action = {
+                TextButton(onClick = viewModel::clearRecents) { Text("Clear") }
+            },
+        )
+        LazyRow(
+            modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(start = 0.dp, end = 16.dp, top = 4.dp, bottom = 4.dp),
+        ) {
+            items(state.recents, key = { it }) { recent ->
+                FilterChip(
                     colors = raddFilterChipColors(),
-                    selected = entry.selected,
-                    onClick = entry.onClick,
-                    label = { Text(entry.label) },
+                    selected = false,
+                    onClick = { viewModel.runRecent(recent) },
+                    label = { Text(recent) },
                 )
             }
         }
@@ -399,31 +493,23 @@ private fun SearchBody(
 ) {
     // Session 121 (P-12): scrolling the results dismisses the keyboard — the open
     // keyboard covering the top row was the other half of the complaint (the first
-    // half was submit, handled at the field). Hoisted here so the scroll state is
+    // half was submit, handled at the field). Hoisted here so the list state is
     // remembered unconditionally, not inside the branch that renders the list.
-    val resultsScroll = rememberScrollState()
+    val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
-    LaunchedEffect(resultsScroll.value) {
-        if (resultsScroll.value > 0) focusManager.clearFocus()
+    LaunchedEffect(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset) {
+        if (listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 0) {
+            focusManager.clearFocus()
+        }
     }
     when {
         !state.hasSearchIntent -> {
             if (state.recents.isNotEmpty()) {
-                Column(Modifier.fillMaxWidth()) {
-                    SectionHeader(title = "Recent searches", modifier = Modifier.padding(top = 8.dp))
-                    Row(
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        state.recents.take(8).forEach { recent ->
-                            FilterChip(colors = raddFilterChipColors(), selected = false, onClick = { viewModel.runRecent(recent) }, label = { Text(recent) })
-                        }
-                    }
-                }
+                RecentsSection(state = state, viewModel = viewModel)
             } else {
                 EmptyState(
                     title = "Search your catalog",
-                    message = "Type a title or pick a filter to begin. Recent searches will show up here.",
+                    message = "Type a title or an actor's name, or pick a filter to begin. Recent searches will show up here.",
                     icon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(40.dp)) },
                 )
             }
@@ -446,48 +532,76 @@ private fun SearchBody(
                 }
             },
         )
-        else -> Column(Modifier.fillMaxSize().verticalScroll(resultsScroll)) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    text = resultsSummary(state.resultCount, state.serverTotal, state.hasMore),
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                TextButton(onClick = onOpenFilters) {
-                    Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text("Sort · ${state.sort.label}")
+        state.isFuzzy && state.showExactOnly -> EmptyState(
+            // Exact-only on a fuzzy page is the empty state: every row the
+            // server sent is one-edit-away, so there is nothing exact to
+            // list — and the way back is right here.
+            title = "No exact matches",
+            message = "No titles exactly match \"${state.query}\".",
+            icon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(40.dp)) },
+            action = {
+                OutlinedButton(onClick = viewModel::showCloseMatches) { Text("Show close matches") }
+            },
+        )
+        else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = resultsSummary(state.resultCount, state.serverTotal, state.hasMore),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onOpenFilters) {
+                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text("Sort · ${state.sort.label}")
+                    }
                 }
             }
 
             // The server found nothing exact and answered one edit away
-            // instead. Say so, so the viewer knows why "Avengers" is what
-            // came back for "Avngers".
+            // instead. Name the query, so the viewer knows why "Avengers"
+            // is what came back for "Avngers" — and offer the exact-only
+            // view, which is the empty state above.
             if (state.isFuzzy) {
-                Text(
-                    text = "Showing close matches — check the spelling.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                )
+                item {
+                    Column(Modifier.fillMaxWidth().padding(bottom = 8.dp)) {
+                        Text(
+                            text = "No exact match for \"${state.query}\" — showing the closest titles.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        TextButton(onClick = viewModel::showExactOnly) { Text("Show exact matches only") }
+                    }
+                }
             }
 
             state.groups.forEach { group ->
-                SectionHeader(title = group.label, subtitle = "${group.items.size}", modifier = Modifier.padding(horizontal = 0.dp))
-                MediaRail(items = group.items, key = { it.id }) { post ->
-                    PosterCard(post = post, onClick = { onPostClick(post.id) })
+                item {
+                    SectionHeader(
+                        title = group.label,
+                        subtitle = "${group.items.size} ${if (group.items.size == 1) "title" else "titles"}",
+                        modifier = Modifier.padding(horizontal = 0.dp),
+                    )
                 }
-                Spacer(Modifier.height(12.dp))
+                item {
+                    MediaRail(items = group.items, key = { it.id }) { post ->
+                        PosterCard(post = post, onClick = { onPostClick(post.id) })
+                    }
+                }
+                item { Spacer(Modifier.height(12.dp)) }
             }
 
             if (state.hasMore) {
-                Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
-                    OutlinedButton(onClick = viewModel::loadMore, enabled = !state.isLoadingMore) {
-                        Text(if (state.isLoadingMore) "Loading…" else "Load more")
+                item {
+                    Box(Modifier.fillMaxWidth().padding(vertical = 16.dp), contentAlignment = Alignment.Center) {
+                        OutlinedButton(onClick = viewModel::loadMore, enabled = !state.isLoadingMore) {
+                            Text(if (state.isLoadingMore) "Loading…" else "Load more")
+                        }
                     }
                 }
             }
@@ -496,7 +610,7 @@ private fun SearchBody(
             // every group was empty, so a search that died on page 3 looked like a catalog that
             // simply had three pages.
             state.error?.let { failure ->
-                InlineLoadFailure(message = failure, onRetry = viewModel::loadMore)
+                item { InlineLoadFailure(message = failure, onRetry = viewModel::loadMore) }
             }
         }
     }
@@ -517,6 +631,16 @@ private fun FilterSheetContent(
             .padding(bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        // Type moved here from the rail: the rail now carries only the Type
+        // chips and the Filters button, so the sheet is the one place where
+        // every facet lives together.
+        FacetChips(
+            title = "Type",
+            options = typeChips,
+            label = { it.first },
+            isSelected = { state.filters.type == it.second },
+            onSelect = { viewModel.selectType(it.second) },
+        )
         FacetChips(
             title = "Industry",
             options = IndustryFilter.entries,

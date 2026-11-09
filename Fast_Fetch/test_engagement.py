@@ -161,6 +161,63 @@ class EngagementFixture(unittest.TestCase):
         engagement.grant_coins(self.conn, self.account_id, amount=30,
                                reason="streak_day", now=noon)
 
+    # ── 6b. the velocity guard: many awards in minutes ───────────────────────
+
+    def test_twenty_grants_in_ten_minutes_pass_and_the_twenty_first_refuses(self):
+        noon = epoch_at("2026-01-06T12:00:00")
+        # Ten ads (the daily cap) plus ten other reasons: no per-reason cap
+        # binds the mix, so only the velocity guard can see the burst.
+        for i in range(engagement.REWARDED_DAILY_CAP):
+            engagement.grant_coins(self.conn, self.account_id, amount=5,
+                                   reason="rewarded_ad", idempotency_key=f"v-ad-{i}",
+                                   now=noon)
+        for i in range(engagement.VELOCITY_MAX_GRANTS - engagement.REWARDED_DAILY_CAP):
+            engagement.grant_coins(self.conn, self.account_id, amount=1,
+                                   reason="finish_watch", idempotency_key=f"v-fw-{i}",
+                                   now=noon)
+        with self.assertRaises(engagement.VelocityLimitReached):
+            engagement.grant_coins(self.conn, self.account_id, amount=1,
+                                   reason="share", idempotency_key="v-over",
+                                   now=noon)
+
+    def test_a_replay_after_twenty_grants_answers_idempotent_not_velocity(self):
+        noon = epoch_at("2026-01-06T12:00:00")
+        for i in range(engagement.VELOCITY_MAX_GRANTS):
+            engagement.grant_coins(self.conn, self.account_id, amount=1,
+                                   reason="finish_watch", idempotency_key=f"v-rp-{i}",
+                                   now=noon)
+        # The very first grant, retried: the key already exists, so the
+        # answer is "already applied" — a harmless retry is never turned
+        # into a refusal by the guard that was built to catch scripts.
+        replay = engagement.grant_coins(
+            self.conn, self.account_id, amount=1,
+            reason="finish_watch", idempotency_key="v-rp-0", now=noon)
+        self.assertTrue(replay["idempotent"])
+        self.assertEqual(replay["granted"], 0)
+
+    def test_admin_grants_are_exempt_from_the_velocity_guard(self):
+        noon = epoch_at("2026-01-06T12:00:00")
+        for i in range(engagement.VELOCITY_MAX_GRANTS + 5):
+            engagement.grant_coins(self.conn, self.account_id, amount=1,
+                                   reason="admin_grant", source="admin",
+                                   idempotency_key=f"v-adm-{i}", now=noon)
+        self.assertEqual(
+            engagement.coin_balance(self.conn, self.account_id),
+            engagement.VELOCITY_MAX_GRANTS + 5)
+
+    def test_grants_older_than_the_window_do_not_count(self):
+        noon = epoch_at("2026-01-06T12:00:00")
+        for i in range(engagement.VELOCITY_MAX_GRANTS):
+            engagement.grant_coins(self.conn, self.account_id, amount=1,
+                                   reason="finish_watch", idempotency_key=f"v-old-{i}",
+                                   now=noon)
+        # Ten minutes and one second later the whole burst has aged out.
+        granted = engagement.grant_coins(
+            self.conn, self.account_id, amount=1, reason="share",
+            idempotency_key="v-fresh",
+            now=noon + engagement.VELOCITY_WINDOW_SECONDS + 1)
+        self.assertEqual(granted["granted"], 1)
+
     # ── 7. the day bucket: a Pakistani user at 02:00 (the asked-about case) ───
 
     def test_the_day_bucket_rolls_over_at_the_boundary_not_at_midnight(self):

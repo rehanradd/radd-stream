@@ -145,8 +145,20 @@ data class SearchUiState(
     val isVip: Boolean = false,
     /** Type-ahead titles for the current query; empty when the route is blocked or the server is old. */
     val suggestions: List<SuggestItem> = emptyList(),
+    /**
+     * True when the suggest call itself failed (blocked route, old server,
+     * dead socket) — distinct from "the server answered and has no matches".
+     * The screen says so instead of silently showing no chips.
+     */
+    val suggestionsUnavailable: Boolean = false,
     /** True when this page is the server's one-edit-away fallback, not an exact match. */
     val isFuzzy: Boolean = false,
+    /**
+     * True when the viewer asked to see exact matches only on a fuzzy page.
+     * Every row on a fuzzy page is one-edit-away, so exact-only is the empty
+     * state — not a second server call.
+     */
+    val showExactOnly: Boolean = false,
 ) {
     /** A blank query is still a search when a server facet is selected. */
     val hasSearchIntent: Boolean
@@ -155,6 +167,15 @@ data class SearchUiState(
     val hasActiveFilters: Boolean
         get() = filters.type != null || filters.anyServerFilterActive ||
             filters.anyClientFilterActive || sort != SearchSort.DEFAULT
+
+    /**
+     * The filters the "Filtered" pill names: facets and years, never the
+     * sort — a different sort order is not a filter, and the pill must not
+     * claim the catalog is narrowed when only the ordering changed.
+     */
+    val hasFacetFilters: Boolean
+        get() = filters.type != null || filters.anyServerFilterActive ||
+            filters.anyClientFilterActive
 }
 
 @HiltViewModel
@@ -200,7 +221,7 @@ class SearchViewModel @Inject constructor(
 
     /** Records the current query and forces an immediate search (IME "Search" key). */
     fun submitCurrentQuery() {
-        _uiState.update { it.copy(suggestions = emptyList()) }
+        _uiState.update { it.copy(suggestions = emptyList(), suggestionsUnavailable = false) }
         // A pasted address is not a title: it never joins the recents rail.
         if (classifyPastedText(_uiState.value.query) == PastedText.NotAUrl) {
             recordRecent(_uiState.value.query)
@@ -209,16 +230,32 @@ class SearchViewModel @Inject constructor(
     }
 
     fun runRecent(query: String) {
-        _uiState.update { it.copy(query = query, suggestions = emptyList()) }
+        _uiState.update { it.copy(query = query, suggestions = emptyList(), suggestionsUnavailable = false) }
         recordRecent(query)
         scheduleSearch(reset = true, immediate = true)
     }
 
     /** A suggestion is a title to search for, not a page to open: the id it carries is a work id. */
     fun runSuggestion(title: String) {
-        _uiState.update { it.copy(query = title, suggestions = emptyList()) }
+        _uiState.update { it.copy(query = title, suggestions = emptyList(), suggestionsUnavailable = false) }
         recordRecent(title)
         scheduleSearch(reset = true, immediate = true)
+    }
+
+    /** Show only exact matches on a fuzzy page (the empty state — every fuzzy row is one-edit-away). */
+    fun showExactOnly() {
+        _uiState.update { it.copy(showExactOnly = true) }
+    }
+
+    /** Back to the close matches on a fuzzy page. */
+    fun showCloseMatches() {
+        _uiState.update { it.copy(showExactOnly = false) }
+    }
+
+    /** The recents rail is a history: clear it from the store, and the flow echoes it back. */
+    fun clearRecents() {
+        _uiState.update { it.copy(recents = emptyList()) }
+        viewModelScope.launch { settingsRepository.saveSearchRecents(emptyList()) }
     }
 
     fun selectType(type: String?) {
@@ -324,7 +361,7 @@ class SearchViewModel @Inject constructor(
                 it.copy(
                     isLoading = false, error = null, groups = emptyList(), resultCount = 0,
                     serverTotal = 0, hasSearched = false, hasMore = false, page = 1,
-                    isFuzzy = false,
+                    isFuzzy = false, showExactOnly = false,
                 )
             }
             return
@@ -338,7 +375,8 @@ class SearchViewModel @Inject constructor(
                 it.copy(
                     isLoading = false, error = null, groups = emptyList(), resultCount = 0,
                     serverTotal = 0, hasSearched = false, hasMore = false, page = 1,
-                    isFuzzy = false, suggestions = emptyList(),
+                    isFuzzy = false, showExactOnly = false, suggestions = emptyList(),
+                    suggestionsUnavailable = false,
                 )
             }
             return
@@ -369,6 +407,7 @@ class SearchViewModel @Inject constructor(
                         hasMore = resp.results.size >= PAGE_SIZE && resp.totalPages > 1,
                         error = null,
                         isFuzzy = resp.fuzzy,
+                        showExactOnly = false,
                     )
                 }
                 recompute()
@@ -399,17 +438,25 @@ class SearchViewModel @Inject constructor(
         suggestJob?.cancel()
         val query = _uiState.value.query.trim()
         if (query.length < 2) {
-            _uiState.update { it.copy(suggestions = emptyList()) }
+            _uiState.update { it.copy(suggestions = emptyList(), suggestionsUnavailable = false) }
             return
         }
         if (classifyPastedText(query) != PastedText.NotAUrl) {
-            _uiState.update { it.copy(suggestions = emptyList()) }
+            _uiState.update { it.copy(suggestions = emptyList(), suggestionsUnavailable = false) }
             return
         }
         suggestJob = viewModelScope.launch {
             delay(DEBOUNCE_MS)
+            // Null is "the suggest call itself failed" (blocked route, old
+            // server, dead socket) — the screen says so, instead of
+            // silently showing no chips as if nothing matched.
             val items = catalogRepository.suggest(query)
-            _uiState.update { it.copy(suggestions = items) }
+            _uiState.update {
+                it.copy(
+                    suggestions = items ?: emptyList(),
+                    suggestionsUnavailable = items == null,
+                )
+            }
         }
     }
 

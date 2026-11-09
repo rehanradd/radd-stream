@@ -3821,6 +3821,33 @@ seg-00002.ts
             # No work row, no runtime: the detail carries no invented number.
             self.assertNotIn("runtime_minutes", detail)
 
+    def test_api_v1_query_matches_an_actor_in_cast_names(self):
+        """The omnibox matches actors: a query naming an actor finds the films
+        whose scraped cast list carries the name, the same way a title does —
+        and a title with no cast simply has nothing to match on."""
+        with_cast = self.media("site_a", "https://site-a.example/film-one/",
+                               title="Film One (2024)", clean_title="Film One")
+        with_cast["cast_names"] = "Shah Rukh Khan, Kajol"
+        fast_fetch.save_scraped_data(with_cast)
+        other = self.media("site_b", "https://site-b.example/film-two/",
+                           title="Film Two (2024)", clean_title="Film Two")
+        other["cast_names"] = "Aamir Khan"
+        fast_fetch.save_scraped_data(other)
+        no_cast = self.media("site_c", "https://site-c.example/film-three/",
+                             title="Film Three (2024)", clean_title="Film Three")
+        fast_fetch.save_scraped_data(no_cast)
+        with patch.object(viewer, "DB_PATH", self.db_path):
+            by_actor = viewer.api_v1_get_posts(query="Shah Rukh Khan", limit=10)
+            self.assertEqual(by_actor["total"], 1)
+            self.assertEqual(by_actor["results"][0]["clean_title"], "Film One")
+            self.assertFalse(by_actor["fuzzy"])
+            by_surname = viewer.api_v1_get_posts(query="Khan", limit=10)
+            self.assertEqual(by_surname["total"], 2)
+            # The detail carries the stored cast list; the list row never
+            # renders cast, so the list select does not fetch it.
+            detail = viewer.api_v1_get_post_detail(by_actor["results"][0]["id"])
+            self.assertEqual(detail["cast_names"], "Shah Rukh Khan, Kajol")
+
     def test_api_v1_detail_carries_runtime_from_the_work_row(self):
         post_id = fast_fetch.save_scraped_data(
             self.media("site_a", "https://site-a.example/example-film/", imdb_id="tt9999999")

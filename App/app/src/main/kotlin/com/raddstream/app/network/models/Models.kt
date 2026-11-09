@@ -174,6 +174,16 @@ data class PostDetail(
     val tmdbId: Int? = null,
     val genres: String? = null,
     val synopsis: String? = null,
+    /**
+     * `posts.cast_names` — the scraped cast list as one raw string
+     * ("Shah Rukh Khan, Kajol"), or null when the catalog has none for this
+     * title. Read it with [parseCastNames], never raw: scrapers join names
+     * with commas or with spaces, and some rows carry a synopsis fragment
+     * instead of names. Null means "no cast data", never "no cast" — the
+     * detail screen shows no cast section at all.
+     */
+    @SerializedName("cast_names")
+    val castNames: String? = null,
     /** `posts.is_animated` INTEGER 0/1 — metadata, not a restricted flag. */
     @SerializedName("is_animated")
     val isAnimated: Boolean? = null,

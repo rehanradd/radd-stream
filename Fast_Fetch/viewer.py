@@ -842,9 +842,9 @@ def fetch_database_payload(search_query: str = "", full: bool = False,
         sql = f"SELECT * FROM posts WHERE {adult_rule}"
         params = []
         if search_query:
-            sql += " AND (clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ?)"
+            sql += " AND (clean_title LIKE ? OR title LIKE ? OR slug LIKE ? OR industry LIKE ? OR country LIKE ? OR language LIKE ? OR cast_names LIKE ?)"
             p = f"%{search_query}%"
-            params = [p, p, p, p, p, p]
+            params = [p, p, p, p, p, p, p]
         # One row past the page decides `has_more` without a COUNT over the table;
         # a COUNT here was the other way this route could spend a minute on I/O.
         sql += " ORDER BY id DESC LIMIT ? OFFSET ?"
@@ -3065,9 +3065,14 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             where_clauses.append("p.id = ?")
             params.append(post_id)
         elif query:
-            where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
+            # The omnibox matches actors too: `cast_names` is the scraped
+            # cast list on the post, so "Shah Rukh Khan" finds his films the
+            # same way a title does. The fuzzy fallback below stays
+            # title-only — a mistyped actor name falls back to close titles,
+            # not to guessed names.
+            where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
             q_param = f"%{query}%"
-            params.extend([q_param, q_param, q_param])
+            params.extend([q_param, q_param, q_param, q_param])
         if content_type:
             # `type=anime` is the one filter value that is not a `content_type`: the
             # ledger stores animation as a flag on the post (`is_animated`, plus an
@@ -3194,14 +3199,14 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         if query and not work_ref and total == 0:
             # Exact search found nothing: one edit away is the only honest
             # second chance. The candidate ids only ever replace the LIKE
-            # clause (always index 1, always the first three params) — every
-            # other filter, the adult clause and the hides stay exactly as
-            # they were.
+            # clause (always index 1, always the first four params — title,
+            # clean title, slug, cast) — every other filter, the adult
+            # clause and the hides stay exactly as they were.
             fuzzy_ids = _fuzzy_post_ids(conn, query)
             if fuzzy_ids:
                 where_clauses[1] = (
                     "p.id IN (%s)" % ", ".join("?" for _ in fuzzy_ids))
-                params = fuzzy_ids + params[3:]
+                params = fuzzy_ids + params[4:]
                 where_sql = " AND ".join(where_clauses)
                 total = conn.execute(
                     f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",

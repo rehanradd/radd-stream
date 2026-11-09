@@ -1237,6 +1237,7 @@ def _init_db(db_path: Path | None = None) -> None:
             imdb_rating TEXT,
             genres TEXT,
             synopsis TEXT,
+            cast_names TEXT,
             is_18_plus INTEGER DEFAULT 0,
             is_animated INTEGER DEFAULT 0,
             lastmod TEXT,
@@ -1316,6 +1317,7 @@ def _init_db(db_path: Path | None = None) -> None:
             "imdb_rating": "TEXT",
             "genres": "TEXT",
             "synopsis": "TEXT",
+            "cast_names": "TEXT",
             "is_18_plus": "INTEGER DEFAULT 0",
             "is_animated": "INTEGER DEFAULT 0",
             "source_site": "TEXT DEFAULT 'vegamovies'",
@@ -5200,7 +5202,15 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
             if refusal:
                 journal_key_refusal(conn, post_id, refusal[0], canonical_key, refusal[1])
 
-            # Update existing post row
+            # Update existing post row.
+            #
+            # Cast is incoming-non-empty-wins: a re-scrape that carries cast
+            # replaces it (the same rule the 9xmovies/10xflix upserts use), and
+            # one that carries none never blanks the names an earlier page
+            # stored — NULLIF turns an empty string into NULL and COALESCE
+            # then keeps the stored value. The stored string keeps whatever
+            # was scraped (Zero Data Loss); the app's parser drops the junk
+            # chunks at display time.
             conn.execute(
                 f"""
                 UPDATE posts SET
@@ -5214,6 +5224,7 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                     imdb_rating = ?,
                     genres = ?,
                     synopsis = ?,
+                    cast_names = COALESCE(NULLIF(?, ''), cast_names),
                     tmdb_id = COALESCE(?, tmdb_id),
                     imdb_id = COALESCE(?, imdb_id),
                     industry = COALESCE(NULLIF(industry, ''), ?),
@@ -5236,6 +5247,7 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                     chosen_imdb,
                     chosen_genres,
                     chosen_synopsis,
+                    data.get("cast_names"),
                     tmdb_id,
                     imdb_id,
                     data.get("industry"),
@@ -5254,11 +5266,11 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                 INSERT INTO posts (
                     url, slug, title, clean_title, year, content_type, seasons,
                     poster_url, backdrop_urls, imdb_rating, genres, synopsis,
-                    tmdb_id, imdb_id,
+                    cast_names, tmdb_id, imdb_id,
                     is_18_plus, is_animated, source_site, industry, country, language,
                     canonical_key, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
                 RETURNING id;
                 """,
                 (
@@ -5274,6 +5286,7 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
                     data.get("imdb_rating"),
                     data.get("genres"),
                     data.get("synopsis"),
+                    data.get("cast_names"),
                     tmdb_id,
                     imdb_id,
                     data.get("is_18_plus", 0),

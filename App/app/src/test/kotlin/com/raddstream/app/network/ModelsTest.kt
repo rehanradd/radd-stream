@@ -182,6 +182,22 @@ class ModelsTest {
     }
 
     @Test
+    fun `detail cast names decode from the post row and default to null`() {
+        // The server publishes posts.cast_names on the detail only. A missing
+        // key decodes to null — no cast section, never an invented name.
+        val withCast = gson.fromJson(
+            """{"success":true,"data":{"id":304,"title":"Film","cast_names":"Shah Rukh Khan, Kajol"}}""",
+            PostDetailResponse::class.java,
+        ).data!!
+        assertEquals("Shah Rukh Khan, Kajol", withCast.castNames)
+        val withoutCast = gson.fromJson(
+            """{"success":true,"data":{"id":305,"title":"Film"}}""",
+            PostDetailResponse::class.java,
+        ).data!!
+        assertNull(withoutCast.castNames)
+    }
+
+    @Test
     fun `season artwork decodes into distinct season and episode entries`() {
         val json = """
             {

@@ -84,6 +84,7 @@ import kotlinx.coroutines.launch
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.WireText
+import com.raddstream.app.network.models.parseCastNames
 import com.raddstream.app.ui.components.AudioBadge
 import com.raddstream.app.ui.components.CapabilityChip
 import com.raddstream.app.ui.components.CamBadge
@@ -124,6 +125,8 @@ fun DetailScreen(
     onOpenProviderPage: (streamId: String, title: String) -> Unit = { _, _ -> },
     onOpenDownloads: () -> Unit = {},
     onOpenVipUpgrade: () -> Unit = {},
+    /** An actor chip in the cast row: open that actor's titles in Search. */
+    onActorClick: (String) -> Unit = {},
     /** Session 121 (P-26): the hero's Watch Now — start the best print once the title loads. */
     autoplay: Boolean = false,
     viewModel: DetailViewModel = hiltViewModel(),
@@ -547,6 +550,15 @@ private fun DetailContent(
             item { ExpandableSynopsis(text = synopsis) }
         }
 
+        // Cast, from the catalog's own scraped list — only what the server
+        // actually stored, parsed into names (see parseCastNames). A title
+        // with no cast data shows no section at all: no fake names, no
+        // empty "Cast" header. A tap searches that actor's titles.
+        val cast = parseCastNames(post.castNames)
+        if (cast.isNotEmpty()) {
+            item { CastSection(cast = cast, onActorClick = onActorClick) }
+        }
+
         // Print-first summary line (owner brief: "4 official prints available").
         item {
             PrintSummary(officialPrintCount = officialPrintCount, camPrintCount = camPrintCount)
@@ -846,6 +858,46 @@ private fun ExpandableSynopsis(text: String) {
             TextButton(onClick = { expanded = !expanded }) {
                 Text(if (expanded) "Show less" else "Read more")
             }
+        }
+    }
+}
+
+/**
+ * The cast row: one tappable chip per actor, in the order the catalog
+ * lists them. Six chips, then a plain count of the rest: the row is a
+ * doorway to the actor's titles, not a full cast list, and there is no
+ * cast screen to open. A tap searches the actor in the omnibox, which
+ * matches `cast_names` server-side.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CastSection(cast: List<String>, onActorClick: (String) -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = "Cast",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            cast.take(6).forEach { actor ->
+                FilterChip(
+                    colors = raddFilterChipColors(),
+                    selected = false,
+                    onClick = { onActorClick(actor) },
+                    label = { Text(actor) },
+                )
+            }
+        }
+        if (cast.size > 6) {
+            Text(
+                text = "and ${cast.size - 6} more",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }

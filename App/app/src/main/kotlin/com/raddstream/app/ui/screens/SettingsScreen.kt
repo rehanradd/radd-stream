@@ -531,29 +531,26 @@ fun SettingsScreen(
             }
 
             // ── Disclaimer ───────────────────────────────────────────────────
+            // The card shows the effective disclaimer: the panel's text when
+            // the operator wrote one, else the shipped default — so there is
+            // always one to read, and "No disclaimer published yet" can no
+            // longer happen.
             SettingsCard(title = "Disclaimer", icon = Icons.Default.Info) {
-                if (state.disclaimer.text.isBlank()) {
-                    Text(
-                        "No disclaimer published yet.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    Text(
-                        "Version ${state.disclaimer.version} — what this app is, and what it is not.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedButton(
-                        onClick = viewModel::openDisclaimer,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text("Read the disclaimer")
-                    }
+                val disclaimer = state.disclaimer.effective()
+                Text(
+                    "Version ${disclaimer.version} — what this app is, and what it is not.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedButton(
+                    onClick = viewModel::openDisclaimer,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Read the disclaimer")
                 }
                 if (state.showDisclaimer) {
                     DisclaimerDialog(
-                        disclaimer = state.disclaimer,
+                        disclaimer = disclaimer,
                         confirmLabel = "Close",
                         onConfirm = viewModel::closeDisclaimer,
                         onDismissRequest = viewModel::closeDisclaimer,

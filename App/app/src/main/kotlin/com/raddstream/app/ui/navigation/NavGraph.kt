@@ -44,8 +44,17 @@ import com.raddstream.app.ui.screens.VipUpgradeScreen
 
 private data class BottomNavItem(
     val label: String,
+    /** The destination's route, used to tell whether the tab is selected. */
     val route: String,
     val icon: ImageVector,
+    /**
+     * The address the tab navigates to. Usually the same as [route] — but a
+     * destination with an optional argument (Search's `query`) must be
+     * navigated to by its plain address, never by the template string:
+     * navigating to "search?query={query}" would search for the literal
+     * text "{query}".
+     */
+    val navigateRoute: String = route,
 )
 
 /**
@@ -104,7 +113,7 @@ fun RaddStreamNavGraph(
     val bottomNavItems = PanelTabs.resolve(tabs, features.search).map { id ->
         when (id) {
             "live_tv" -> BottomNavItem("Live TV", Screen.LiveTv.route, ImageVector.vectorResource(R.drawable.ic_tab_live_tv))
-            "search" -> BottomNavItem("Search", Screen.Search.route, ImageVector.vectorResource(R.drawable.ic_tab_search))
+            "search" -> BottomNavItem("Search", Screen.Search.route, ImageVector.vectorResource(R.drawable.ic_tab_search), navigateRoute = Screen.Search.PLAIN_ROUTE)
             "my_list" -> BottomNavItem("My List", Screen.MyList.route, ImageVector.vectorResource(R.drawable.ic_tab_my_list))
             "settings" -> BottomNavItem("Settings", Screen.Settings.route, ImageVector.vectorResource(R.drawable.ic_tab_settings))
             else -> BottomNavItem("Home", Screen.Home.route, ImageVector.vectorResource(R.drawable.ic_tab_home))
@@ -135,7 +144,7 @@ fun RaddStreamNavGraph(
                             ),
                             onClick = {
                                 if (currentRoute != item.route) {
-                                    navController.navigate(item.route) {
+                                    navController.navigate(item.navigateRoute) {
                                         popUpTo(Screen.Home.route) {
                                             saveState = true
                                         }
@@ -189,7 +198,7 @@ fun RaddStreamNavGraph(
 
             composable(Screen.Home.route) {
                 HomeScreen(
-                    onSearchClick = { navController.navigate(Screen.Search.route) },
+                    onSearchClick = { navController.navigate(Screen.Search.PLAIN_ROUTE) },
                     searchEnabled = features.search,
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     // Session 121 (P-26): the hero's Watch Now opens the title and
@@ -225,8 +234,20 @@ fun RaddStreamNavGraph(
                 )
             }
 
-            composable(Screen.Search.route) {
+            composable(
+                route = Screen.Search.route,
+                arguments = listOf(
+                    // An actor tap lands here with the name already filled
+                    // in; the plain tab navigates with no argument, so the
+                    // default keeps every existing search link working.
+                    navArgument(Screen.Search.ARG_QUERY) {
+                        type = NavType.StringType
+                        defaultValue = ""
+                    },
+                ),
+            ) { backStackEntry ->
                 SearchScreen(
+                    initialQuery = backStackEntry.arguments?.getString(Screen.Search.ARG_QUERY)?.takeIf { it.isNotBlank() },
                     onPostClick = { postId -> navController.navigate(Screen.Detail.createRoute(postId)) },
                     onPlayDirectUrl = { url, title ->
                         // The address is staged, never routed: the player
@@ -334,6 +355,9 @@ fun RaddStreamNavGraph(
                     },
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
                     onOpenVipUpgrade = { navController.navigate(Screen.VipUpgrade.route) },
+                    onActorClick = { actor ->
+                        navController.navigate(Screen.Search.createRoute(actor))
+                    },
                 )
             }
 

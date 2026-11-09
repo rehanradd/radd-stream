@@ -88,10 +88,50 @@ class VipRemoteConfigTest {
     }
 
     @Test
+    fun `an empty panel disclaimer resolves to the shipped default, verbatim`() {
+        val effective = PanelDisclaimer().effective()
+
+        // The default text is the owner's ordered wording: this pins it so
+        // a later edit cannot quietly rewrite the terms.
+        assertEquals(DEFAULT_DISCLAIMER_TEXT, effective.text)
+        assertEquals(DEFAULT_DISCLAIMER_VERSION, effective.version)
+        assertEquals(DEFAULT_DISCLAIMER_EMAIL, effective.email)
+        assertTrue(effective.text.contains("radddao1@gmail.com"))
+        assertTrue(effective.text.contains("48 hours"))
+    }
+
+    @Test
+    fun `a panel disclaimer wins over the default`() {
+        val effective = PanelDisclaimer(
+            text = "Operator words.",
+            version = 3,
+            email = "owner@example.com",
+        ).effective()
+
+        assertEquals("Operator words.", effective.text)
+        assertEquals(3, effective.version)
+        assertEquals("owner@example.com", effective.email)
+    }
+
+    @Test
+    fun `decodes the published apk size in bytes`() {
+        val config = gson.fromJson(
+            """
+            {"success": true, "apk_update_url": "http://92.4.95.252/downloads/app.apk",
+             "apk_update_size_bytes": 24228798}
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(24228798L, config.apkUpdateSizeBytes)
+    }
+
+    @Test
     fun `no published build decodes to an empty string, not null`() {
         val config = gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
 
         assertEquals("", config.apkUpdateUrl)
+        assertEquals(0L, config.apkUpdateSizeBytes)
         assertFalse(config.maintenanceMode)
     }
 

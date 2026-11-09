@@ -48,14 +48,14 @@ import catalog_v2  # noqa: E402
 #: the paged read). Kept as data so the plan is asserted, not remembered.
 TOTAL_SQL = ("SELECT COUNT(*) FROM posts p"
              " WHERE COALESCE(p.is_18_plus,0)=0"
-             " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)")
+             " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
 
 #: Step 1 of the default (`newest`, Session 115) path: the page's ids from
 #: `posts` alone, ordered by the clamped year. The clamp is transcribed from
 #: `viewer._NEWEST_YEAR_SQL`.
 NEWEST_IDS_SQL = ("SELECT p.id FROM posts p"
                   " WHERE COALESCE(p.is_18_plus,0)=0"
-                  " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)"
+                  " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)"
                   " ORDER BY CASE WHEN p.year BETWEEN 1900"
                   " AND CAST(strftime('%Y', 'now') AS INTEGER) + 1"
                   " THEN p.year ELSE 0 END DESC, p.id DESC LIMIT ? OFFSET ?")
@@ -73,7 +73,7 @@ PAGED_NEWEST_SQL = """
     LEFT JOIN releases r ON r.post_id = p.id
     LEFT JOIN download_sources s ON s.release_id = r.id
     WHERE COALESCE(p.is_18_plus,0)=0
-      AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)
+      AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)
       AND p.id IN (?,?,?)
     GROUP BY p.id
 """
@@ -88,7 +88,7 @@ PAGED_SQL = """
     LEFT JOIN releases r ON r.post_id = p.id
     LEFT JOIN download_sources s ON s.release_id = r.id
     WHERE COALESCE(p.is_18_plus,0)=0
-      AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?)
+      AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)
     GROUP BY p.id
     ORDER BY {order}
     LIMIT ? OFFSET ?
@@ -126,7 +126,7 @@ class _Fixture(unittest.TestCase):
                 year INTEGER, content_type TEXT, seasons INTEGER, poster_url TEXT,
                 backdrop_urls TEXT, imdb_rating TEXT, imdb_id TEXT, tmdb_id TEXT,
                 genres TEXT, is_animated INTEGER, industry TEXT, country TEXT,
-                language TEXT, is_18_plus INTEGER DEFAULT 0);
+                language TEXT, cast_names TEXT, is_18_plus INTEGER DEFAULT 0);
             CREATE TABLE releases (
                 id INTEGER PRIMARY KEY, post_id INTEGER, release_title TEXT,
                 quality TEXT, codec TEXT, languages TEXT, source_site TEXT,
@@ -181,11 +181,11 @@ class TestCostIsTheScan(_Fixture):
         self.seed("Inception")
         self.seed("Inception Two")
         self.seed("Inception Three")
-        total_plan = self.plan(TOTAL_SQL, ["%inception%"] * 3)
-        ids_plan = self.plan(NEWEST_IDS_SQL, ["%inception%"] * 3 + [20, 0])
+        total_plan = self.plan(TOTAL_SQL, ["%inception%"] * 4)
+        ids_plan = self.plan(NEWEST_IDS_SQL, ["%inception%"] * 4 + [20, 0])
         # EXPLAIN never executes, so the ids need not exist — three literals
         # stand in for the page's id list.
-        paged_plan = self.plan(PAGED_NEWEST_SQL, ["%inception%"] * 3 + [1, 2, 3])
+        paged_plan = self.plan(PAGED_NEWEST_SQL, ["%inception%"] * 4 + [1, 2, 3])
         self.assertIn("SCAN p", total_plan, total_plan)
         self.assertIn("SCAN p", ids_plan, ids_plan)
         self.assertIn("USE TEMP B-TREE FOR ORDER BY", ids_plan, ids_plan)
@@ -200,9 +200,9 @@ class TestCostIsTheScan(_Fixture):
         index to add here, and an index cannot serve a leading-wildcard `LIKE`.
         """
         self.seed("Inception")
-        total_plan = self.plan(TOTAL_SQL, ["%inception%"] * 3)
+        total_plan = self.plan(TOTAL_SQL, ["%inception%"] * 4)
         paged_plan = self.plan(PAGED_SQL.format(order=DEFAULT_ORDER),
-                               ["%inception%"] * 3 + [20, 0])
+                               ["%inception%"] * 4 + [20, 0])
         self.assertIn("SCAN p", total_plan, total_plan)
         self.assertIn("SCAN p", paged_plan, paged_plan)
         for plan in (total_plan, paged_plan):
@@ -219,7 +219,7 @@ class TestCostIsTheScan(_Fixture):
         """
         self.seed("Inception")
         plan = self.plan(PAGED_SQL.format(order=DEFAULT_ORDER),
-                         ["%inception%"] * 3 + [20, 0])
+                         ["%inception%"] * 4 + [20, 0])
         self.assertIn("SEARCH r USING COVERING INDEX idx_releases_post", plan, plan)
         self.assertIn("SEARCH s USING COVERING INDEX idx_sources_rel", plan, plan)
 
@@ -229,13 +229,13 @@ class TestCostIsTheScan(_Fixture):
         is imposed in Python); trending still pays the temp B-tree."""
         self.seed("Inception")
         plain = self.plan(PAGED_SQL.format(order=DEFAULT_ORDER),
-                          ["%inception%"] * 3 + [20, 0])
+                          ["%inception%"] * 4 + [20, 0])
         self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", plain, plain)
         newest = self.plan(PAGED_NEWEST_SQL,
-                           ["%inception%"] * 3 + [1, 1, 1])
+                           ["%inception%"] * 4 + [1, 1, 1])
         self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", newest, newest)
         trending = self.plan(PAGED_SQL.format(order=TRENDING_ORDER),
-                             ["%inception%"] * 3 + [20, 0])
+                             ["%inception%"] * 4 + [20, 0])
         self.assertIn("USE TEMP B-TREE FOR ORDER BY", trending, trending)
 
 
@@ -269,10 +269,10 @@ class TestCorrectness(_Fixture):
         """
         self.seed("Dawn")          # contains the letter, is not equal to it
         rows = self.conn.execute(PAGED_SQL.format(order=DEFAULT_ORDER),
-                                 ["%a%"] * 3 + [20, 0]).fetchall()
+                                 ["%a%"] * 4 + [20, 0]).fetchall()
         self.assertEqual([r["clean_title"] for r in rows], ["Dawn"],
                          "a single letter should not match this fixture")
-        self.assertEqual(len(self.conn.execute(TOTAL_SQL, ["%a%"] * 3).fetchall()), 1)
+        self.assertEqual(len(self.conn.execute(TOTAL_SQL, ["%a%"] * 4).fetchall()), 1)
 
     def test_the_pattern_is_not_escaped_so_two_keystrokes_can_name_every_row(self):
         """`f"%{query}%"` in `viewer.py:2546` interpolates LIKE metacharacters.

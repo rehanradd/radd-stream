@@ -4,7 +4,11 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.text.format.Formatter
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.ActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -42,8 +46,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -67,6 +75,7 @@ import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SeeAllButton
 import com.raddstream.app.ui.components.SkeletonBox
 import com.raddstream.app.ui.theme.RaddStreamMark
+import com.raddstream.app.update.InAppUpdate
 import com.raddstream.app.viewmodel.HomeSection
 import com.raddstream.app.viewmodel.HomeViewModel
 import com.raddstream.app.viewmodel.visibleHomeRows
@@ -100,6 +109,23 @@ fun HomeScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    // Play Core in-app updates: the launcher the update flow returns
+    // through. `pendingFlexibleUpdateUrl` holds the URL of a flexible flow
+    // already running — if Play reports it failed, the download page is the
+    // way back, and the dialog was already dismissed when the flow started,
+    // so the URL has to live here, not in state. A cancelled immediate flow
+    // needs nothing: its dialog was never dismissed, so it is still there.
+    var pendingFlexibleUpdateUrl by remember { mutableStateOf<String?>(null) }
+    val updateLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult(),
+    ) { result ->
+        val url = pendingFlexibleUpdateUrl
+        pendingFlexibleUpdateUrl = null
+        if (url != null && result.resultCode == ActivityResult.RESULT_IN_APP_UPDATE_FAILED) {
+            openDownload(context, url)
+        }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -280,11 +306,40 @@ fun HomeScreen(
         }
 
         state.updateNotice?.let { update ->
+            // A required update the viewer walked away from mid-flow
+            // restarts itself instead of asking for another tap.
+            LaunchedEffect(update.url, update.required) {
+                if (update.required) {
+                    InAppUpdate.resumeImmediateUpdateIfNeeded(context, updateLauncher) { }
+                }
+            }
             AppUpdateDialog(
                 required = update.required,
-                // Only close the dialog once the download actually opened, so a phone
-                // with no browser keeps the one-tap path instead of losing it silently.
-                onUpdateNow = { if (openDownload(context, update.url)) viewModel.dismissUpdate() },
+                sizeBytes = update.sizeBytes,
+                // Play Core first, download page when Play has nothing:
+                // a sideloaded build always takes the download page, and
+                // that is the live path until there is a Play listing. The
+                // dialog dismisses only once the viewer is on their way —
+                // a flexible flow dismisses when Play takes over (the
+                // download runs in the background), a download dismisses
+                // when the page opens, and an immediate flow never
+                // dismisses: if the viewer cancels it, the dialog must
+                // still be there, because a required update has no "Later".
+                onUpdateNow = {
+                    InAppUpdate.startUpdate(
+                        context = context,
+                        launcher = updateLauncher,
+                        required = update.required,
+                        downloadUrl = update.url,
+                        onPlayFlowStarted = {
+                            if (!update.required) {
+                                pendingFlexibleUpdateUrl = update.url
+                                viewModel.dismissUpdate()
+                            }
+                        },
+                        onDownloadOpened = { viewModel.dismissUpdate() },
+                    )
+                },
                 onDismiss = viewModel::dismissUpdate,
             )
         }
@@ -389,6 +444,7 @@ private fun AppUpdateDialog(
     required: Boolean,
     onUpdateNow: () -> Unit,
     onDismiss: () -> Unit,
+    sizeBytes: Long = 0,
 ) {
     AlertDialog(
         onDismissRequest = if (required) ({}) else onDismiss,
@@ -403,17 +459,30 @@ private fun AppUpdateDialog(
             )
         },
         text = {
-            Text(
-                Brand.copy(
-                    if (required) "update_required_message" else "update_message",
-                    if (required) {
-                        "${Brand.name} needs an update to keep working. Download the new build to continue."
-                    } else {
-                        "${Brand.name} has published a newer APK. Download it to keep the catalog and player current."
-                    },
-                    "name" to Brand.name,
-                ),
-            )
+            Column {
+                Text(
+                    Brand.copy(
+                        if (required) "update_required_message" else "update_message",
+                        if (required) {
+                            "${Brand.name} needs an update to keep working. Download the new build to continue."
+                        } else {
+                            "${Brand.name} has published a newer APK. Download it to keep the catalog and player current."
+                        },
+                        "name" to Brand.name,
+                    ),
+                )
+                // A viewer on mobile data wants to know what the tap costs
+                // before tapping it. No size published, no line — an absent
+                // number is not a zero-byte download.
+                if (sizeBytes > 0) {
+                    Text(
+                        text = "Download size: ${Formatter.formatShortFileSize(LocalContext.current, sizeBytes)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            }
         },
         confirmButton = {
             Button(onClick = onUpdateNow) {

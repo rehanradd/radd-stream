@@ -95,14 +95,18 @@ class DirectVideoUrlTest {
     }
 
     @Test
-    fun pageUrlWithoutAVideoExtensionIsNotAUrl() {
+    fun pageUrlWithoutAVideoExtensionIsAPageLink() {
+        // Session 122: a page address is no longer "not a URL" — the
+        // omnibox offers it to the system browser instead of searching it
+        // as a title.
+        val first = classifyPastedText("https://example.com/watch/movie/123")
+        assertTrue(first is PastedText.PageLink)
         assertEquals(
-            PastedText.NotAUrl,
-            classifyPastedText("https://example.com/watch/movie/123"),
+            "https://example.com/watch/movie/123",
+            (first as PastedText.PageLink).url,
         )
-        assertEquals(
-            PastedText.NotAUrl,
-            classifyPastedText("https://example.com/movies/hero.html"),
+        assertTrue(
+            classifyPastedText("https://example.com/movies/hero.html") is PastedText.PageLink,
         )
     }
 
@@ -113,12 +117,13 @@ class DirectVideoUrlTest {
     }
 
     @Test
-    fun urlWithNoFileNameIsNotAUrl() {
-        assertEquals(
-            PastedText.NotAUrl,
-            classifyPastedText("https://example.com/movies/hero.mp4/"),
+    fun urlWithNoFileNameIsAPageLink() {
+        // No file name means no video to play — but the address is still a
+        // link, so the browser offer applies here too.
+        assertTrue(
+            classifyPastedText("https://example.com/movies/hero.mp4/") is PastedText.PageLink,
         )
-        assertEquals(PastedText.NotAUrl, classifyPastedText("https://example.com"))
+        assertTrue(classifyPastedText("https://example.com") is PastedText.PageLink)
     }
 
     @Test

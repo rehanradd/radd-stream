@@ -48,6 +48,24 @@ data class VipRemoteConfig(
     @SerializedName("apk_update_version_code")
     val apkUpdateVersionCode: Int = 0,
     /**
+     * The published APK's size in bytes, or 0 when the operator published
+     * none. The update dialog shows it ("Download size: 24 MB") so a viewer
+     * on mobile data knows what the tap costs; a truncated fetch is not the
+     * app's to detect, because the browser downloads the file, not this app.
+     *
+     * The server also publishes `apk_update_sha256`, which this model
+     * deliberately does NOT decode: the app never holds the APK bytes, so a
+     * digest it cannot check is a promise it cannot keep, and displaying a
+     * hash the viewer cannot use would be machine code on screen. The
+     * backend's UPD-1b rule ("no digest, no banner") is therefore NOT
+     * enforced here — enforcing it would silently kill the force-update
+     * card the owner ordered whenever the operator has not set a digest.
+     * If the app ever downloads the APK itself, decode the digest then and
+     * verify the bytes before offering the install.
+     */
+    @SerializedName("apk_update_size_bytes")
+    val apkUpdateSizeBytes: Long = 0,
+    /**
      * The lowest app version code the operator still supports, or 0 for "no
      * minimum". A build below it is told the update is required, not optional.
      */
@@ -113,13 +131,41 @@ data class VipRemoteConfig(
     /**
      * The operator's disclaimer, published by the admin panel and served on
      * this same body. Empty text from an older deployment — or from a panel
-     * where the operator has written nothing yet — means "no disclaimer
-     * published", and the app shows nothing: the operator writes the words,
-     * the app never invents them. `version` is what the app remembers having
-     * shown, so a new version is shown once more.
+     * where the operator has written nothing yet — no longer means "no
+     * disclaimer published": [PanelDisclaimer.effective] falls back to the
+     * shipped default text, so the app always has one to show. `version` is
+     * what the app remembers having shown, so a new version is shown once more.
      */
     val disclaimer: PanelDisclaimer = PanelDisclaimer(),
 )
+
+/**
+ * The default disclaimer text, written under the owner's order (Session 122).
+ * Verbatim — do not rewrite or shorten it. The admin panel's text overrides
+ * it when set; when the panel field is empty, the app shows this. It is the
+ * legal shield in plain words: the app owns, hosts, uploads and stores
+ * nothing, only opens links that are already public, and names the takedown
+ * address and the 48-hour hide-while-checking promise.
+ */
+val DEFAULT_DISCLAIMER_TEXT = """
+    Radd Stream is a media browser and video player. It does not own, host, upload, or store any movie, show, video, or song.
+
+    The app only finds and opens links that are already public on the internet, the same way a web browser opens a web page. All titles, posters, and videos belong to their owners and the sites that publish them.
+
+    If you own content that appears here and want it removed, email radddao1@gmail.com. We will hide it within 48 hours while we check your claim, and remove it permanently if the claim is right. False claims will be refused and the content restored.
+
+    Some content is made for adults only. It is kept behind an adult lock and is never shown on public lists.
+
+    Links on the internet can change or stop working at any time. We do not promise that any link will play, and we are not responsible for what other websites show.
+
+    By using Radd Stream you agree to this. If you do not agree, please do not use the app.
+""".trimIndent()
+
+/** The version the default disclaimer counts as: accepting it records this. */
+const val DEFAULT_DISCLAIMER_VERSION = 1
+
+/** The takedown contact shown with the default disclaimer. */
+const val DEFAULT_DISCLAIMER_EMAIL = "radddao1@gmail.com"
 
 /**
  * The operator's disclaimer: the text, the version the app compares
@@ -132,7 +178,28 @@ data class PanelDisclaimer(
     val text: String = "",
     val version: Int = 0,
     val email: String = "",
-)
+) {
+    /**
+     * The disclaimer the viewer actually sees: the panel's own text when
+     * the operator wrote one, else the shipped default. The stored value
+     * stays the panel value; this resolves at read time, so a panel edit
+     * takes effect without a re-install and a cleared panel field falls
+     * back to the default instead of leaving the app with no disclaimer
+     * at all. The text is therefore never blank: a caller that checks
+     * `text.isBlank()` to decide whether to show anything is checking a
+     * condition that can no longer happen.
+     */
+    fun effective(): PanelDisclaimer =
+        if (text.isNotBlank()) {
+            this
+        } else {
+            PanelDisclaimer(
+                text = DEFAULT_DISCLAIMER_TEXT,
+                version = DEFAULT_DISCLAIMER_VERSION,
+                email = email.ifBlank { DEFAULT_DISCLAIMER_EMAIL },
+            )
+        }
+}
 
 /**
  * The operator's theme, as the panel stores it in `tuning_settings`.

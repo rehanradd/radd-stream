@@ -469,6 +469,14 @@ dependencies {
     // ── Core ──────────────────────────────────────────────────────────────────
     implementation(libs.core.ktx)
 
+    // ── Play Core in-app updates ──────────────────────────────────────────
+    // The force-update card tries Play first (flexible for a soft update,
+    // immediate for a forced one) and falls back to the download page when
+    // Play has no update for this install — which is always, for a build
+    // sideloaded from the download page rather than installed from Play.
+    implementation(libs.play.app.update)
+    implementation(libs.play.app.update.ktx)
+
     // ── Tests ─────────────────────────────────────────────────────────────────
     testImplementation(libs.junit)
     testImplementation(composeBom)

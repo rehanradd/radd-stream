@@ -248,7 +248,9 @@ VIEWS: dict[str, frozenset[str]] = {
     # `option_groups` is the quality switch the player and the download card
     # read: one winner per band, each holding a projected link. It is built from
     # `project()`ed links only, and `test_redact` re-checks the finished shape.
-    "post_detail": frozenset(_IDENTITY | _TITLE | {"releases", "option_groups"}),
+    # `cast_names` is detail-only: the list row never renders cast, so the
+    # list select does not fetch it and the list response does not carry it.
+    "post_detail": frozenset(_IDENTITY | _TITLE | {"releases", "option_groups", "cast_names"}),
     "release": frozenset(_RELEASE | {"sources", "links", "print_label",
                                      "band", "quality_label"}),
     "link": frozenset(_LINK),

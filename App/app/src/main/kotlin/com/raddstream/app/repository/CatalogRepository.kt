@@ -65,14 +65,17 @@ class CatalogRepository @Inject constructor(
     /**
      * GET /api/v2/suggest while typing. Never throws: a blocked route (the
      * nginx allow-list does not cover /api/v2/suggest yet), an old server
-     * or a dead socket all answer the same way — no chips — because a
-     * type-ahead that fails must never fail the search it was helping.
+     * or a dead socket all answer the same way — null, which the caller
+     * reads as "suggestions unavailable", distinct from an empty list (the
+     * server answered and has no matches). A type-ahead that fails must
+     * never fail the search it was helping, but the screen must not pretend
+     * the silence means "no titles match".
      */
-    suspend fun suggest(query: String): List<SuggestItem> {
+    suspend fun suggest(query: String): List<SuggestItem>? {
         if (query.trim().length < 2) return emptyList()
         return runCatching {
             apiProvider.current().suggest(query.trim(), limit = 5).items
-        }.getOrNull() ?: emptyList()
+        }.getOrNull()
     }
 
     suspend fun getPostDetail(postId: Int): PostDetail? {

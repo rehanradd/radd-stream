@@ -29,7 +29,16 @@ sealed class Screen(val route: String) {
     object Setup : Screen("setup")
     object Region : Screen("region")
     object Home : Screen("home")
-    object Search : Screen("search")
+    object Search : Screen("search?query={query}") {
+        const val ARG_QUERY = "query"
+
+        /** The tab's plain address — the bottom bar and Home navigate here, with no query. */
+        const val PLAIN_ROUTE = "search"
+
+        /** A search opened with a query already filled in (an actor tap on a detail card). */
+        fun createRoute(query: String? = null): String =
+            if (query.isNullOrBlank()) PLAIN_ROUTE else "search?query=${encodeRouteArg(query)}"
+    }
     object LiveTv : Screen("live_tv")
     object MyList : Screen("my_list")
     object Settings : Screen("settings")

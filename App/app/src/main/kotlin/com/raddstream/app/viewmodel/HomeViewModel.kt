@@ -134,11 +134,14 @@ data class HomeUiState(
  * optional, and the dialog offers no "Later".
  *
  * @param required true when this build is below the operator's minimum version.
+ * @param sizeBytes the published APK's size in bytes, 0 when unpublished;
+ * the dialog shows it so a viewer on mobile data knows what the tap costs.
  */
 data class AppUpdate(
     val url: String,
     val publishedAt: Long,
     val required: Boolean = false,
+    val sizeBytes: Long = 0,
 ) {
     companion object {
         /** Null unless the operator actually published a usable download link. */
@@ -162,6 +165,7 @@ data class AppUpdate(
                 url = url,
                 publishedAt = config?.updatedAt ?: 0L,
                 required = required,
+                sizeBytes = config?.apkUpdateSizeBytes ?: 0,
             )
         }
     }

@@ -484,6 +484,15 @@ def _refused(error: Exception, path: str) -> tuple:
         return _problem(getattr(error, "code", "invalid_params"),
                         int(getattr(error, "status", 400) or 400),
                         getattr(error, "detail", ""), path, retry_after=retry)
+    if isinstance(error, engagement.VelocityLimitReached):
+        # A farming refusal is a rate limit, not a server failure: a 500
+        # would read as "try again" to a client that retries errors, which
+        # is exactly what a farming script wants. 429 with Retry-After
+        # says "stop for ten minutes" in a shape the client already knows
+        # (`rate_limited` is the closed code list's own 429).
+        return _problem("rate_limited", 429,
+                        "too many coin grants in a short time", path,
+                        retry_after=int(getattr(error, "retry_after", 0) or 0))
     return _problem("internal", 500, "the account service failed", path)
 
 

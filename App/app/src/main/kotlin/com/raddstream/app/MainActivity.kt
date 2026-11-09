@@ -3,6 +3,7 @@ package com.raddstream.app
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -40,6 +41,7 @@ import com.raddstream.app.ui.navigation.LocalVideoOpen
 import com.raddstream.app.ui.navigation.Screen
 import com.raddstream.app.ui.navigation.RaddStreamNavGraph
 import com.raddstream.app.ui.navigation.StartDestination
+import com.raddstream.app.update.InAppUpdate
 import com.raddstream.app.ui.navigation.resolveStartDestination
 import com.raddstream.app.ui.screens.AnalyticsConsentDialog
 import com.raddstream.app.ui.screens.DisclaimerDialog
@@ -171,17 +173,23 @@ class MainActivity : ComponentActivity() {
             val autoplayPreviews by autoplayPreviewsPreference.collectAsState(initial = true)
 
             // The operator's disclaimer, mirrored into DataStore by RemoteConfigWatcher,
-            // and the version this install has already accepted. Seeded empty / -1 so
-            // a cold start shows nothing until a real body arrives; an empty text
-            // means "nothing published" and the dialog never opens on it.
+            // and the version this install has already accepted. The stored value is
+            // the panel value; `effective()` resolves the shipped default when the
+            // panel has published nothing, so the text is never blank — a cold
+            // start shows the default once, exactly as a first run should.
+            // `disclaimerSeenVersion` starts null and is filled by the collect
+            // below, the same known-flag pattern the analytics answer uses:
+            // until the stored version lands, nothing is shown, so a viewer
+            // who already accepted never sees the dialog flash for one frame.
             val disclaimerPreference: Flow<PanelDisclaimer> = remember(serverSettingsRepository) {
                 serverSettingsRepository.disclaimer.catch { emit(PanelDisclaimer()) }
             }
             val disclaimer by disclaimerPreference.collectAsState(initial = PanelDisclaimer())
-            val disclaimerSeenPreference: Flow<Int> = remember(serverSettingsRepository) {
-                serverSettingsRepository.disclaimerSeenVersion.catch { emit(-1) }
+            val effectiveDisclaimer = disclaimer.effective()
+            var disclaimerSeenVersion by remember { mutableStateOf<Int?>(null) }
+            LaunchedEffect(Unit) {
+                serverSettingsRepository.disclaimerSeenVersion.collect { disclaimerSeenVersion = it }
             }
-            val disclaimerSeenVersion by disclaimerSeenPreference.collectAsState(initial = -1)
             val activityScope = rememberCoroutineScope()
 
             // Tracking A asks once, the first time the app runs after this
@@ -306,17 +314,28 @@ class MainActivity : ComponentActivity() {
                     // notice above: it is the one thing the viewer must read
                     // before watching, once per published version. It cannot
                     // be dismissed without tapping "I understand" — a
-                    // disclaimer you can swipe away unread is not one.
-                    if (disclaimer.text.isNotBlank() && disclaimerSeenVersion != disclaimer.version) {
+                    // disclaimer you can swipe away unread is not one. The
+                    // one other way out is Decline, which says plainly why
+                    // and closes the app: agreeing is the price of using it.
+                    if (disclaimerSeenVersion != null && disclaimerSeenVersion != effectiveDisclaimer.version) {
                         DisclaimerDialog(
-                            disclaimer = disclaimer,
+                            disclaimer = effectiveDisclaimer,
                             confirmLabel = "I understand",
                             onConfirm = {
                                 activityScope.launch {
-                                    serverSettingsRepository.acceptDisclaimer(disclaimer.version)
+                                    serverSettingsRepository.acceptDisclaimer(effectiveDisclaimer.version)
                                 }
                             },
                             onDismissRequest = {},
+                            dismissLabel = "Decline",
+                            onDecline = {
+                                Toast.makeText(
+                                    this@MainActivity,
+                                    "You need to accept the disclaimer to use Radd Stream.",
+                                    Toast.LENGTH_LONG,
+                                ).show()
+                                finish()
+                            },
                         )
                     }
                     // Tracking A: the one question before anything is
@@ -333,7 +352,14 @@ class MainActivity : ComponentActivity() {
                     // viewer answers it on the next launch instead. (The branded
                     // loading screen from Session 120 already covers the wait
                     // before any route exists.)
-                    if (analyticsConsentKnown && analyticsConsent == null && destination == Screen.Home.route) {
+                    // Session 122: it also waits for the disclaimer to be
+                    // settled — the two dialogs used to stack on a first
+                    // install, the analytics question over the terms. The
+                    // disclaimer is settled when the stored version equals
+                    // the effective one; a null stored version (not yet
+                    // read) is not settled.
+                    if (analyticsConsentKnown && analyticsConsent == null && destination == Screen.Home.route &&
+                        disclaimerSeenVersion == effectiveDisclaimer.version) {
                         AnalyticsConsentDialog(
                             onAccept = {
                                 activityScope.launch {
@@ -352,6 +378,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        // The flexible-update listener lives in InAppUpdate; a leaked Play
+        // listener survives the activity, so it is unregistered here.
+        InAppUpdate.onDestroy()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {

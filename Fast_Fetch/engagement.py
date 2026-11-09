@@ -124,6 +124,19 @@ COINS_PER_REWARDED_AD = 5
 #: A viewer cannot farm unlimited coins from ads: cap rewarded grants per day-bucket.
 REWARDED_DAILY_CAP = 10
 
+#: The velocity guard: how many credit grants one account may take in a
+#: rolling window before the funnel refuses. Normal earning is slow — a
+#: rewarded ad, a finished title, a share, a streak day — so twenty grants
+#: in ten minutes is already far above any real viewing session (the
+#: existing tests pin eleven: ten ads plus a streak grant at one timestamp),
+#: and a script hammering the earn routes trips it in seconds. The
+#: rewarded-ad daily cap is the tighter rule for ads; this one catches every
+#: reason at once, including ones no per-reason cap exists for. Admin grants
+#: are exempt: the operator's own hand is not the farming vector, and the
+#: ledger itself is the audit trail for those.
+VELOCITY_WINDOW_SECONDS = 600.0
+VELOCITY_MAX_GRANTS = 20
+
 #: Streak clock: Pakistani civil day by default. `day_boundary_hour` is the local
 #: rollover — activity before it counts toward the previous day.
 STREAK_TZ_DEFAULT = "Asia/Karachi"
@@ -255,6 +268,19 @@ class RewardedCapReached(EngagementError):
         super().__init__(
             f"account {account_id} already has {count} rewarded grants today "
             f"(cap {REWARDED_DAILY_CAP})")
+
+
+class VelocityLimitReached(EngagementError):
+    """Too many credit grants in the rolling window: a farming pattern."""
+
+    def __init__(self, account_id, count):
+        super().__init__(
+            f"account {account_id} already has {count} credit grants in "
+            f"{int(VELOCITY_WINDOW_SECONDS)} seconds "
+            f"(max {VELOCITY_MAX_GRANTS})")
+
+    #: The route answers 429 with this long to wait before trying again.
+    retry_after = int(VELOCITY_WINDOW_SECONDS)
 
 
 class UnknownPlan(EngagementError):
@@ -858,6 +884,20 @@ def _enforce_rewarded_cap(conn: sqlite3.Connection, account_id, moment: float,
         raise RewardedCapReached(int(account_id), count)
 
 
+def _enforce_velocity(conn: sqlite3.Connection, account_id, moment: float) -> None:
+    """Refuse a credit when this account has already taken too many in the
+    rolling window. Counts every positive ledger row — grants, not spends —
+    so no reason can be farmed around the guard by switching reasons. A
+    refund that returns coins is a positive row too, and counts: a refund
+    loop is the same shape as a grant loop."""
+    count = int(conn.execute(
+        "SELECT COUNT(*) FROM coin_ledger"
+        " WHERE account_id = ? AND delta > 0 AND created_at >= ?",
+        (int(account_id), float(moment) - VELOCITY_WINDOW_SECONDS)).fetchone()[0])
+    if count >= VELOCITY_MAX_GRANTS:
+        raise VelocityLimitReached(int(account_id), count)
+
+
 def reason_cap_disabled() -> bool:
     """A single, documented switch for tests to lift the daily cap. Off always in
     production; kept here so no test needs to fake 10 rows to reach the boundary."""
@@ -873,8 +913,14 @@ def grant_coins(conn_or_path, account_id, *, amount, reason, source="server",
       `usage_stats` telemetry route is not wired to this function).
     * `reason='rewarded_ad'` is capped at `REWARDED_DAILY_CAP` grants per
       day-bucket, so a viewer cannot farm unlimited coins from ads.
+    * Every reason is velocity-guarded: more than `VELOCITY_MAX_GRANTS`
+      credits in `VELOCITY_WINDOW_SECONDS` refuses, whatever the reason —
+      a script cannot farm around a per-reason cap by switching reasons.
+      Admin grants are exempt from the velocity guard (the operator's own
+      hand is not the farming vector); the rewarded-ad cap still binds them.
     * `idempotency_key` (e.g. the ad network's callback id) makes a retry land as
-      one grant.
+      one grant — and a retry is answered before any cap or velocity check, so a
+      harmless retry is never turned into a refusal.
     """
     amount = _positive_int(amount, "amount")
     if source not in SERVER_SOURCES:
@@ -884,9 +930,21 @@ def grant_coins(conn_or_path, account_id, *, amount, reason, source="server",
     moment = _now(now)
     with _borrow(conn_or_path) as conn:
         _require_account(conn, account_id)
+        # A retry is not a new grant, whatever the caps say: the key already
+        # exists, so answer the already-applied shape before any refusal can
+        # turn a harmless retry into an error. The insert below still
+        # dedupes the two-at-once race; this read only keeps the common case
+        # honest. (Spends already answer replays this way.)
+        if idempotency_key is not None and conn.execute(
+                "SELECT 1 FROM coin_ledger WHERE idempotency_key = ? LIMIT 1",
+                (idempotency_key,)).fetchone():
+            return {"account_id": int(account_id), "delta": amount, "reason": reason,
+                    "granted": 0, "idempotent": True, "balance": _balance(conn, account_id)}
         if reason == "rewarded_ad":
             _enforce_rewarded_cap(conn, account_id, moment, tz=tz,
                                   day_boundary_hour=day_boundary_hour)
+        if source != "admin":
+            _enforce_velocity(conn, account_id, moment)
         wrote = _insert_ledger(
             conn, account_id=account_id, delta=amount, reason=reason,
             source=source, ref=ref, idempotency_key=idempotency_key,
