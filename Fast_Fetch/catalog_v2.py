@@ -1810,6 +1810,17 @@ def _finalize(conn, works, work_ids, now, counters) -> None:
     _derive_work_runtimes(conn)
     _derive_parts(conn, counters)
     _stage(conn, "season titles, runtimes, parts")
+    # The FTS5 search index (Session 123): the v2 search already accelerates
+    # with `cat_works_fts` when it exists and falls back to the LIKE scan
+    # when it does not — but nothing ever built the table. Rebuild it here,
+    # when cat_works and cat_work_aliases are final. A build failure is a
+    # warning, never a gate: the search keeps working on the LIKE scan.
+    try:
+        import fts_search
+
+        _stage(conn, "fts index: %s" % (fts_search.rebuild_fts(conn),))
+    except Exception as ex:      # noqa: BLE001 — the index is an accelerator, not a gate
+        _progress(f"fts index skipped: {ex}")
     conn.execute(
         """
         UPDATE cat_works SET

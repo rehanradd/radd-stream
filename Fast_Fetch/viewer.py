@@ -4870,6 +4870,18 @@ def start_server(port: int = 8080, host: str = "127.0.0.1",
 
     if internal:
         threading.Thread(target=internal.serve_forever, daemon=True).start()
+
+    # Scheduled background maintenance (Session 123): one daemon thread runs
+    # a bounded propagate + warm + heal tick every few hours, so the healing
+    # daemon and link_state.propagate() no longer wait for a manual CLI run.
+    # Env-gated (`RADD_MAINTENANCE=off` disables it); a failure to start it
+    # never stops the server from serving.
+    try:
+        import maintenance
+        maintenance.start_maintenance_thread()
+    except Exception as ex:      # noqa: BLE001 — serving matters more than the tick
+        print(f"[i] scheduled maintenance unavailable: {ex}")
+
     try:
         server.serve_forever()
     except KeyboardInterrupt:

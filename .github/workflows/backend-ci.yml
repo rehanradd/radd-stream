@@ -211,6 +211,24 @@ jobs:
       - name: 🧪 test_backfill_cast.py
         run: python3 -S Fast_Fetch/test_backfill_cast.py
 
+      # The resolved-link cache (Session 123, scale plan B2): lazy-first
+      # freshness reads over the ledger row + the top-200 eager warmer.
+      # Offline, stdlib, in-memory fixture, no network.
+      - name: 🧪 test_resolved_cache.py
+        run: python3 -S Fast_Fetch/test_resolved_cache.py
+
+      # Scheduled maintenance inside serve (Session 123): the bounded
+      # propagate + warm + heal tick, env-gated, memory-floor guarded.
+      # Offline, stdlib, injected fakes, no network.
+      - name: 🧪 test_maintenance.py
+        run: python3 -S Fast_Fetch/test_maintenance.py
+
+      # The FTS5 search index (Session 123): standalone table over the
+      # normalised title/original-title/genres/aliases haystack, rebuilt by
+      # the projector. Offline, stdlib, in-memory fixture, no network.
+      - name: 🧪 test_fts_search.py
+        run: python3 -S Fast_Fetch/test_fts_search.py
+
       - name: 🧪 test_site_scout.py
         run: python3 -S Fast_Fetch/test_site_scout.py
 
