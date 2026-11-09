@@ -106,3 +106,42 @@ pages on new2 (page 20/97 at +20 s).
   Maula Jutt, Deemak, …) have no episode structure — the importer
   yields None for them (marked scraped=-1); that is by design, not a
   failure.
+
+## 7. MoviesDrive sitemap dedupe — rotation orphans old locs (00:44–00:46 PKT)
+
+After the new2 re-sync, `sitemap_cache` held **19,306 rows for 9,658
+posts** (9,648 new1 + 9,658 new2): the sync upserts on `loc`, so the
+rotated domain created a twin row per post. Worse, `save_post_record`
+marks `data["url"]` (the WP post's current link = new2) scraped, so
+processing a new1 row marked its new2 twin while the new1 row stayed
+pending — the run would have processed every post twice (~4 h instead
+of ~2) and left 9,638 new1 rows pending forever.
+
+Fix: stopped the chain (SIGTERM, graceful), deleted the 9,648 new1
+rows sharing a slug with a new2 row (0 new1 rows left), found 2
+scraped new2 rows with no post and unmarked them for re-processing,
+relaunched on the deduped 9,406 pending (chain PID 1412064, 1.6
+posts/sec, 0 failed). No duplicate posts resulted: `posts.url` is
+UNIQUE and the save path updates on identity match — 0 dup urls / 0
+dup canonical_keys measured. Lesson: after a domain rotation, dedupe
+`sitemap_cache` by slug before scraping; the mark-by-`data["url"]`
+pattern assumes loc == post link and breaks on rotation (shared
+pattern, not changed in this session — the dedupe is the fix).
+
+## 8. Progress at 00:47 PKT (sweeps still running detached)
+
+| site | posts | releases | sources | sitemap scraped | pending |
+|---|---|---|---|---|---|
+| movienestbd | 20 | 20 | 54 | 20 | 7,900 |
+| harpalgeo | 172 | 1,221 | 1,221 | 172 | 337 |
+| moviesdrive | 301 | 1,547 | 9,010 | 303 | 9,355 |
+
+- HarPal 160/504 programs, 0.48/sec, 0 failed — ~12 min to finish.
+- MoviesDrive 50/9,406 posts, 1.59/sec, 0 failed — ~1.6 h to finish.
+- MovieNestBD sync is the slow one: the search API takes ~1.1 s/page
+  (measured), letter "a" alone is 909 pages (~17 min); the 36-letter
+  sync will take 2–4 h, then the detail scrape (~7.5 titles/sec at
+  3 workers). The sync prints only when a letter finishes, so an empty
+  log is normal mid-letter. Load 1.48 with the mp4moviez merge and the
+  MovieBox gapfill running alongside — the sweeps are network-bound
+  and stay out of their way.
