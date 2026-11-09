@@ -2250,7 +2250,7 @@ private fun LockedTimeChip(positionMs: Long, durationMs: Long, lowRam: Boolean, 
     ) {
         Text(
             text = stringResource(
-                R.string.player_position_duration,
+                R.string.player_time_of,
                 positionMs.formatTime(),
                 durationMs.formatTime(),
             ),
