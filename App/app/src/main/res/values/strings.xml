@@ -79,8 +79,6 @@
     <string name="player_share_moment">Share a moment</string>
     <string name="player_data_saver">Data Saver</string>
     <string name="player_data_saver_detail">Cap Auto at 480p on mobile data</string>
-    <string name="player_auto_pip">Auto picture-in-picture</string>
-    <string name="player_auto_pip_detail">Keep playing in a small window when you leave the player</string>
     <string name="player_step_finding">Finding the best print</string>
     <string name="player_step_warming">Warming the link</string>
     <string name="player_step_buffering">Buffering</string>
