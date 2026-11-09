@@ -173,3 +173,29 @@ Gradle run (owner order) — Android CI is the compile check. Pushing this
 fixup cancels the in-progress acebcde Android run (cancel-in-progress) and
 starts a fresh run on the new SHA — intended, since acebcde was known to fail
 on this error.
+
+## Parent fixup 4 (07:14 PKT 2026-11-09) — BrandDriftTest brand-name failure
+
+CI on 2003a93: Backend GREEN (run 42548927512, SUCCESS) — the quoted-PIN fix
+works on CI. Android FAILED (run 42548927534, job 128939925170): the build now
+COMPILES (both fixup 2/3 errors gone) but 1 of 1147 tests fails:
+`BrandDriftTest.brandNameIsNeverHardcodedOutsideTheBrandFiles` (AssertionError
+at BrandDriftTest.kt:106).
+
+Root cause: the test scans single-line string literals in every Kotlin source
+for the brand needles ("radd stream", "radd-stream", from brand.properties
+identity.name / identity.name.short / server.project.name) and allows them
+only in Brand.kt + RaddMark.kt (pending-migration list is empty — a ratchet).
+Session 122's Decline Toast in MainActivity.kt:334 said "You need to accept
+the disclaimer to use Radd Stream." — the one new offender. Proven by
+replicating the test's exact scan locally (same regex, same needles):
+offenders were exactly [MainActivity.kt]; the `"""` DEFAULT_DISCLAIMER_TEXT
+block in VipRemoteConfig.kt is invisible to the scanner (its regex matches
+single-line literals only) and is NOT an offender — do not touch it.
+
+Fix: reword the Toast to "You need to accept the disclaimer to use the app."
+— same meaning, no brand name, no need for Brand.name. Re-ran the replicated
+scan: zero offenders. Raw-Color(0x) scan also clean (test 2's check). No test
+pins the Toast text. Pre-push checks: diff is exactly 1 line, @Composable
+0/0, comment balance 8/8, no import change. No local Gradle (owner order) —
+Android CI is the verdict.

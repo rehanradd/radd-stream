@@ -331,7 +331,7 @@ class MainActivity : ComponentActivity() {
                             onDecline = {
                                 Toast.makeText(
                                     this@MainActivity,
-                                    "You need to accept the disclaimer to use Radd Stream.",
+                                    "You need to accept the disclaimer to use the app.",
                                     Toast.LENGTH_LONG,
                                 ).show()
                                 finish()
