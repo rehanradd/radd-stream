@@ -346,6 +346,22 @@ jobs:
       - name: 🧪 test_themoviebox_import.py
         run: python3 -S Fast_Fetch/importers/test_themoviebox_import.py
 
+      # The mp4moviez converters (Session 126 follow-up): the legacy crawl
+      # wrote a private schema (posts.source_url, no canonical identity, no
+      # source rows), so the converters rebuild it as a staging vault in the
+      # shared shape — identity from the page slug, rows with no year in the
+      # slug skipped with a counted reason, nothing invented into sources
+      # (final_url NULL, status unverified, playback_type download). Of the
+      # 14,741 link-less rows carrying a content anchor, 13,889 collapse
+      # onto posts with releases and 852 are members of the 666 link-less
+      # posts; 0 dropped. The 289 skipped rows are category/listing pages,
+      # counted, never silently lost. Offline — synthetic
+      # legacy DB in a temp dir, socket replaced by a raiser.
+      - name: 🧪 test_convert_mp4moviez.py
+        run: python3 -S Fast_Fetch/importers/test_convert_mp4moviez.py
+      - name: 🧪 test_mp4moviez_import.py
+        run: python3 -S Fast_Fetch/importers/test_mp4moviez_import.py
+
       # The admin panel's write gate (6bfbd5c). Timed, because this box measured 65 tests
       # in 266 s and CI's wall time is the open question about running it here at all.
       - name: 🧪 test_admin_panel.py (timed)

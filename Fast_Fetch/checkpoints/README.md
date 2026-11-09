@@ -5,6 +5,18 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-09 — Muse [MUSE-SESSION-MP4MOVIEZ]: mp4moviez converter
+  verification + staging vault — the legacy crawl (29,848 posts, 54,267
+  releases) rebuilt as a staging vault in the shared shape: identity from
+  `generate_canonical_key(title, year)`, nothing invented (`final_url` NULL,
+  status `unverified`, playback_type `download`). Staging verified on the VM:
+  11,404 posts / 54,267 releases / 54,267 sources, 43 adult, 666 link-less.
+  Emptied-pages answer, measured: 14,741 link-less rows carry a content
+  anchor — 13,889 collapsed onto posts with releases, 852 are members of the
+  666 link-less posts, 0 dropped. Both test modules registered in the gate
+  (15 + 23 OK; 🧪 65 → 67). Data merge waits for the rev-6 swap (parent) —
+  [20261109-muse-session-mp4moviez.md](20261109-muse-session-mp4moviez.md)
+
 - 2026-11-09 — Muse [MUSE-SESSION126-PLAYER-COMPLETE]: video player
   complete — the consolidated plan's whole open list: D-35 poster backdrop,
   PL-2 sponsor placeholder removed (countdown advances directly), PL-3
