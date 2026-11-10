@@ -139,6 +139,10 @@ fun MyListScreen(
                             selected = state.sort == sort,
                             onClick = { viewModel.setSort(sort) },
                             label = { Text(sort.label) },
+                            // Robo run 2: the three sort chips are 32dp tall
+                            // (FilterChip's visual height) — the touch-target
+                            // floor is 48dp, so the chip itself carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                 }

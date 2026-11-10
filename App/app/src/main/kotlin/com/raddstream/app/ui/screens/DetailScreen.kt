@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -74,6 +75,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,7 +105,11 @@ import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
+import com.raddstream.app.ui.components.audioBadgeText
+import com.raddstream.app.ui.components.hdrBadgeText
 import com.raddstream.app.ui.components.raddFilterChipColors
+import com.raddstream.app.ui.components.sourceBadgeText
+import com.raddstream.app.ui.components.subtitleBadgeText
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.ui.navigation.DeepLinks
@@ -629,12 +637,15 @@ private fun DetailContent(
                     )
                 }
             } else {
+                val workCopies = copyNumbers(workPrints)
                 items(workPrints, key = { "print-${it.releaseId}" }) { print ->
                     PrintCard(
                         print = print,
                         onPlayPrint = onPlayPrint,
                         onOpenExternal = onOpenExternal,
                         onKeep = onKeep,
+                        copyIndex = workCopies[print.releaseId]?.first ?: 1,
+                        copyTotal = workCopies[print.releaseId]?.second ?: 1,
                     )
                 }
             }
@@ -942,6 +953,9 @@ private fun CastSection(cast: List<String>, onActorClick: (String) -> Unit) {
                     selected = false,
                     onClick = { onActorClick(actor) },
                     label = { Text(actor) },
+                    // Robo run 2: a cast chip is 32dp tall — the touch-target
+                    // floor is 48dp, so the chip itself carries it.
+                    modifier = Modifier.heightIn(min = 48.dp),
                 )
             }
         }
@@ -995,6 +1009,9 @@ private fun SeasonChips(seasons: List<SeasonGroup>, selectedSeason: Int?, onSele
                     onClick = { onSelect(s.number) },
                     label = { Text("Season ${s.number} · ${s.episodeCount}") },
                     leadingIcon = { SeasonThumbnail(season = s, modifier = Modifier.size(24.dp)) },
+                    // Robo run 2: a season chip is 32dp tall — the touch-target
+                    // floor is 48dp, so the chip itself carries it.
+                    modifier = Modifier.heightIn(min = 48.dp),
                 )
             }
         }
@@ -1200,7 +1217,13 @@ private fun EpisodeRow(
                 if (best != null) {
                     // The same three axes the print card leads with, condensed for the row:
                     // quality, HDR and audio. Subtitles stay on the expanded print card.
+                    // Robo run 2: the same "Picture quality 720p" badge repeated on
+                    // every episode row. Paint-only here: the facts are spoken once,
+                    // on the Play button below — but only while a Play button exists
+                    // to carry them; a download-only episode keeps its badges, its
+                    // only spoken quality signal.
                     FlowRow(
+                        modifier = if (playableBest != null) Modifier.clearAndSetSemantics { } else Modifier,
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
@@ -1223,12 +1246,22 @@ private fun EpisodeRow(
                     )
                 }
             }
+            // The row's badge facts, spoken once on the Play button (the badge
+            // row above is paint-only while this button exists): quality, HDR,
+            // audio. A download-only episode has no Play button, so its badges
+            // stay spoken — see the FlowRow modifier above.
+            val episodeFacts = playableBest?.let { bestPrint ->
+                listOfNotNull(
+                    hdrBadgeText(bestPrint.hdr)?.let { "High dynamic range $it" },
+                    audioBadgeText(bestPrint.dualAudio, bestPrint.languages)?.let { "Audio $it" },
+                ).joinToString(prefix = ", ", separator = ", ").ifBlank { "" }
+            } ?: ""
             if (playableBest != null) {
                 IconButton(
                     onClick = { onPlayPrint(playableBest) },
                     modifier = Modifier.size(48.dp),
                 ) {
-                    Icon(Icons.Default.PlayArrow, contentDescription = "Play episode ${episode.numberWithinSeason}", tint = MaterialTheme.colorScheme.primary)
+                    Icon(Icons.Default.PlayArrow, contentDescription = "Play episode ${episode.numberWithinSeason}, ${playableBest.qualityLabel}$episodeFacts", tint = MaterialTheme.colorScheme.primary)
                 }
             } else if (best != null) {
                 // No playable copy on this episode: the button that would have
@@ -1292,12 +1325,15 @@ private fun EpisodeRow(
             }
         }
         if (expanded) {
+            val episodeCopies = copyNumbers(episode.prints)
             episode.prints.forEach { print ->
                 PrintCard(
                     print = print,
                     onPlayPrint = onPlayPrint,
                     onOpenExternal = onOpenExternal,
                     onKeep = onKeep,
+                    copyIndex = episodeCopies[print.releaseId]?.first ?: 1,
+                    copyTotal = episodeCopies[print.releaseId]?.second ?: 1,
                 )
             }
         }
@@ -1321,7 +1357,20 @@ private fun PrintCard(
     onPlayPrint: (RankedPrint) -> Unit,
     onOpenExternal: (RankedPrint) -> Unit,
     onKeep: (RankedPrint) -> Unit,
+    /** 1-based position among this list's prints at the same quality. */
+    copyIndex: Int = 1,
+    /** How many prints in this list share the quality. 1 of 1 needs no word. */
+    copyTotal: Int = 1,
 ) {
+    // Robo run 2: two prints at one quality announced identically — "Play
+    // 720p", "Download video", "Open in external player", "Picture quality
+    // 720p" — once per print. The copy number makes each print's actions
+    // distinct, and the badge facts move into the Play button's spoken label,
+    // so the badges stay paint-only instead of repeating on every card. The
+    // visible Play text is unchanged (CL-4); only what is spoken grows.
+    val copySuffix = if (copyTotal > 1) ", copy $copyIndex" else ""
+    val playText = "${print.playLabel()} ${print.qualityLabel}"
+    val spokenPlay = playText + copySuffix + print.spokenBadgeFacts()
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -1331,8 +1380,17 @@ private fun PrintCard(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            PrintQualityBadge(print = print)
-            if (print.isCam) CamBadge()
+            // Paint-only (the quality is spoken on the Play button below): a
+            // clearing modifier passed INTO the badge would lose to Pill's own
+            // semantics, so the badges sit inside a cleared wrapper instead.
+            Row(
+                modifier = Modifier.clearAndSetSemantics { },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                PrintQualityBadge(print = print)
+                if (print.isCam) CamBadge()
+            }
             Spacer(Modifier.weight(1f))
             print.bestOptionLabel?.let {
                 Text(
@@ -1349,7 +1407,9 @@ private fun PrintCard(
 
         // The tier's own facts, as badges rather than one run-on sentence: a 4K HDR
         // WEB-DL print and its audio/subtitle story read in a glance here.
+        // Paint-only: the same facts are spoken once, on the Play button below.
         FlowRow(
+            modifier = Modifier.clearAndSetSemantics { },
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp),
         ) {
@@ -1371,7 +1431,9 @@ private fun PrintCard(
             Button(
                 onClick = { onPlayPrint(print) },
                 enabled = print.canStart,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics(mergeDescendants = true) { contentDescription = spokenPlay },
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
@@ -1380,14 +1442,14 @@ private fun PrintCard(
                 // "Play (cam)", a provider page still says where the tap goes);
                 // the quality makes each one distinct. The PrimaryActions hero
                 // button above keeps bare "Play" — it is the single hero action.
-                Text("${print.playLabel()} ${print.qualityLabel}")
+                Text(playText, modifier = Modifier.clearAndSetSemantics { })
             }
             OutlinedButton(onClick = { onKeep(print) }) {
-                Icon(Icons.Default.Download, contentDescription = "Download video")
+                Icon(Icons.Default.Download, contentDescription = "Download ${print.qualityLabel} video$copySuffix")
             }
             if (print.playableHere) {
                 IconButton(onClick = { onOpenExternal(print) }, modifier = Modifier.size(48.dp)) {
-                    Icon(Icons.Default.OpenInNew, contentDescription = "Open in external player",
+                    Icon(Icons.Default.OpenInNew, contentDescription = "Open ${print.qualityLabel} in external player$copySuffix",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -1403,6 +1465,37 @@ private fun PrintCard(
             )
         }
     }
+}
+
+/**
+ * Copy numbers within one quality, keyed by releaseId: the first 1080p print
+ * is copy 1 of 2, the second copy 2 of 2, and a print alone at its quality is
+ * copy 1 of 1 (no suffix — nothing to distinguish it from).
+ */
+private fun copyNumbers(prints: List<RankedPrint>): Map<Int, Pair<Int, Int>> {
+    val totals = prints.groupingBy { it.qualityLabel }.eachCount()
+    val seen = mutableMapOf<String, Int>()
+    return prints.associate { print ->
+        val index = (seen[print.qualityLabel] ?: 0) + 1
+        seen[print.qualityLabel] = index
+        print.releaseId to (index to (totals[print.qualityLabel] ?: 1))
+    }
+}
+
+/**
+ * The print's badge facts as one spoken tail — the same words the badges paint
+ * ("High dynamic range DV", "Source WEB-DL", "Audio Hindi + English audio",
+ * "Subtitles English"), or "" when it carries none. The quality itself is not
+ * repeated here: the Play label already says it.
+ */
+private fun RankedPrint.spokenBadgeFacts(): String {
+    val facts = listOfNotNull(
+        hdrBadgeText(hdr)?.let { "High dynamic range $it" },
+        sourceBadgeText(sourceTag)?.let { "Source $it" },
+        audioBadgeText(dualAudio, languages)?.let { "Audio $it" },
+        subtitleBadgeText(subtitlesAvailable, subtitlesExternal, subtitlesHardcoded, subtitleLangs),
+    )
+    return if (facts.isEmpty()) "" else facts.joinToString(prefix = ", ", separator = ", ")
 }
 
 // ── Platform helpers (share keeps the app's own copy honest) ────────────────

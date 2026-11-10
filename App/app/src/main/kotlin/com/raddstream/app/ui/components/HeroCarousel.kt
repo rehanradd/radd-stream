@@ -377,7 +377,11 @@ private fun HeroBadge(text: String, subdued: Boolean = false) {
             text = text,
             style = MaterialTheme.typography.labelMedium,
             fontWeight = FontWeight.SemiBold,
-            color = if (subdued) scheme.onBackground.copy(alpha = 0.85f) else scheme.onBackground,
+            // Robo run 2: the subdued pill's 85%-white text on the 0.6f scrim
+            // (LC-2) is still ~3.8:1 over bright art — under the 4.5:1 floor.
+            // Full-strength text on the same scrim is ~5.7:1 worst case; the
+            // pill stays subdued by its darker scrim, not by dimming its words.
+            color = scheme.onBackground,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

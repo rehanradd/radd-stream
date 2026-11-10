@@ -275,8 +275,13 @@ val RaddPlayerSheet        = RaddInk850
 /** Dialog container — one lift above a sheet, same scrim under both. */
 val RaddPlayerDialog       = RaddInk800
 
-/** 53% black — the top/bottom HUD bars and any idle chip riding them. */
-val RaddHudBar             = Color(0x88000000)
+/** 70% black — the top/bottom HUD bars and any idle chip riding them. Robo run 2
+ * (app-debug-316) still flagged the bar texts (title, subtitle, position,
+ * duration) at full white: 53% black over a bright frame composites to
+ * ~#787878, and full white on that is ~4.4:1 — just under the 4.5:1 floor.
+ * 70% composites to ~#4D4D4D over a white frame, and full white on that is
+ * ~8.5:1, with the same margin for the 0.85f short labels (~6.8:1). */
+val RaddHudBar             = Color(0xB3000000)
 /** 40% black — round transport controls and edge pills, over motion. */
 val RaddHudChip            = Color(0x66000000)
 /** 60% black — a card that pauses the frame to be read: gesture, play-again. */
@@ -323,7 +328,9 @@ data class PlayerChromeTheme(
         fun forId(id: String): PlayerChromeTheme = when (id) {
             MIDNIGHT -> PlayerChromeTheme(
                 background = Color(0xFF0A1128),
-                bar = Color(0x880A1128),
+                // Robo run 2: the 53% bar left full-white text at ~4.4:1 over a
+                // bright frame — 70% like RaddHudBar, same ~8.5:1 worst case.
+                bar = Color(0xB30A1128),
                 chip = Color(0x660A1128),
                 card = Color(0x990A1128),
                 track = Color(0x338FB3FF),
@@ -331,7 +338,8 @@ data class PlayerChromeTheme(
             )
             EMBER -> PlayerChromeTheme(
                 background = Color(0xFF1A120B),
-                bar = Color(0x881A120B),
+                // Robo run 2: 53% -> 70% bar, same as midnight above.
+                bar = Color(0xB31A120B),
                 chip = Color(0x661A120B),
                 card = Color(0x991A120B),
                 track = Color(0x33FFD9A0),

@@ -79,10 +79,17 @@ fun PosterCard(
         post.year?.takeIf { it > 0 }?.toString(),
         typeLabel,
     ).joinToString(" · ")
+    // Robo run 2: the badge pills announced their a11y labels as separate
+    // nodes, so every tile with the same badge repeated the same words ("Hindi
+    // dub of a work originally in another language" on dozens of tiles). The
+    // tile speaks one sentence — badges included — and the painted row below
+    // is paint-only, so a screen reader hears each tile once.
+    val tileBadges = TileAudioBadges.forPost(post)
     val a11y = buildString {
         append(title)
         if (details.isNotBlank()) append(", ").append(details)
         post.imdbRating?.takeIf { it.isNotBlank() }?.let { append(", rating ").append(it).append(" out of 10") }
+        if (tileBadges.isNotEmpty()) append(", ").append(tileBadges.joinToString(", ") { it.a11y })
         if (progressLabel != null) append(", ").append(progressLabel)
     }
 
@@ -214,7 +221,10 @@ fun PosterCard(
             }
 
             Column(
-                modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 10.dp),
+                // One spoken sentence per tile (see the a11y string above):
+                // the title, details, badges and progress are paint here, not
+                // four more nodes saying the same words the tile already said.
+                modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 10.dp).clearAndSetSemantics { },
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
@@ -242,7 +252,7 @@ fun PosterCard(
                 Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.CenterStart) {
                     // Dub status decides whether this title is watchable at all for a
                     // Hindi/Urdu-first viewer, so it is said on the tile, not after a tap.
-                    AudioBadgeChipRow(badges = TileAudioBadges.forPost(post))
+                    AudioBadgeChipRow(badges = tileBadges)
                 }
 
                 progressLabel?.let { label ->

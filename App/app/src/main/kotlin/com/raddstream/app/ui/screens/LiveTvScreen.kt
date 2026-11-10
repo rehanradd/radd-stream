@@ -34,6 +34,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.network.models.LiveTvChannel
@@ -171,15 +173,19 @@ private fun LiveTvChannelCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    // Robo run 2: every card announced its name three times (logo description,
+    // name text, and the "LIVE" badge on every card) — the same words on all
+    // ~18 channels. One sentence per card; the logo, badge and texts are paint.
+    val a11y = "${channel.name}, live, ${categoryLabel(channel.category)} · ${channel.country}"
     Card(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.semantics { contentDescription = a11y },
     ) {
         Column {
             Box {
                 CatalogImage(
                     url = channel.logoUrl,
-                    contentDescription = channel.name,
+                    contentDescription = null, // the card sentence says the name
                     fallbackLabel = channel.name,
                     // Phase 7 (M4): channel logos come from the operator-curated
                     // channel registry, not the catalog — their hosts are the
@@ -199,7 +205,8 @@ private fun LiveTvChannelCard(
                             MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
                             RoundedCornerShape(4.dp),
                         )
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                        .clearAndSetSemantics { },
                 ) {
                     Box(
                         modifier = Modifier
@@ -221,13 +228,13 @@ private fun LiveTvChannelCard(
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 2,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp).clearAndSetSemantics { },
             )
             Text(
                 text = "${categoryLabel(channel.category)} · ${channel.country}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 10.dp).padding(bottom = 10.dp),
+                modifier = Modifier.padding(horizontal = 10.dp).padding(bottom = 10.dp).clearAndSetSemantics { },
             )
         }
     }

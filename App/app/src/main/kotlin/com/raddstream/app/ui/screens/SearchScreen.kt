@@ -143,10 +143,16 @@ fun SearchScreen(
                         // opens the sheet, so a viewer can see which filters
                         // are actually on instead of taking the pill's word.
                         Box(
-                            modifier = Modifier.clickable(
-                                role = Role.Button,
-                                onClickLabel = "Open filters",
-                            ) { showSheet = true },
+                            // Robo run 2 class: a raw clickable wrapping a
+                            // ~24dp pill is a ~24dp touch target. The pill
+                            // keeps its size; the tap area is 48dp tall.
+                            contentAlignment = Alignment.Center,
+                            modifier = Modifier
+                                .heightIn(min = 48.dp)
+                                .clickable(
+                                    role = Role.Button,
+                                    onClickLabel = "Open filters",
+                                ) { showSheet = true },
                         ) {
                             Pill(text = "Filtered", backgroundColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
