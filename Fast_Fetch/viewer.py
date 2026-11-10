@@ -3252,19 +3252,37 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     params).fetchone()[0]
                 fuzzy = True
 
-        newest_ids = None
-        if order_sql is None:
-            # Step 1 — the page's ids, newest first, from `posts` alone.
-            # Every clause in `where_sql` names only `p.*` or a
-            # self-contained EXISTS, so no join is needed here; measured
-            # ~0.33s on the live catalog (page 1) against ~4.8s for the
-            # one-query shape, and no new index is needed.
-            newest_rows = conn.execute(
+        # Two-step page resolution: the page's ids first, from `posts` alone,
+        # then the counts for just those ids. The one-query shape groups the
+        # release/source fan-out for EVERY matching post before sorting, so a
+        # filtered title sort (type=movie&quality=720p: 91,592 matches live)
+        # ran ~2.2s warm and crossed the 10s deadline into a 503 during the
+        # 2026-11-10 Firebase Robo test. The two-step applies exactly when
+        # the ORDER BY names only `posts` columns: newest (year clamp),
+        # title and rating. Trending orders by the join counts, so it cannot
+        # resolve ids without the join and keeps the one-query shape; the
+        # unknown sort orders by id DESC, which the rowid scan already
+        # provides, so it keeps it too. No posts title index: one was
+        # measured and REJECTED — the planner uses it for the content_type
+        # seek, which forces the grouped shape into a GROUP BY temp B-tree
+        # (title/rating/trending 7-10s, rating 503s); the two-step plus the
+        # covering releases(post_id, quality) index is the fix instead.
+        page_ids = None
+        two_step = order_sql is None or sort_key in ("title", "rating")
+        if two_step:
+            step1_order = (f"{_NEWEST_YEAR_SQL} DESC, p.id DESC"
+                           if order_sql is None else order_sql)
+            # Step 1 — the page's ids, from `posts` alone. Every clause in
+            # `where_sql` names only `p.*` or a self-contained EXISTS, so no
+            # join is needed here; measured ~0.34s on the live catalog
+            # (page 1, title+720p) against ~2.2s for the one-query shape,
+            # and no new index is needed.
+            page_rows = conn.execute(
                 f"SELECT p.id FROM posts p WHERE {where_sql} "
-                f"ORDER BY {_NEWEST_YEAR_SQL} DESC, p.id DESC LIMIT ? OFFSET ?",
+                f"ORDER BY {step1_order} LIMIT ? OFFSET ?",
                 params + [limit + 1, offset]).fetchall()
-            newest_ids = [int(r["id"]) for r in newest_rows[:limit]]
-            if not newest_ids:
+            page_ids = [int(r["id"]) for r in page_rows[:limit]]
+            if not page_ids:
                 return {
                     "page": page,
                     "limit": limit,
@@ -3289,13 +3307,13 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             " LEFT JOIN releases r ON r.post_id = p.id"
             " LEFT JOIN download_sources s ON s.release_id = r.id"
         )
-        if newest_ids is not None:
+        if page_ids is not None:
             # Step 2 — counts for just this page, by id. No ORDER BY and no
             # LIMIT here: the page is already exactly these ids, and the
             # order is imposed in Python below.
             sql = (select_sql + f" WHERE {where_sql} AND p.id IN ("
-                   + ", ".join("?" for _ in newest_ids) + ") GROUP BY p.id")
-            rows = conn.execute(sql, params + newest_ids).fetchall()
+                   + ", ".join("?" for _ in page_ids) + ") GROUP BY p.id")
+            rows = conn.execute(sql, params + page_ids).fetchall()
         else:
             sql = (select_sql + f" WHERE {where_sql} GROUP BY p.id"
                    f" ORDER BY {order_sql} LIMIT ? OFFSET ?")
@@ -3311,12 +3329,12 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             item["work_ref"] = _work_ref(r)
             item["subtitled"] = bool(subtitled.get(int(r["id"]), False))
             results.append(item)
-        if newest_ids is not None:
+        if page_ids is not None:
             # The page query fetched by id, so impose the step-1 order here.
             by_id = {}
             for item in results:
                 by_id[int(item["id"])] = item
-            results = [by_id[i] for i in newest_ids if i in by_id]
+            results = [by_id[i] for i in page_ids if i in by_id]
         total_pages = max(1, (total + limit - 1) // limit)
         return {
             "page": page,

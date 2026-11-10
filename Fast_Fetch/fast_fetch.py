@@ -1411,6 +1411,17 @@ def _init_db(db_path: Path | None = None) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_source_ind ON posts(source_site, industry)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_canonical_key ON posts(canonical_key)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_releases_source_site ON releases(source_site)")
+        # Session posts503: the quality filter in `api_v1_get_posts` is an
+        # EXISTS probe per post (`rq.post_id = p.id AND upper(rq.quality)
+        # LIKE ...`). `idx_releases_post` answered the seek but every probe
+        # then fetched the release row for its quality label; this covering
+        # index answers the probe from the index alone. Measured on the live
+        # catalog copy: COUNT 0.39s -> 0.30s warm, and the probes walk the
+        # index in post order, so the cold-cache cost is sequential reads
+        # instead of random table lookups. A posts title-expression index
+        # was measured and REJECTED here (it makes the grouped page query
+        # 3-4x slower — see viewer.py), so this is the only new index.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_releases_post_quality ON releases(post_id, quality)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_site ON sitemap_cache(site, scraped)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_retry ON sitemap_cache(scraped, attempts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_tmdb ON posts(tmdb_id)")

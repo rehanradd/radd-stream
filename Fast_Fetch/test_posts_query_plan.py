@@ -11,19 +11,24 @@ it stays correct whatever the next person's box has cached.
 The claim being pinned is narrow and it is not "search is fast":
 
 * `api_v1_get_posts` issues **two** full passes over `posts` per request for
-  the old sorts — the exact-total `COUNT(*)` and the paged list — and neither
-  can use an index, because `LIKE '%inception%'` has a leading wildcard. No
-  index removes a leading-wildcard scan; only a different index *structure*
-  (FTS5) does. The default sort (`newest`, Session 115) adds a third, narrow
-  pass: the page's ids from `posts` alone, ordered by the clamped year. That
-  pass DOES sort a temp B-tree, by design — it sorts only ids and years, no
-  joins, ~0.33s on the live catalog — and it is what keeps the paged statement
-  from grouping all ~135k public posts before sorting (~4.8s live).
-* With the default sort the paged statement does NOT sort a temp B-tree, so a
-  slow `q=inception` is not an `ORDER BY` problem either. With `sort=trending`
-  it does, and that is the one case where the old by-media shape's defect is
-  reproduced here. The unknown-sort statement (`ORDER BY p.id DESC`) is the
-  same shape as the old default and also builds no order B-tree.
+  the trending and unknown sorts — the exact-total `COUNT(*)` and the paged
+  list — and neither can use an index, because `LIKE '%inception%'` has a
+  leading wildcard. No index removes a leading-wildcard scan; only a different
+  index *structure* (FTS5) does. The newest, title and rating sorts
+  (`newest` since Session 115, title and rating since Session posts503) add
+  a third, narrow pass: the page's ids from `posts` alone, ordered by the
+  sort key. That pass DOES sort a temp B-tree, by design — it sorts only ids
+  and keys, no joins, ~0.33s on the live catalog — and it is what keeps the
+  paged statement from grouping all ~135k public posts before sorting
+  (~4.8s live). Title needed it: `type=movie&quality=720p&sort=title` has
+  91,592 live matches, and the one-query shape ran ~2.2s warm and crossed
+  the 10s deadline into a 503 during the 2026-11-10 Firebase Robo test.
+* With the newest/title/rating sorts the paged statement does NOT sort a
+  temp B-tree, so a slow `q=inception` is not an `ORDER BY` problem either.
+  With `sort=trending` it does, and that is the one case where the old
+  by-media shape's defect is reproduced here. The unknown-sort statement
+  (`ORDER BY p.id DESC`) is the same shape as the old default and also
+  builds no order B-tree.
 * `q=a` and `q=%` are accepted and answered. A one-letter query scans the whole
   ledger to return twenty rows, and `%` is interpolated into the pattern
   unescaped, so two keystrokes can ask for every row in the catalog.
@@ -60,9 +65,28 @@ NEWEST_IDS_SQL = ("SELECT p.id FROM posts p"
                   " AND CAST(strftime('%Y', 'now') AS INTEGER) + 1"
                   " THEN p.year ELSE 0 END DESC, p.id DESC LIMIT ? OFFSET ?")
 
-#: Step 2 of the default path: the page's counts, for just those ids — no
-#: ORDER BY and no LIMIT, because the page is already exactly these ids and
-#: the order is imposed in Python.
+#: Step 1 of the title path (Session posts503): the page's ids from `posts`
+#: alone, ordered by the title key. Same shape as NEWEST_IDS_SQL, different
+#: ORDER BY — and the same reason: the one-query shape grouped the fan-out
+#: for every match before sorting.
+TITLE_IDS_SQL = ("SELECT p.id FROM posts p"
+                 " WHERE COALESCE(p.is_18_plus,0)=0"
+                 " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)"
+                 " ORDER BY lower(COALESCE(NULLIF(TRIM(p.clean_title), ''), p.title)) ASC,"
+                 " p.id DESC LIMIT ? OFFSET ?")
+
+#: Step 1 of the rating path (Session posts503): same two-step shape, the
+#: rating key. The ORDER BY is transcribed from `viewer.api_v1_get_posts`
+#: (`sort=rating`).
+RATING_IDS_SQL = ("SELECT p.id FROM posts p"
+                  " WHERE COALESCE(p.is_18_plus,0)=0"
+                  " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)"
+                  " ORDER BY (p.imdb_rating IS NULL OR TRIM(p.imdb_rating) = '') ASC,"
+                  " CAST(p.imdb_rating AS REAL) DESC, p.id DESC LIMIT ? OFFSET ?")
+
+#: Step 2 of the two-step path (newest, title, rating): the page's counts,
+#: for just those ids — no ORDER BY and no LIMIT, because the page is
+#: already exactly these ids and the order is imposed in Python.
 PAGED_NEWEST_SQL = """
     SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,
            p.poster_url, p.backdrop_urls, p.imdb_rating, p.imdb_id, p.tmdb_id,
@@ -136,12 +160,14 @@ class _Fixture(unittest.TestCase):
                 status TEXT, is_temporary INTEGER, service TEXT);
             CREATE INDEX idx_releases_post ON releases(post_id);
             CREATE INDEX idx_releases_origin ON releases(post_id, source_site, origin_url);
+            CREATE INDEX idx_releases_post_quality ON releases(post_id, quality);
             CREATE INDEX idx_sources_rel ON download_sources(release_id);
             CREATE INDEX idx_sources_res ON download_sources(resource_id);
             CREATE INDEX idx_sources_rel_status ON download_sources(release_id, status);
             """)
         cls.conn.commit()
-        for name in ("idx_releases_post", "idx_sources_rel"):
+        for name in ("idx_releases_post", "idx_releases_post_quality",
+                     "idx_sources_rel"):
             assert cls._has_index(name), f"fixture drifted from production: {name}"
 
     @classmethod
@@ -192,9 +218,31 @@ class TestCostIsTheScan(_Fixture):
         self.assertIn("SEARCH p USING INTEGER PRIMARY KEY", paged_plan, paged_plan)
         self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", paged_plan, paged_plan)
 
+    def test_title_and_rating_use_the_narrow_ids_pass_like_newest(self):
+        """Session posts503: title and rating join newest in the two-step
+        shape — the ids pass sorts a temp B-tree (ids + keys only, no joins)
+        and the page-by-ids pass reaches its rows by primary key with no
+        ORDER BY at all. The one-query shape grouped the fan-out for every
+        match before sorting; for `type=movie&quality=720p&sort=title`
+        (91,592 live matches) that ran ~2.2s warm and crossed the 10s
+        deadline into a 503 during the 2026-11-10 Firebase Robo test.
+        """
+        self.seed("Inception")
+        self.seed("Inception Two")
+        self.seed("Inception Three")
+        for ids_sql in (TITLE_IDS_SQL, RATING_IDS_SQL):
+            ids_plan = self.plan(ids_sql, ["%inception%"] * 4 + [20, 0])
+            self.assertIn("SCAN p", ids_plan, ids_plan)
+            self.assertIn("USE TEMP B-TREE FOR ORDER BY", ids_plan, ids_plan)
+        paged_plan = self.plan(PAGED_NEWEST_SQL, ["%inception%"] * 4 + [1, 2, 3])
+        self.assertIn("SEARCH p USING INTEGER PRIMARY KEY", paged_plan, paged_plan)
+        self.assertNotIn("USE TEMP B-TREE FOR ORDER BY", paged_plan, paged_plan)
+
     def test_the_old_sorts_still_make_two_full_passes_over_posts(self):
-        """The non-newest sorts keep the old shape: one pass for `total`, one
-        for the page, both `SCAN p`.
+        """Trending and the unknown sort keep the old shape: one pass for
+        `total`, one for the page, both `SCAN p`. Title and rating moved to
+        the three-pass shape with newest (Session posts503) — see the test
+        above — so they are no longer "old sorts" in this sense.
 
         This is the sentence the earlier report got wrong: there is no missing
         index to add here, and an index cannot serve a leading-wildcard `LIKE`.
