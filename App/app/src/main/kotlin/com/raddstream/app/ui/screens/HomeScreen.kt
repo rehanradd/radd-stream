@@ -783,7 +783,9 @@ private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
                     Text(
                         text = tile.label,
                         style = MaterialTheme.typography.labelLarge,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        // E-T4: the tile was ~40dp tall (label line + 10dp + 10dp).
+                        // 14dp of vertical padding takes it to >= 48dp.
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                     )
                 }
             }

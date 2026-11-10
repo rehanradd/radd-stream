@@ -55,6 +55,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -115,7 +117,11 @@ fun SettingsScreen(
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = { TopAppBar(title = { Text("Settings") }) },
+        // CL-7: the screen's title says "Settings" and so does its nav tab —
+        // the title is paint, not a second announcement. The same treatment
+        // applies to any other screen whose TopAppBar title exactly matches its
+        // nav-tab label; Settings was the one Robo flagged.
+        topBar = { TopAppBar(title = { Text("Settings", modifier = Modifier.clearAndSetSemantics { }) }) },
     ) { contentPadding ->
         Column(
             modifier = Modifier
@@ -947,7 +953,10 @@ private fun PreferenceRowTitle(text: String) {    Text(text, style = MaterialThe
 @Composable
 private fun SwitchRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit, label: String) {
     Row(
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
+        // CL-1: the row and its Switch must read as one control — "Download
+        // only on Wi-Fi, On" — not as a bare label plus a Switch that only
+        // announces its state. Two toggles both saying "On" was the bug.
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) { },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {

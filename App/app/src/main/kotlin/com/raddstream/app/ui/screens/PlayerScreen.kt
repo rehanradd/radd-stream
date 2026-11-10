@@ -190,18 +190,19 @@ import com.raddstream.app.ui.theme.RaddCaptionPlate
 import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
 import com.raddstream.app.ui.theme.RaddCoral400
 import com.raddstream.app.ui.theme.RaddCurrent500
+import com.raddstream.app.ui.theme.RaddDanger
+import com.raddstream.app.ui.theme.RaddHudCard
 import com.raddstream.app.ui.theme.PlayerChromeTheme
 import com.raddstream.app.ui.theme.RaddHudPillIdle
 import com.raddstream.app.ui.theme.RaddHudToast
-import com.raddstream.app.ui.theme.RaddKeepBlocked
-import com.raddstream.app.ui.theme.RaddKeepKeeping
-import com.raddstream.app.ui.theme.RaddKeepStored
 import com.raddstream.app.ui.theme.RaddNarrationCheck
 import com.raddstream.app.ui.theme.RaddNarrationPlate
 import com.raddstream.app.ui.theme.RaddPlayerDialog
 import com.raddstream.app.ui.theme.RaddPlayerSheet
 import com.raddstream.app.ui.theme.RaddPlayerSnackbarPlate
 import com.raddstream.app.ui.theme.RaddPlayerStage
+import com.raddstream.app.ui.theme.RaddSuccess
+import com.raddstream.app.ui.theme.RaddTideIndigo
 import com.raddstream.app.ui.theme.RaddTokens
 import com.raddstream.app.ui.theme.brandSp
 import com.raddstream.app.ui.theme.paint
@@ -1336,7 +1337,9 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                 if (subtitle.isNotBlank()) {
                     Text(
                         subtitle,
-                        color = Color.White.copy(alpha = 0.72f),
+                        // E-C2: 11sp white at 72% over the 53%-black top bar was
+                        // ~3.13:1 over a bright frame. Full white now.
+                        color = Color.White,
                         fontSize = brandSp(11),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -1381,7 +1384,10 @@ private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
                 IconButton(onClick = { vm.togglePlayPause() }, modifier = Modifier.size(72.dp)) {
                     Icon(
                         painter = if (state.isPlaying) painterResource(R.drawable.ic_player_pause) else painterResource(R.drawable.ic_player_play),
-                        contentDescription = if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
+                        // CL-5: the centre control says "Pause video", not bare
+                        // "Pause" — the bottom bar's pause button is visible at
+                        // the same time, and two "Pause" controls is the bug.
+                        contentDescription = if (state.isPlaying) stringResource(R.string.player_pause_centre) else stringResource(R.string.player_play),
                         tint = Color.White,
                         modifier = Modifier.size(44.dp),
                     )
@@ -1474,7 +1480,9 @@ private fun EdgeHud(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             ControlTarget(
-                label = if (state.isPlaying) stringResource(R.string.player_pause) else stringResource(R.string.player_play),
+                // CL-5: the Ghost-mode edge control is the centre control by
+                // another name — it says "Pause video", not bare "Pause".
+                label = if (state.isPlaying) stringResource(R.string.player_pause_centre) else stringResource(R.string.player_play),
                 onClick = { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
             ) {
                 Icon(
@@ -1608,7 +1616,9 @@ private fun BottomControls(
                 if (state.startPhase != StartPhase.NONE) {
                     Text(
                         stringResource(R.string.app_loading),
-                        color = Color.White.copy(alpha = 0.75f),
+                        // E-C3: 12sp white at 75% over the bar was ~3.3:1 over a
+                        // bright frame. Full white now, like the position beside it.
+                        color = Color.White,
                         fontSize = brandSp(12),
                     )
                     Spacer(Modifier.weight(1f))
@@ -1618,7 +1628,9 @@ private fun BottomControls(
                     if (state.durationMs > 0) {
                         Text(
                             state.durationMs.formatTime(),
-                            color = Color.White.copy(alpha = 0.75f),
+                            // E-C3: the duration was 12sp white at 75% — full
+                            // white now.
+                            color = Color.White,
                             fontSize = brandSp(12),
                         )
                     }
@@ -1875,7 +1887,9 @@ private fun PlayerControlButton(
         if (shortLabel != null) {
             Text(
                 shortLabel,
-                color = if (selected) RaddCurrent500 else Color.White.copy(alpha = 0.75f),
+                // E-C3: 10sp white at 75% over the bar was ~3.3:1 over a bright
+                // frame. 0.85f is the floor the audit allows for these labels.
+                color = if (selected) RaddCurrent500 else Color.White.copy(alpha = 0.85f),
                 fontSize = brandSp(10),
                 maxLines = 1,
                 modifier = Modifier.clearAndSetSemantics { },
@@ -2372,12 +2386,21 @@ private fun StartNoticeCard(
                 .padding(16.dp)
                 .size(32.dp),
         )
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            modifier = Modifier
-                .padding(horizontal = 32.dp)
-                .semantics(mergeDescendants = true) { contentDescription = spoken },
+        // LC-1: the notice floats over the live video frame, so it gets its own
+        // solid plate — white on RaddHudCard is >= 7:1 over any frame, where
+        // bare white over a bright frame was ~1:1. The plate never animates
+        // with the chrome fade: it is either up, or it is gone.
+        Surface(
+            color = RaddHudCard,
+            shape = MaterialTheme.shapes.medium,
+            modifier = Modifier.padding(horizontal = 32.dp),
         ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                modifier = Modifier
+                    .padding(horizontal = 16.dp, vertical = 12.dp)
+                    .semantics(mergeDescendants = true) { contentDescription = spoken },
+            ) {
             PlayerLoadingIndicator()
             Spacer(Modifier.height(14.dp))
             Text(
@@ -2448,6 +2471,7 @@ private fun StartNoticeCard(
                         }
                     }
                 }
+            }
             }
         }
     }
@@ -2651,13 +2675,18 @@ private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
     val keep = state.keep
     if (keep is KeepUiState.Unavailable) return
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
+    // E-C4: the chip sat on a 40%-alpha tint with no bar behind it — white
+    // text on the Stored tint over a bright frame was 1.23:1. The surface is
+    // now chrome.card (60% black); the state tint survives only as the
+    // icon/ring colour, at full strength.
+    val stateTint = when (keep) {
+        is KeepUiState.Stored -> RaddSuccess
+        is KeepUiState.Blocked -> RaddDanger
+        is KeepUiState.Keeping -> RaddTideIndigo
+        else -> Color.White
+    }
     Surface(
-        color = when (keep) {
-            is KeepUiState.Stored -> RaddKeepStored
-            is KeepUiState.Blocked -> RaddKeepBlocked
-            is KeepUiState.Keeping -> RaddKeepKeeping
-            else -> chrome.bar
-        },
+        color = chrome.card,
         shape = MaterialTheme.shapes.small,
         modifier = Modifier
             .padding(end = 6.dp)
@@ -2678,11 +2707,11 @@ private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
                 CircularProgressIndicator(
                     progress = progress,
                     modifier = Modifier.size(14.dp),
-                    color = Color.White,
+                    color = stateTint,
                     strokeWidth = 2.dp,
                 )
             } else {
-                Icon(Icons.Default.Download, null, tint = Color.White, modifier = Modifier.size(14.dp))
+                Icon(Icons.Default.Download, null, tint = stateTint, modifier = Modifier.size(14.dp))
             }
             Spacer(Modifier.width(4.dp))
             Text(

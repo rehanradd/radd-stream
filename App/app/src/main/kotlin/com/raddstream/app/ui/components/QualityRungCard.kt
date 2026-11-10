@@ -170,7 +170,7 @@ private fun RungRow(
 }
 
 /**
- * One rung action: a 40dp tonal pad with the glyph centred. The pad is the
+ * One rung action: a 48dp tonal pad with the glyph centred. The pad is the
  * button — the same surfaceVariant the rung's quiet pills use, so the row
  * has one action language instead of bare glyphs beside filled buttons.
  */
@@ -183,7 +183,7 @@ private fun RungIconButton(
         onClick = onClick,
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
-        modifier = Modifier.size(40.dp),
+        modifier = Modifier.size(48.dp),
     ) {
         Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
             content()

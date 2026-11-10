@@ -33,6 +33,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.network.models.LiveTvChannel
@@ -68,7 +69,9 @@ fun LiveTvScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Live TV") },
+                // CL-7, same as Settings: the title says "Live TV" and so does
+                // its nav tab — the title is paint, not a second announcement.
+                title = { Text("Live TV", modifier = Modifier.clearAndSetSemantics { }) },
             )
         },
     ) { contentPadding ->
@@ -90,6 +93,9 @@ fun LiveTvScreen(
                 OutlinedTextField(
                     value = state.query,
                     onValueChange = viewModel::onQueryChanged,
+                    // E-L2: the label is the field's accessible name — a placeholder
+                    // alone does not label it.
+                    label = { Text("Search channels") },
                     placeholder = { Text("Search channels") },
                     leadingIcon = {
                         Icon(

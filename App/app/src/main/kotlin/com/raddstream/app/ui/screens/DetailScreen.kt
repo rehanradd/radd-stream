@@ -1375,13 +1375,18 @@ private fun PrintCard(
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
-                Text(print.playLabel())
+                // CL-4: every print's Play button said bare "Play", so three
+                // prints announced identically. The verb stays (a cam still says
+                // "Play (cam)", a provider page still says where the tap goes);
+                // the quality makes each one distinct. The PrimaryActions hero
+                // button above keeps bare "Play" — it is the single hero action.
+                Text("${print.playLabel()} ${print.qualityLabel}")
             }
             OutlinedButton(onClick = { onKeep(print) }) {
                 Icon(Icons.Default.Download, contentDescription = "Download video")
             }
             if (print.playableHere) {
-                IconButton(onClick = { onOpenExternal(print) }, modifier = Modifier.size(40.dp)) {
+                IconButton(onClick = { onOpenExternal(print) }, modifier = Modifier.size(48.dp)) {
                     Icon(Icons.Default.OpenInNew, contentDescription = "Open in external player",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

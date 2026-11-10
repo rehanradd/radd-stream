@@ -326,7 +326,9 @@ internal fun MethodSection(state: VipUiState, onSelect: (VipMethod) -> Unit) {
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                         color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        // E-T6: the chip was ~40dp tall (label line + 10dp + 10dp).
+                        // 14dp of vertical padding takes it to >= 48dp.
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 14.dp),
                     )
                 }
             }

@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -73,6 +74,11 @@ fun Pill(
                 style = MaterialTheme.typography.labelSmall,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
+                // CL-8 (also E-L3): when the pill carries its own spoken label,
+                // the raw inner text must not also be read — "SD" and
+                // "Picture quality SD" were heard back to back. The spoken label
+                // is the only node; the paint stays.
+                modifier = if (a11yLabel != null) Modifier.clearAndSetSemantics { } else Modifier,
             )
         }
     }

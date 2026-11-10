@@ -30,6 +30,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.network.models.Post
@@ -72,7 +73,9 @@ fun MyListScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = { Text("My List") },
+                // CL-7, same as Settings: the title says "My List" and so does
+                // its nav tab — the title is paint, not a second announcement.
+                title = { Text("My List", modifier = Modifier.clearAndSetSemantics { }) },
             )
         },
     ) { contentPadding ->

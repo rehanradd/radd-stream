@@ -31,6 +31,9 @@
     <string name="player_speed_short">%1$s×</string>
     <string name="player_prints_tools">Prints &amp; tools</string>
     <string name="player_pause">Pause</string>
+    <!-- CL-5: the centre pause control announces this instead of bare "Pause",
+         so it does not collide with the bottom-bar pause button. -->
+    <string name="player_pause_centre">Pause video</string>
     <string name="player_play">Play</string>
     <string name="player_buffering">Buffering…</string>
     <string name="player_leave_cinema">Leave cinema mode</string>

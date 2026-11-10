@@ -63,7 +63,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -131,7 +134,9 @@ fun SearchScreen(
             TopAppBar(
                 // Session 121 (P-13): the count lives in the body, next to Sort —
                 // the top bar saying "12 results" as well was the same number twice.
-                title = { Text("Search") },
+                // CL-7, same as Settings: the title says "Search" and so does its
+                // nav tab — the title is paint, not a second announcement.
+                title = { Text("Search", modifier = Modifier.clearAndSetSemantics { }) },
                 actions = {
                     if (state.hasFacetFilters) {
                         // The pill names the facets, never the sort — and it
@@ -168,14 +173,17 @@ fun SearchScreen(
         ) {
             // D-15: one search affordance everywhere — a filled rounded pill
             // with the same prompt Home's bar uses ("Search movies and
-            // shows"), no floating label, no border-box form look. The field
-            // still searches titles and cast names (the omnibox); only the
-            // prompt is unified, not the capability.
+            // shows"), no border-box form look. The field still searches titles
+            // and cast names (the omnibox); only the prompt is unified, not the
+            // capability. E-L1: the label below is the field's accessible name —
+            // a placeholder alone does not label it — and it floats only once
+            // the viewer starts typing, so the empty pill looks the same.
             TextField(
                 value = state.query,
                 onValueChange = viewModel::onQueryChanged,
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
+                label = { Text("Search movies and shows") },
                 placeholder = { Text("Search movies and shows") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                 trailingIcon = {
@@ -447,6 +455,13 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel, onOpenF
                 selected = state.filters.type == value,
                 onClick = { viewModel.selectType(value) },
                 label = { Text(label) },
+                // CL-3, same as the sheet: the rail's "All" chip is the Type
+                // group's "All", and it must say so — bare "All" is the bug.
+                modifier = if (label == "All") {
+                    Modifier.semantics { contentDescription = "All types" }
+                } else {
+                    Modifier
+                },
             )
         }
         item {
@@ -656,6 +671,7 @@ private fun FilterSheetContent(
             label = { it.first },
             isSelected = { state.filters.type == it.second },
             onSelect = { viewModel.selectType(it.second) },
+            allDescription = "All types",
         )
         FacetChips(
             title = "Industry",
@@ -663,6 +679,7 @@ private fun FilterSheetContent(
             label = { it.label },
             isSelected = { state.filters.industry == it },
             onSelect = viewModel::selectIndustry,
+            allDescription = "All industries",
         )
         FacetChips(
             title = "Genre",
@@ -670,6 +687,7 @@ private fun FilterSheetContent(
             label = { it.label },
             isSelected = { state.filters.genre == it },
             onSelect = viewModel::selectGenre,
+            allDescription = "All genres",
         )
         FacetChips(
             title = "Quality",
@@ -677,6 +695,7 @@ private fun FilterSheetContent(
             label = { it.label },
             isSelected = { state.filters.quality == it },
             onSelect = viewModel::selectQuality,
+            allDescription = "All qualities",
         )
         if (!state.isVip) {
             Text("Plan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
@@ -699,10 +718,14 @@ private fun FilterSheetContent(
         )
         SearchSort.entries.forEach { sort ->
             Row(
+                // CL-2: the row, its radio and its label must read as one option —
+                // "Newest, Selected" — not as a RadioButton that only says
+                // "Selected" or "Not selected".
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
-                    .clickable { viewModel.setSort(sort) },
+                    .clickable { viewModel.setSort(sort) }
+                    .semantics(mergeDescendants = true) { },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 RadioButton(selected = state.sort == sort, onClick = { viewModel.setSort(sort) })
@@ -744,6 +767,9 @@ private fun <T> FacetChips(
     label: (T) -> String,
     isSelected: (T) -> Boolean,
     onSelect: (T) -> Unit,
+    // CL-3: the spoken name for the "All" option in this group, so four rows
+    // of "All" do not all announce identically. The visible label stays "All".
+    allDescription: String,
 ) {
     Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -753,6 +779,11 @@ private fun <T> FacetChips(
                 selected = isSelected(option),
                 onClick = { onSelect(option) },
                 label = { Text(label(option)) },
+                modifier = if (label(option) == "All") {
+                    Modifier.semantics { contentDescription = allDescription }
+                } else {
+                    Modifier
+                },
             )
         }
     }

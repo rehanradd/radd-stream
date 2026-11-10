@@ -445,7 +445,8 @@ fun SeeAllButton(onClick: () -> Unit, label: String = "See all") {
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-        modifier = Modifier.heightIn(min = 40.dp),
+        // E-T5: the button was 40dp tall. 48dp is the touch-target floor.
+        modifier = Modifier.heightIn(min = 48.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelLarge)
     }

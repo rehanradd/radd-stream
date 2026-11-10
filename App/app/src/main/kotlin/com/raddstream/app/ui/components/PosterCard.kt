@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.ui.theme.RaddArtScrim
 
 /**
  * The canonical catalog tile. Used by Home rails, the search grid, My List and
@@ -138,7 +139,7 @@ fun PosterCard(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(6.dp)
-                            .size(28.dp)
+                            .size(48.dp)
                             .background(
                                 MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
                                 CircleShape,
@@ -188,19 +189,27 @@ fun PosterCard(
                 }
 
                 post.imdbRating?.takeIf { it.isNotBlank() }?.let { rating ->
-                    Text(
-                        text = "★ $rating",
-                        color = MaterialTheme.colorScheme.tertiary,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.Bold,
-                        // Decorative: the merged tile description already says
-                        // "rating 8.1 out of 10", and a node that clears its own semantics is
-                        // how a Compose text stops being read a second time.
+                    // E-C1: the rating sat in tertiary directly on the artwork —
+                    // 2.28:1 on white art, 1.73:1 on mid-grey. It now sits on a
+                    // RaddArtScrim plate, like every other badge over artwork.
+                    Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
                             .padding(6.dp)
-                            .clearAndSetSemantics { },
-                    )
+                            .background(RaddArtScrim, RoundedCornerShape(4.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    ) {
+                        Text(
+                            text = "★ $rating",
+                            color = MaterialTheme.colorScheme.tertiary,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            // Decorative: the merged tile description already says
+                            // "rating 8.1 out of 10", and a node that clears its own semantics is
+                            // how a Compose text stops being read a second time.
+                            modifier = Modifier.clearAndSetSemantics { },
+                        )
+                    }
                 }
             }
 

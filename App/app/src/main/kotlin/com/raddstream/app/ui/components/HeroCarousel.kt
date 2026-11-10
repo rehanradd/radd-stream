@@ -341,7 +341,12 @@ private fun HeroSlide(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
                         contentColor = MaterialTheme.colorScheme.onBackground,
                     ),
-                    modifier = Modifier.height(52.dp),
+                    // CL-6: the button's visible text is "My List", the same words
+                    // as the nav tab — so it announces what the tap does instead:
+                    // "Save to My List", or "Saved to My List" once saved.
+                    modifier = Modifier
+                        .height(52.dp)
+                        .semantics { contentDescription = if (isFavorite) "Saved to My List" else "Save to My List" },
                 ) {
                     Icon(
                         imageVector = if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
@@ -384,12 +389,12 @@ private fun HeroBadge(text: String, subdued: Boolean = false) {
  * reads at a glance, and each dot jumps the pager to its slide.
  *
  * The painted dot is 7dp tall and used to be the only thing a finger could aim at. Each one now
- * sits inside the [DOT_TOUCH_WIDTH] by [DOT_TOUCH_HEIGHT] box — 44dp of vertical room, which the
- * artwork has to spare, and 24dp of width, the WCAG 2.2 AA minimum. Wider is not better here:
- * six of these banners at a 44dp square would run into the Watch Now button, and a dot whose hit
- * box covers another control does not help anyone. Each dot also says what it is in words and
- * carries a `selected` state, because the visual stretch was the only thing that used to show
- * which slide is up.
+ * sits inside the [DOT_TOUCH_WIDTH] by [DOT_TOUCH_HEIGHT] box — 48dp square, the WCAG 2.2 AA
+ * minimum in both directions (the 24dp width it used to have failed Robo's 48dp touch-target
+ * floor). Six 48dp dots crowd the Watch Now button, so the inter-dot spacing is 2dp instead of
+ * 6dp; a dot whose hit box covers another control does not help anyone. Each dot also says what
+ * it is in words and carries a `selected` state, because the visual stretch was the only thing
+ * that used to show which slide is up.
  */
 @Composable
 private fun HeroIndicator(
@@ -401,7 +406,7 @@ private fun HeroIndicator(
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         repeat(count) { index ->
@@ -445,11 +450,11 @@ private const val MAX_PILL_LENGTH = 18
 private const val AUTO_ADVANCE_MS = 5_000L
 
 /**
- * The page dot's hit box: 44dp of height is room the artwork can spare, and 24dp of width is
- * the WCAG 2.2 AA minimum. The painted dot inside it stays 7dp.
+ * The page dot's hit box: 48dp square, the WCAG 2.2 AA minimum in both directions.
+ * The painted dot inside it stays 7dp.
  */
-private val DOT_TOUCH_HEIGHT: Dp = 44.dp
-private val DOT_TOUCH_WIDTH: Dp = 24.dp
+private val DOT_TOUCH_HEIGHT: Dp = 48.dp
+private val DOT_TOUCH_WIDTH: Dp = 48.dp
 
 /**
  * The banner's height. A rounded, inset hero wants ~16:9 of a phone screen plus the text
