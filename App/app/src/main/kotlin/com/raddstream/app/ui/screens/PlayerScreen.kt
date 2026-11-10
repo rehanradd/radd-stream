@@ -191,7 +191,6 @@ import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
 import com.raddstream.app.ui.theme.RaddCoral400
 import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddDanger
-import com.raddstream.app.ui.theme.RaddHudCard
 import com.raddstream.app.ui.theme.PlayerChromeTheme
 import com.raddstream.app.ui.theme.RaddHudPillIdle
 import com.raddstream.app.ui.theme.RaddHudToast
@@ -665,10 +664,20 @@ private fun PlayerScreenContent(
         if (state.isBuffering && !state.isPlaying && state.giveUp == null &&
             state.startPhase == StartPhase.NONE
         ) {
-            PlayerLoadingIndicator(
-                label = stringResource(R.string.player_buffering),
+            // Robo run 7: the loading notice's title was unreadable over the
+            // frame on a translucent plate — the same rule holds here. The
+            // bare "Buffering…" sat directly on the video frame; it gets the
+            // notice's solid plate, so the wait is readable over any frame.
+            Surface(
+                color = RaddPlayerStage,
+                shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.align(Alignment.Center),
-            )
+            ) {
+                PlayerLoadingIndicator(
+                    label = stringResource(R.string.player_buffering),
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
         }
 
         // The window before the first frame is the one a viewer cannot tell apart from a
@@ -2410,11 +2419,17 @@ private fun StartNoticeCard(
                 .size(32.dp),
         )
         // LC-1: the notice floats over the live video frame, so it gets its own
-        // solid plate — white on RaddHudCard is >= 7:1 over any frame, where
-        // bare white over a bright frame was ~1:1. The plate never animates
-        // with the chrome fade: it is either up, or it is gone.
+        // solid plate — bare white over a bright frame was ~1:1. Robo run 7
+        // flagged the notice's title at 1.06:1: the old plate was RaddHudCard,
+        // black at 60% — over a bright frame it composites to mid-grey, and
+        // the 65%-white title on that mid-grey is ~3.5:1, under the 4.5:1
+        // floor (the old ">= 7:1 over any frame" only holds for full white).
+        // The plate is now the solid stage colour and the title is full
+        // white, so the reading no longer depends on the frame behind it.
+        // The plate never animates with the chrome fade: it is either up, or
+        // it is gone.
         Surface(
-            color = RaddHudCard,
+            color = RaddPlayerStage,
             shape = MaterialTheme.shapes.medium,
             modifier = Modifier.padding(horizontal = 32.dp),
         ) {
@@ -2436,7 +2451,9 @@ private fun StartNoticeCard(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     title,
-                    color = Color.White.copy(alpha = 0.65f),
+                    // Robo run 7: the 65%-white title on the old translucent
+                    // plate read 1.06:1. Full white on the solid plate.
+                    color = Color.White,
                     style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
                     maxLines = 2,
@@ -2449,7 +2466,10 @@ private fun StartNoticeCard(
                 Spacer(Modifier.height(4.dp))
                 Text(
                     attemptLabel,
-                    color = Color.White.copy(alpha = 0.6f),
+                    // Robo run 7: 60% white on the old plate was under the
+                    // floor over a bright frame. 85% is the floor the audit
+                    // allows for these sub-lines.
+                    color = Color.White.copy(alpha = 0.85f),
                     style = MaterialTheme.typography.bodySmall,
                     textAlign = TextAlign.Center,
                 )
@@ -2468,7 +2488,9 @@ private fun StartNoticeCard(
                     Spacer(Modifier.height(2.dp))
                     Text(
                         stringResource(R.string.player_quality_label, rungLabel),
-                        color = Color.White.copy(alpha = 0.6f),
+                        // Robo run 7: same as the attempt line above — 60%
+                        // white was under the floor over a bright frame.
+                        color = Color.White.copy(alpha = 0.85f),
                         style = MaterialTheme.typography.bodySmall,
                         textAlign = TextAlign.Center,
                     )

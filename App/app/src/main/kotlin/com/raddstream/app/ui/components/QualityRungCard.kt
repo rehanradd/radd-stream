@@ -156,6 +156,12 @@ private fun RungRow(
                         text = facts,
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        // Robo run 7: every rung's facts line said the same
+                        // "Hindi + English audio" — the spoken line carries
+                        // its rung, the same pattern as the detail line above.
+                        modifier = Modifier.semantics {
+                            contentDescription = "${option.title}: $facts"
+                        },
                     )
                 }
             }

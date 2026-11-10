@@ -165,6 +165,12 @@ fun SectionHeader(
  * The band travels at a constant speed ([SHIMMER_PERIOD_MS] per pass), which is what makes
  * it feel calm rather than throb. With reduced motion on, the same box is painted as a
  * static block, so the placeholder never disappears and nothing moves.
+ *
+ * Robo run 7: the Home skeleton bars were read as low-contrast text (1.09:1) in
+ * runs 6 and 7 — the run-6 "sampling artifact" reading changed nothing, so the
+ * flag came back identical. The bars are decorative: they carry no words, so
+ * they leave the accessibility tree entirely ([clearAndSetSemantics]) instead
+ * of standing in it as something a contrast check can sample.
  */
 @Composable
 fun ShimmerBox(
@@ -174,7 +180,7 @@ fun ShimmerBox(
     val reduceMotion = rememberReduceMotion()
     val base = MaterialTheme.colorScheme.surfaceVariant
     if (reduceMotion) {
-        Box(modifier.clip(shape).background(base.copy(alpha = 0.5f)))
+        Box(modifier.clip(shape).background(base.copy(alpha = 0.5f)).clearAndSetSemantics { })
         return
     }
     val highlight = MaterialTheme.colorScheme.onSurfaceVariant
@@ -203,7 +209,10 @@ fun ShimmerBox(
                         end = Offset(x + band, size.height),
                     )
                 )
-            },
+            }
+            // Robo run 7: decorative placeholder — no words, no node in the
+            // accessibility tree (see the KDoc above).
+            .clearAndSetSemantics { },
     )
 }
 

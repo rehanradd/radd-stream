@@ -29,7 +29,7 @@ class QualityRungCardTest {
     @get:Rule
     val compose = createComposeRule()
 
-    private fun option(band: String, title: String) = QualityOption(
+    private fun option(band: String, title: String, audioLanguages: List<String> = emptyList()) = QualityOption(
         band = band,
         title = title,
         streamId = "h-$band",
@@ -40,6 +40,7 @@ class QualityRungCardTest {
         resumable = false,
         copies = 1,
         isProviderPage = false,
+        audioLanguages = audioLanguages,
     )
 
     private fun showCard() {
@@ -76,6 +77,43 @@ class QualityRungCardTest {
         compose.onAllNodes(hasContentDescription("HD - X264: Plays here"))
             .assertCountEquals(1)
         compose.onAllNodes(hasContentDescription("Full HD · X264: Plays here"))
+            .assertCountEquals(1)
+    }
+
+    @Test
+    fun factsLinesSpeakTheirRung() {
+        // Robo run 7: all four rungs said the same "Hindi + English audio"
+        // — the facts line carries its rung now, so a screen reader can
+        // tell the 4K row from the 480p one. The painted text stays the
+        // short facts line, the same pattern as the detail lines above.
+        val scope = LadderForScope(
+            options = listOf(
+                option("2160p", "4K Ultra HD", audioLanguages = listOf("Hindi", "English")),
+                option("1080p", "Full HD", audioLanguages = listOf("Hindi", "English")),
+                option("720p", "HD", audioLanguages = listOf("Hindi", "English")),
+                option("480p", "480p", audioLanguages = listOf("Hindi", "English")),
+            ),
+            autoBand = "2160p",
+            downloadOnlyBands = emptyList(),
+        )
+        compose.setContent {
+            RaddStreamTheme {
+                QualityRungCard(
+                    ladder = scope,
+                    selectedBand = null,
+                    onPlayRung = {},
+                    onKeepRung = {},
+                    tierLabel = { "Standard" },
+                )
+            }
+        }
+        compose.onAllNodes(hasContentDescription("4K Ultra HD: Hindi + English audio"))
+            .assertCountEquals(1)
+        compose.onAllNodes(hasContentDescription("Full HD: Hindi + English audio"))
+            .assertCountEquals(1)
+        compose.onAllNodes(hasContentDescription("HD: Hindi + English audio"))
+            .assertCountEquals(1)
+        compose.onAllNodes(hasContentDescription("480p: Hindi + English audio"))
             .assertCountEquals(1)
     }
 }
