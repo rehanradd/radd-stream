@@ -6,12 +6,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.ui.theme.RaddStreamTheme
-import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -29,11 +29,18 @@ import org.robolectric.RobolectricTestRunner
  * catalog grid hands a [PosterCard] a `GridCells.Adaptive(minSize = 120.dp)` cell
  * (`CatalogGridColumns`), but Robolectric composes into its own default 320dp-wide window, so an
  * unconstrained `fillMaxWidth` card here gets a 320dp-wide artwork — at the tile's 0.68 aspect
- * ratio that alone is ~470dp tall, i.e. the entire window — and both text lines land below the
- * fold. `assertIsDisplayed` is a viewport assertion, so the three cases below failed on geometry
- * while being right about content: the component really does render the cleaned title, and really
- * does paint "2024 · Movie" as its own line. Confining the tile to a grid cell is what makes the
- * test describe the layout the app builds instead of a window it never does.
+ * ratio that alone is ~470dp tall, i.e. the entire window — and the tile lands below the fold.
+ * `assertIsDisplayed` is a viewport assertion, so the cases below failed on geometry while being
+ * right about content. Confining the tile to a grid cell is what makes the test describe the
+ * layout the app builds instead of a window it never does.
+ *
+ * **Since the Robo run-2 a11y fix (Session 130) the tile speaks one merged sentence.** The
+ * title, year/medium line, badges and progress are paint in the text column
+ * (`clearAndSetSemantics`), and the tile's root carries the whole sentence as its content
+ * description — so a screen reader hears each tile once instead of the same words four times.
+ * These tests therefore pin the spoken sentence, not the two painted lines: the provenance
+ * facts (cleaned title wins, year + medium present, empty clean title falls back) are the same,
+ * asserted through the one node the user actually hears.
  */
 @RunWith(RobolectricTestRunner::class)
 class PosterCardProvenanceTest {
@@ -60,28 +67,36 @@ class PosterCardProvenanceTest {
         }
     }
 
+    /**
+     * The tile's one spoken sentence for these posts: cleaned title, then "2024 · Movie".
+     * No rating, no audio badges (the test post carries no language/industry), no progress.
+     */
+    private val tileSpeech = "Inception, 2024 · Movie"
+
     @Test
     fun `a cleaned title wins over the raw page title`() {
         showTile(post(raw = "VegaMovies · Inception (2024) [1080p]", clean = "Inception"))
-        compose.onNode(hasText("Inception", substring = false)).assertIsDisplayed()
-        assertFalse(
+        compose.onNode(hasContentDescription(tileSpeech, substring = false)).assertIsDisplayed()
+        assertTrue(
             "the raw page title reached the screen, so provenance leaked",
-            compose.onAllNodes(hasText("VegaMovies", substring = true)).fetchSemanticsNodes().isNotEmpty(),
+            compose.onAllNodes(hasContentDescription("VegaMovies", substring = true))
+                .fetchSemanticsNodes().isEmpty(),
         )
     }
 
     @Test
-    fun `year and medium render as their own line`() {
+    fun `year and medium ride in the tile's one spoken sentence`() {
         showTile(post(raw = "Inception", clean = null))
-        // Two nodes with two exact strings, not one merged label: onNode refuses an ambiguous or
-        // missing match, so both lines being resolvable on their own IS the "own line" claim.
-        compose.onNode(hasText("Inception", substring = false)).assertIsDisplayed()
-        compose.onNode(hasText("2024 · Movie", substring = false)).assertIsDisplayed()
+        // One node, one sentence: the title and the "2024 · Movie" details are both in it, in
+        // that order. The two painted lines below the poster are paint-only since Session 130,
+        // so two separately resolvable text nodes no longer exist — and must not, or TalkBack
+        // hears the tile four times over.
+        compose.onNode(hasContentDescription(tileSpeech, substring = false)).assertIsDisplayed()
     }
 
     @Test
     fun `an empty clean title falls back to the raw title rather than rendering blank`() {
         showTile(post(raw = "Inception", clean = ""))
-        compose.onNode(hasText("Inception", substring = false)).assertIsDisplayed()
+        compose.onNode(hasContentDescription(tileSpeech, substring = false)).assertIsDisplayed()
     }
 }
