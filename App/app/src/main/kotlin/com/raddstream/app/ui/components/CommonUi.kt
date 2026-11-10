@@ -55,6 +55,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import android.provider.Settings
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -440,14 +443,28 @@ fun rememberGridEndlessPaging(
 
 /** A small text button used as a section "See all" affordance. */
 @Composable
-fun SeeAllButton(onClick: () -> Unit, label: String = "See all") {
+fun SeeAllButton(
+    onClick: () -> Unit,
+    label: String = "See all",
+    /**
+     * The spoken name. Every Home rail renders one of these, so the bare
+     * "See all" repeats once per rail and a screen reader cannot tell the
+     * Movies link from the Series one (Robo run 6). Callers pass their
+     * section — "See all Movies" — and the button speaks that; the painted
+     * text stays the short "See all". Defaults to the label, so a lone
+     * button still speaks its own words. The button carries the name (the
+     * SwitchRow pattern) and the painted text is silent, so it is heard
+     * exactly once.
+     */
+    contentDescription: String = label,
+) {
     Button(
         onClick = onClick,
         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
         // E-T5: the button was 40dp tall. 48dp is the touch-target floor.
-        modifier = Modifier.heightIn(min = 48.dp),
+        modifier = Modifier.heightIn(min = 48.dp).semantics { this.contentDescription = contentDescription },
     ) {
-        Text(label, style = MaterialTheme.typography.labelLarge)
+        Text(label, style = MaterialTheme.typography.labelLarge, modifier = Modifier.clearAndSetSemantics { })
     }
 }

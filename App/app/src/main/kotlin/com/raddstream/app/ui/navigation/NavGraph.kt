@@ -89,9 +89,12 @@ internal const val BottomNavIndicatorTag = "bottomNavIndicator"
  * the bar no longer uses NavigationBarItem at all. This tab owns its own
  * clickable — the full 80dp bar height — and its own indicator pill, raised
  * to 48dp so no node in the bar is under the 48dp touch-target floor. The
- * bar stays exactly 80dp (the M3 spec height); never fillMaxHeight() on a
- * tab — that expands the bar to fill the screen (run 4). The label keeps
- * M3's labelMedium so the taller pill still fits the bar.
+ * bar is 80dp of content plus the system nav inset (run 6: forcing the bar
+ * to exactly 80dp total crushed the tabs to 32dp on a 3-button-nav device,
+ * because M3 applies the nav-bars inset inside the bar — see the
+ * NavigationBar call below); never fillMaxHeight() on a tab — that expands
+ * the bar to fill the screen (run 4). The label keeps M3's labelMedium so
+ * the taller pill still fits the bar.
  * Internal so BottomNavTouchTargetTest can pin the pill height directly.
  */
 @Composable
@@ -283,17 +286,22 @@ fun RaddStreamNavGraph(
             if (showBottomBar) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    // Robo run 5: the bottom-nav touch target still measured
-                    // 32dp — the M3 NavigationBarItem's active-indicator
-                    // pill. Run 4 set the bar to exactly 80dp and pinned the
-                    // item clickables at 80dp, but Robo keeps measuring the
-                    // 32dp pill inside the item, so the bar no longer uses
-                    // NavigationBarItem: BottomNavTab owns its own clickable
-                    // (the full 80dp bar height) and its own indicator pill,
-                    // raised to 48dp. The bar stays exactly 80dp (the M3 spec
-                    // height); never fillMaxHeight() on a tab — that expands
-                    // the bar to fill the screen (run 4).
-                    modifier = Modifier.height(80.dp),
+                    // Robo run 6: the bottom-nav touch target STILL measured
+                    // 32dp — and the run-5 pill is 48dp, so the pill was never
+                    // the measured node. The measured node is the tab itself,
+                    // and the cause is the bar's own height: M3 1.3.0's
+                    // NavigationBar lays its Row out at minHeight 80dp AND
+                    // applies the system navigation-bars inset inside it
+                    // (windowInsetsPadding). Forcing the bar to exactly 80dp
+                    // (the run-4 fix) leaves the Row 80dp total, so a 48dp
+                    // system nav bar (3-button navigation, the Robo device)
+                    // eats 48dp of it and the tabs are measured with 32dp of
+                    // height — exactly the 80 - 48 the console reports. The
+                    // 80dp is the M3 CONTENT height, not the bar's total: the
+                    // bar sizes to its content plus the inset, so no height
+                    // is forced here and the tabs keep their full 80dp.
+                    // Never fillMaxHeight() on a tab — that expands the bar
+                    // to fill the screen (run 4).
                 ) {
                     bottomNavItems.forEach { item ->
                         val selected = currentRoute == item.route

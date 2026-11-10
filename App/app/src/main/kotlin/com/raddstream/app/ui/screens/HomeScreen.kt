@@ -861,7 +861,10 @@ private fun HomeRailSection(
                 SectionHeader(
                     title = section.title,
                     modifier = Modifier.padding(horizontal = 16.dp),
-                    action = { SeeAllButton(onClick = onSeeAll) },
+                    // Robo run 6: every rail's "See all" announced identically.
+                    // The button speaks its section, so Movies and Series are
+                    // distinct; the painted text stays the short "See all".
+                    action = { SeeAllButton(onClick = onSeeAll, contentDescription = "See all ${section.title}") },
                 )
                 MediaRail(items = section.items, key = { it.id }) { post ->
                     PosterCard(post = post, onClick = { onPostClick(post) })

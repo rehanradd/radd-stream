@@ -113,6 +113,21 @@ fun CatalogImage(
         }
     }
 
+    // A request that was never made — no URL, a gated load (metered
+    // connection with no mobile-data permission), or a disallowed host —
+    // must not shimmer forever: the shimmer is a loading state, and nothing
+    // is loading. The branded fallback says "no artwork" honestly, with the
+    // mark and the initials to look at. Robo run 6: a gated Detail poster
+    // showed as a flat dark surfaceVariant rectangle (image contrast 1.33)
+    // because the null model left the box blank behind the shimmer.
+    if (request == null) {
+        ImageFallbackCard(
+            label = fallbackLabel,
+            modifier = modifier,
+        )
+        return
+    }
+
     SubcomposeAsyncImage(
         model = request,
         contentDescription = contentDescription,

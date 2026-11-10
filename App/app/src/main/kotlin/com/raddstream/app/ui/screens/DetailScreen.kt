@@ -670,10 +670,12 @@ private fun PosterHeader(
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(16.dp)) {
         // The poster's own colour, sampled once it loads: a 1dp border in the
         // artwork accent frames the poster in its own palette. No bitmap yet
-        // (still loading, gated, or failed) means no border at all — the
-        // brand jade is the fallback inside rememberArtworkAccent, and a
-        // jade frame around a not-yet-loaded poster would be a decoration
-        // pretending to be a sample.
+        // (still loading, gated, or failed) means no accent sample — but the
+        // frame is still there, in the neutral outlineVariant, so the poster
+        // always reads as a defined card against the dark background instead
+        // of a flat rectangle that blends into it (Robo run 6: the unloaded
+        // poster's image contrast, 1.33). A neutral frame is not a fake
+        // accent sample: it claims no colour from the artwork.
         var posterBitmap by remember(post.id) { mutableStateOf<android.graphics.Bitmap?>(null) }
         val posterAccent = rememberArtworkAccent(posterBitmap)
         Box(
@@ -684,7 +686,7 @@ private fun PosterHeader(
                 .background(MaterialTheme.colorScheme.surfaceVariant)
                 .border(
                     width = 1.dp,
-                    color = if (posterBitmap != null) posterAccent.copy(alpha = 0.6f) else Color.Transparent,
+                    color = if (posterBitmap != null) posterAccent.copy(alpha = 0.6f) else MaterialTheme.colorScheme.outlineVariant,
                     shape = RoundedCornerShape(12.dp),
                 ),
             contentAlignment = Alignment.Center,
@@ -1359,6 +1361,21 @@ private fun EpisodeRow(
     }
 }
 
+/**
+ * The spoken name for a print card's best-option line. The painted text is
+ * the tier plus the playability ("Standard · Plays here"), and two prints at
+ * one quality share it — so the spoken line carries the print's own facts
+ * (its codec/size detail line) and its copy number, and each card speaks
+ * differently while the painted text stays the short label. Robo run 6.
+ * Pure, so PrintCardSpokenLabelTest pins it.
+ */
+internal fun printSpokenLabel(print: RankedPrint, copyIndex: Int, copyTotal: Int): String =
+    buildString {
+        append(print.bestOptionLabel.orEmpty())
+        if (print.detailLine.isNotBlank()) append(" · ").append(print.detailLine)
+        if (copyTotal > 1) append(", copy $copyIndex of $copyTotal")
+    }
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun PrintCard(
@@ -1402,10 +1419,20 @@ private fun PrintCard(
             }
             Spacer(Modifier.weight(1f))
             print.bestOptionLabel?.let {
+                // Robo run 6: two prints at one quality announced the same
+                // "Standard · Plays here" line — the label is the tier plus
+                // the playability, and neither names the print. The spoken
+                // line carries the print's own facts (codec/size) and its
+                // copy number, so each card speaks differently; the painted
+                // text stays the short label. The run-3 pattern (the rung's
+                // subtext carries its quality in its spoken name).
                 Text(
                     text = it,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.semantics {
+                        contentDescription = printSpokenLabel(print, copyIndex, copyTotal)
+                    },
                 )
             }
         }
