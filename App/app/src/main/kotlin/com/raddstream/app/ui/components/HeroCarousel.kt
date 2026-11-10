@@ -369,7 +369,7 @@ private fun HeroBadge(text: String, subdued: Boolean = false) {
         Modifier
             .clip(RoundedCornerShape(8.dp))
             .background(
-                if (subdued) scheme.scrim.copy(alpha = 0.35f) else scheme.surface.copy(alpha = 0.55f)
+                if (subdued) scheme.scrim.copy(alpha = 0.6f) else scheme.surface.copy(alpha = 0.55f)
             )
             .padding(horizontal = 8.dp, vertical = 3.dp),
     ) {
