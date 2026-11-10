@@ -12,12 +12,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
@@ -128,10 +131,20 @@ fun CatalogImage(
         return
     }
 
+    // Robo run 8: until this request has produced a bitmap, the box holds the
+    // loading shimmer, not an image — a flat dark rectangle the checker scores
+    // as a picture (McLintock! detail poster, 1.63:1 — the sampled colours are
+    // the poster's own surfaceVariant box and outlineVariant frame, no artwork
+    // at all). The image node stays out of the accessibility tree until there
+    // is an image to describe (the run-7 ShimmerBox pattern); on success it
+    // appears with its content description, and on error the fallback card
+    // speaks instead. Keyed on the request, so a new URL starts hidden again.
+    var loaded by remember(request) { mutableStateOf(false) }
+
     SubcomposeAsyncImage(
         model = request,
         contentDescription = contentDescription,
-        modifier = modifier,
+        modifier = modifier.then(if (loaded) Modifier else Modifier.clearAndSetSemantics { }),
         contentScale = contentScale,
         // A real request in flight gets the moving shimmer; a gated or blank URL never
         // reaches this slot, so the surface behind the card stays the truth in that case.
@@ -140,7 +153,11 @@ fun CatalogImage(
         // The artwork-accent hook: only a caller that passed onBitmap pays the
         // decode-to-bitmap, and only on a real success — a gated or failed load
         // reports nothing, so the caller keeps its fallback colour.
-        onSuccess = { state -> onBitmap?.invoke(state.result.drawable.toBitmap()) },
+        onSuccess = { state ->
+            loaded = true
+            onBitmap?.invoke(state.result.drawable.toBitmap())
+        },
+        onError = { loaded = false },
     )
 }
 

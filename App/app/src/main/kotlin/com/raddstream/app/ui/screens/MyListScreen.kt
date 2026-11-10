@@ -97,26 +97,11 @@ fun MyListScreen(
                 },
                 modifier = Modifier.padding(contentPadding),
             )
-            state.favorites.isEmpty() -> Column(
+            state.favorites.isEmpty() -> MyListEmptyContent(
+                popular = state.popular,
+                onPostClick = onPostClick,
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
-            ) {
-                EmptyState(
-                    title = "Your list is empty",
-                    message = "Tap the heart on any movie or series to save it here for quick access.",
-                    icon = {
-                        Icon(
-                            Icons.Default.FavoriteBorder,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(40.dp),
-                        )
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                if (state.popular.isNotEmpty()) {
-                    PopularRow(popular = state.popular, onPostClick = onPostClick)
-                }
-            }
+            )
             else -> Column(Modifier.fillMaxSize().padding(contentPadding)) {
                 state.hiddenNotice?.let { notice ->
                     Text(
@@ -162,6 +147,43 @@ fun MyListScreen(
                     }
                 }
             }
+        }
+    }
+}
+
+/**
+ * Robo run 8: the My List empty state never showed its "Popular right now"
+ * row — and Robo measured three 32dp clickables just above the nav bar.
+ * Both are the same layout bug: [EmptyState] is a fillMaxSize Box, so inside
+ * the Column it took the whole height and the [PopularRow] below it was laid
+ * out with no height left — off-screen, its three poster cards collapsed to
+ * a strip at the content's bottom edge, one per column. The message now takes
+ * the remaining space (weight 1f) and the row takes its natural height, so
+ * the suggestions are visible and every card is a full-height tile.
+ * Internal so MyListEmptyContentTest can pin it without the Hilt ViewModel.
+ */
+@Composable
+internal fun MyListEmptyContent(
+    popular: List<Post>,
+    onPostClick: (Post) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier) {
+        EmptyState(
+            title = "Your list is empty",
+            message = "Tap the heart on any movie or series to save it here for quick access.",
+            icon = {
+                Icon(
+                    Icons.Default.FavoriteBorder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.secondary,
+                    modifier = Modifier.size(40.dp),
+                )
+            },
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+        )
+        if (popular.isNotEmpty()) {
+            PopularRow(popular = popular, onPostClick = onPostClick)
         }
     }
 }
