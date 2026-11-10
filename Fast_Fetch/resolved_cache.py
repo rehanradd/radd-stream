@@ -422,11 +422,15 @@ def lookup_cache(conn: sqlite3.Connection, link_id: int, want: str = "watch", *,
 
     ``want`` mirrors the stage-2 gate: ``"download"`` accepts a single file
     only — a playlist is segments, not a file — ``"watch"`` accepts playlist or
-    file. A row is refused when its horizon has passed, when the failure
-    circuit is open, or (unless the caller opts in) when it is marked
-    IP-bound, because a shared cache must not replay one client's token to
-    another. This is the only check the cache path adds over the request
-    route's own adult/18+ gate, which must ALWAYS run before this function.
+    file. A banked viewer-kind row (an HTML page / Drive /view / mega share,
+    banked "for audit") is never playable media and is refused for every
+    want — §6 fix 1: watch and the "either" fallback accept file or
+    playlist only, exactly as this docstring promises. A row is refused
+    when its horizon has passed, when the failure circuit is open, or
+    (unless the caller opts in) when it is marked IP-bound, because a
+    shared cache must not replay one client's token to another. This is
+    the only check the cache path adds over the request route's own
+    adult/18+ gate, which must ALWAYS run before this function.
     """
     if want not in ("watch", "download", "either"):
         want = "either"
@@ -439,17 +443,22 @@ def lookup_cache(conn: sqlite3.Connection, link_id: int, want: str = "watch", *,
     params: list = [int(link_id), now, MAX_FAIL_COUNT]
     if want == "download":
         sql += " AND kind = 'file'"
+    else:
+        # §6 fix 1: a banked viewer-kind row is never playable media, so no
+        # want may serve it — watch and the "either" fallback accept file
+        # or playlist only, exactly as the docstring promises.
+        sql += " AND kind IN ('file', 'playlist')"
     if not allow_ip_bound:
         sql += " AND (ip_bound IS NULL OR ip_bound = 0)"
     row = conn.execute(sql, params).fetchone()
     if row is None:
         return None
     hit = dict(zip((c for c in _ROW_COLUMNS), tuple(row)))
-    # Task #24 law (c), the legacy-row defence: ~185,000 rows were banked with
-    # kind='file' BEFORE the shape law existed, so the stored kind is not
-    # evidence for them. The download gate re-checks the URL shape at read
-    # time, and law (b) is re-applied on the way out: a fragment banked by an
-    # older build never reaches a public play_url either.
+    # Task #24 law (c), the legacy-row defence: rows banked with kind='file'
+    # BEFORE the shape law existed may carry viewer shapes, so the stored
+    # kind is not evidence for them. The download gate re-checks the URL
+    # shape at read time, and law (b) is re-applied on the way out: a
+    # fragment banked by an older build never reaches a public play_url either.
     if isinstance(hit.get("url"), str):
         if "#" in hit["url"]:
             hit["url"] = _strip_fragment(hit["url"])

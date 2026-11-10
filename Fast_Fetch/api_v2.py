@@ -1735,6 +1735,18 @@ def route_post(handler, path: str, query: dict, *, db_path, operator: bool,
                 latency_ms=max(0, latency) if latency is not None else None,
                 detail=str(body.get("error") or "")[:200],
                 client_ref=str(body.get("device") or "")[:64])
+            if event == "failed":
+                # §6 fix 2: a client "failed" report is measured evidence —
+                # the player actually tried this link — so it strikes the
+                # resolved_cache failure circuit, exactly as the
+                # MAX_FAIL_COUNT docstring promises. Other events ("played",
+                # "stalled", "resolved") never strike. A cache problem must
+                # never break the report itself.
+                try:
+                    import resolved_cache
+                    resolved_cache.note_failure(conn, int(link_id))
+                except Exception:  # noqa: BLE001
+                    pass
             json_response(handler, {"ok": True, "recorded": True,
                                     "report_id": report_id, "event": event,
                                     "link_ref": link_ref_for(int(link_id), secret)},

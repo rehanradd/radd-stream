@@ -1124,13 +1124,19 @@ class TestViewerShapeGate(unittest.TestCase):
         # CROWN ORDER qoder14 (2026-11-05): pin the number of distinct sqlite
         # connections ONE cache-hit /api/v1/download request opens, so a later
         # refactor cannot silently add another connect per request. Full audit
-        # and per-line provenance: Fast_Fetch/HITPATH_CONNECTIONS.md. Measured
-        # today = 3: redact.link_is_adult (redact.py:1086, own connect),
-        # the cache lookup (viewer.py:3325 -> get_db viewer.py:140), the
-        # free-tier shortener tail (viewer.py:3398 -> get_db again). The route
-        # does NOT call _ensure_schema on this branch (only the accounts/v2
-        # branches do, :3024/:3037), signing_secret() is process-cached, and
-        # the limiter is in-memory — all verified against the same lines.
+        # and per-line provenance: Fast_Fetch/HITPATH_CONNECTIONS.md.
+        # Rebased onto main 14d9063 (2026-11-11): the catalog side opens 3 —
+        # redact.link_is_adult (own connect), the quality gate
+        # (quality_gate_block_reason -> get_db, main's security release),
+        # the cache lookup (viewer.py -> get_db) — and the playback-analytics
+        # tail opens 1–2 more on the user-state DB: usage_stats.record_event
+        # every request, plus accounts_api.state_db's schema check once per
+        # process (its _SCHEMA_READY global), so the analytics count is 1
+        # when a previous request already warmed it, 2 on a cold process.
+        # The branch's shortener tail it counted opens nothing here:
+        # shortening runs only for `?via=web` since the 2026-11-06 owner
+        # decision. The route does NOT call _ensure_schema on this path,
+        # signing_secret() is process-cached, and the limiter is in-memory.
         #
         # The counter wraps the stdlib sqlite3.connect attribute itself, so
         # every module that calls sqlite3.connect (viewer, redact, admin_panel
@@ -1207,16 +1213,28 @@ class TestViewerShapeGate(unittest.TestCase):
         self.assertEqual(resp.status, 302,
                          f"the pinned path must be a warm cache hit, not a "
                          f"fallthrough (got {resp.status}: {body[:120]!r})")
+        # The catalog side is pinned exactly; the analytics side is pinned
+        # as a 1–2 range (state_db's once-per-process schema check), and
+        # nothing may connect anywhere else. Changing any of these numbers
+        # requires updating HITPATH_CONNECTIONS.md WITH the code change.
+        import accounts
+        user_state = str(accounts.default_db_path())
+        catalog = [p for p in connects if p == tmp_path]
+        analytics = [p for p in connects if p == user_state]
         self.assertEqual(
-            len(connects), 3,
+            len(catalog), 3,
             "a cache-hit /api/v1/download request opened "
-            f"{len(connects)} sqlite connections (pinned 3: adult gate, "
-            "cache lookup, shortener tail — see HITPATH_CONNECTIONS.md); "
-            "changing this number requires updating that doc WITH the "
-            "code change, not silently")
-        self.assertTrue(all(p == tmp_path for p in connects),
-                        f"every counted connect must target the fixture DB, "
-                        f"got {connects}")
+            f"{len(catalog)} catalog connections (pinned 3: adult gate, "
+            "quality gate, cache lookup — see HITPATH_CONNECTIONS.md)")
+        self.assertIn(
+            len(analytics), (1, 2),
+            "the playback-analytics tail must open 1–2 user-state "
+            f"connections (record_event every request + state_db's "
+            f"once-per-process schema check), got {len(analytics)}")
+        self.assertEqual(
+            len(connects), len(catalog) + len(analytics),
+            "every counted connect must target the fixture DB or the "
+            f"user-state DB, got {connects}")
 
     def test_kind_gate_expectations(self):
         # THE HANDOFF ASSERTIONS (resolved_cache._derive_kind + fragment

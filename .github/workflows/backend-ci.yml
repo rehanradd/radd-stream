@@ -102,6 +102,69 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       files whose layout changes with the site, so they are run by the
 #       scraper's own agent at edit time rather than gating every push.
 #
+#
+#   MACHINE-READABLE EXCLUSION BLOCK (parsed by Fast_Fetch/test_ci_manifest.py
+#   — the drift guard). One line per top-level Fast_Fetch/test_*.py that is
+#   deliberately NOT a CI step. A new test file that appears in neither this
+#   block nor a run: step fails the guard: silence both ways is rot.
+#     EXCLUDED: test_all_sites.py  — live 10-site network audit; needs the internet
+#     EXCLUDED: test_10xflix_import.py  — per-site parser
+#     EXCLUDED: test_7starhd_import.py  — per-site parser
+#     EXCLUDED: test_9xmovies.py  — per-site parser
+#     EXCLUDED: test_audit_staging.py  — owner not yet verified offline
+#     EXCLUDED: test_backfill_animated_flag.py  — operator migration, not a suite
+#     EXCLUDED: test_backfill_tmdb.py  — operator migration, not a suite
+#     EXCLUDED: test_bolly4u_import.py  — per-site parser
+#     EXCLUDED: test_desicinemas.py  — per-site parser
+#     EXCLUDED: test_download_endpoint.py  — owner not yet verified offline
+#     EXCLUDED: test_filmyzilla_import.py  — per-site parser
+#     EXCLUDED: test_hdhub4u_import.py  — per-site parser
+#     EXCLUDED: test_hdtvb_import.py  — per-site parser
+#     EXCLUDED: test_hindilinks4u.py  — per-site parser
+#     EXCLUDED: test_hindilinks4u_retry.py  — per-site parser
+#     EXCLUDED: test_import_katmoviehd.py  — per-site parser
+#     EXCLUDED: test_katmoviehd.py  — per-site parser
+#     EXCLUDED: test_katmoviehd_import.py  — per-site parser
+#     EXCLUDED: test_moviezguru.py  — per-site parser
+#     EXCLUDED: test_multimovies_import.py  — per-site parser
+#     EXCLUDED: test_rareanimes_import.py  — per-site parser
+#     EXCLUDED: test_rogmovies_import.py  — per-site parser
+#     EXCLUDED: test_ssrmovies_import.py  — per-site parser
+#     EXCLUDED: test_toonworld4all.py  — per-site parser
+#     PROMOTED (this line replaces the old hold entry, which the guard's EXCLUDED_RE
+#     would otherwise read as a live exclusion and call an overlap):
+#     test_transient_dead_heal.py — NO LONGER EXCLUDED. History: it was UNTRACKED qoder13
+#       work sitting in the lane worktree (same class as test_fast_fetch_domains.py was at
+#       96c689e) and the old line was the honest hold, not a mute; the hold's own rule was
+#       "its owner must commit it, then it gets a real step", it committed tracked at
+#       1cfea81, and the step below is that promotion.
+#     EXCLUDED: test_vegamovies_import.py  — per-site parser
+#     EXCLUDED: test_world4ufree_import.py  — per-site parser
+#     Widened under order qoder12_ci_manifest_widen (2026-11-05): the guard's
+#     accounting used to glob TOP LEVEL ONLY, which is why every importers/
+#     suite below was named nowhere and nothing complained. Each now carries an
+#     explicit human-chosen line — a per-module decision, never a pattern that
+#     auto-excludes a directory. (The two importers RESOLVER suites that are
+#     offline-green got real run steps instead: test_host_resolvers.py, 171
+#     tests, and test_stream_resolvers.py, 45 tests, both verified offline on
+#     this lane before promotion.)
+#     EXCLUDED: importers/test_5movierulz_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_animahd_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_aryplus_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_desiserials_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_dramacool_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_filmiyin_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_filmyhit_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_filmywap_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_import_humtv.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_import_wp_family.py  — per-site parser family (captured Dooplay/WP page shapes, offline fixtures)
+#     EXCLUDED: importers/test_kisskh_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_kuttymovies_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_levidia_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_moviecok_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_moviesmela_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_pagalmovies_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#
 # KNOWN FAILURE MODES THIS FILE FIXES
 #   GitHub never ran any pipeline for this repo because the workflow files lived
 #   in App/.github/workflows/ and radd-stream/.github/workflows/ — discovery
@@ -216,6 +279,34 @@ jobs:
       # Offline, stdlib, in-memory fixture, no network.
       - name: 🧪 test_resolved_link_cache.py
         run: python3 -S Fast_Fetch/test_resolved_link_cache.py
+
+      # Phase-1 resolved cache (feat/phase1-resolved-cache, rebased onto
+      # main 14d9063): the request-path cache the viewer reads first and
+      # banks into — `resolved_cache` is authoritative on the read path and
+      # the B2 `resolved_link_cache` above stays as-is. The seven steps
+      # below are the branch's modules registered onto main's CI file (the
+      # branch's own file is an older 52-suite list and must not be taken).
+      # Offline, stdlib, in-memory/scratch fixtures, no network.
+      - name: 🧪 test_resolved_cache.py
+        run: python3 -S Fast_Fetch/test_resolved_cache.py
+
+      - name: 🧪 test_catalog_exporter.py
+        run: python3 -S Fast_Fetch/test_catalog_exporter.py
+
+      - name: 🧪 test_transient_dead_heal.py
+        run: python3 -S Fast_Fetch/test_transient_dead_heal.py
+
+      - name: 🧪 test_probe_coverage.py
+        run: python3 -S Fast_Fetch/test_probe_coverage.py
+
+      - name: 🧪 test_fast_fetch_domains.py
+        run: python3 -S Fast_Fetch/test_fast_fetch_domains.py
+
+      - name: 🧪 importers/test_stream_resolvers.py
+        run: python3 -S Fast_Fetch/importers/test_stream_resolvers.py
+
+      - name: 🧪 test_ci_manifest.py
+        run: python3 -S Fast_Fetch/test_ci_manifest.py
 
       # Scheduled maintenance inside serve (Session 123): the bounded
       # propagate + warm + heal tick, env-gated, memory-floor guarded.
@@ -424,6 +515,14 @@ jobs:
       # socket, no network.
       - name: 🧪 test_engagement_ladder.py
         run: python3 -S Fast_Fetch/test_engagement_ladder.py
+
+      # The engagement pillars' structural invariants (main, new since the
+      # branch was cut). 38 tests: streak/ladder/coin invariants against a
+      # fixture user-state DB in a tempfile — never the live DB, never the
+      # catalog, never a request. Stdlib only. Promoted (not excluded) because
+      # it is offline-green and cheap enough to run while the box is loaded.
+      - name: 🧪 test_engagement.py
+        run: python3 -S Fast_Fetch/test_engagement.py
 
       # The adult rule on the operator's own read. `fetch_database_payload(full=True)`
       # published `final_url`/`source_url`/`resource_id`/`intermediate_url` for a

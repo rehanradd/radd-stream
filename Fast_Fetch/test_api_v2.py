@@ -55,6 +55,7 @@ import catalog_api
 import catalog_v2
 import fast_fetch
 import redact
+import resolved_cache
 import viewer
 
 
@@ -1378,6 +1379,48 @@ class V2ProvenanceTests(V2WireFixture):
             "SELECT error FROM cat_link_evidence ORDER BY probed_at DESC LIMIT 1"
             ).fetchone()
         self.assertNotIn("vegadrive", (evidence[0] or "").lower())
+
+    def test_failed_report_strikes_the_resolved_cache_circuit(self):
+        """§6 fix 2: POST /links/{id}/report {"event": "failed"} is the
+        client-report path the MAX_FAIL_COUNT docstring promises — three
+        "failed" reports retire a fresh cache row, while "played" never
+        strikes it."""
+        now = time.time()
+        resolved_cache.record_resolved_cache(
+            self.conn, self.public_link_id,
+            {"url": "https://pixeldrain.com/api/file/s2yMcLkb",
+             "mime_type": "video/mp4", "service": "pixeldrain",
+             "expires_in": 3600.0},
+            now=now)
+        self.conn.commit()
+        self.assertIsNotNone(
+            resolved_cache.lookup_cache(self.conn, self.public_link_id,
+                                        want="watch", now=now))
+        for _ in range(resolved_cache.MAX_FAIL_COUNT):
+            reply = self.post(
+                f"/api/v2/links/{self.handle(self.public_link_id)}/report",
+                {"event": "failed", "ms": 900})
+            self.assertEqual(reply.status, 200)
+        self.assertIsNone(
+            resolved_cache.lookup_cache(self.conn, self.public_link_id,
+                                        want="watch", now=now),
+            "three client 'failed' reports must retire the row")
+        # A "played" report on a fresh row strikes nothing.
+        resolved_cache.record_resolved_cache(
+            self.conn, self.page_link_id,
+            {"url": "https://pixeldrain.com/api/file/s2yMcLkb",
+             "mime_type": "video/mp4", "service": "pixeldrain",
+             "expires_in": 3600.0},
+            now=now)
+        self.conn.commit()
+        reply = self.post(
+            f"/api/v2/links/{self.handle(self.page_link_id)}/report",
+            {"event": "played", "ms": 1200})
+        self.assertEqual(reply.status, 200)
+        row = self.conn.execute(
+            "SELECT fail_count FROM resolved_cache WHERE link_id = ?",
+            (self.page_link_id,)).fetchone()
+        self.assertEqual(row[0], 0, "a 'played' report must not strike")
 
     def test_feed_playlist_addresses_only_our_own_routes(self):
         """Every URI must be our own host and our own handle — never an upstream URL."""

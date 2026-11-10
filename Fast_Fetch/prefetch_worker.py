@@ -41,6 +41,11 @@ failed at its own job. Measured 2026-11-04: this host idles at load 6–8, so
 the default ceiling of 2.0 parks the worker permanently; run it with
 `--load-ceiling` tuned for the box (or let it fire only in quiet windows).
 
+CODE-ONLY LANDING: this file ships the worker; no daemon, cron, or systemd
+unit is created or started by the landing, and nothing schedules it. The run
+mode (tuned ceiling / quiet window / unit) is a separate ops decision — until
+then the pool does not run and the request path is the only resolver.
+
 Adult law applies here before anywhere else: the priority query excludes
 `is_18_plus=1` posts *and* any post sharing a `canonical_key` with a flagged
 one, so this worker never even resolves a link for a flagged work, let alone
@@ -134,8 +139,10 @@ def select_priority_posts(conn: sqlite3.Connection, limit: int) -> list[sqlite3.
     """Top `limit` works by the ledger's only honest popularity proxy.
 
     The adult exclusion is deliberately two clauses: a flagged row is out, and
-    so is every row whose `canonical_key` names a flagged work — 455 flagged
-    works are still reachable under an unflagged twin (AGENTS.md, known hole),
+    so is every row whose `canonical_key` names a flagged work — 407
+    unflagged twin rows across 394 mixed-flag keys (measured on production
+    `posts`; the same figure `catalog_exporter.py` pins, and the older
+    "442 / 455" pair is stale) are still reachable under an unflagged twin,
     and a prefetcher must not warm the twin of a hidden title.
     """
     return conn.execute(

@@ -579,7 +579,7 @@ class WorkflowSuiteCoverageTests(unittest.TestCase):
         "test_audit_staging.py", "test_backfill_animated_flag.py", "test_backfill_tmdb.py",
         "test_bolly4u_import.py", "test_desicinemas.py",
         "test_desiserials_import.py", "test_download_endpoint.py", "test_dramacool_import.py",
-        "test_engagement.py", "test_filmiyin_import.py", "test_filmyhit_import.py",
+        "test_filmiyin_import.py", "test_filmyhit_import.py",
         "test_filmywap_import.py", "test_filmyzilla_import.py", "test_hdhub4u_import.py",
         "test_hdtvb_import.py", "test_hindilinks4u.py", "test_hindilinks4u_retry.py",
         "test_import_humtv.py", "test_import_katmoviehd.py",
@@ -588,7 +588,7 @@ class WorkflowSuiteCoverageTests(unittest.TestCase):
         "test_moviecok_import.py", "test_moviesmela_import.py", "test_moviezguru.py",
         "test_multimovies_import.py", "test_pagalmovies_import.py",
         "test_rareanimes_import.py", "test_rogmovies_import.py",
-        "test_ssrmovies_import.py", "test_stream_resolvers.py",
+        "test_ssrmovies_import.py",
         "test_toonworld4all.py", "test_vegamovies_import.py", "test_world4ufree_import.py",
     })
 

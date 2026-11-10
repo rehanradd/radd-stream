@@ -13,7 +13,7 @@ Covers the approved slice in ``fast_fetch.py``:
   * hunk G — ``refresh_domains()``: the CLI/sync fresh read. Documents the
     ``DOMAINS = get_domains()`` import-time staleness; no hot-reload.
   * the needle-superset guard: the redactor's needle set derived from the
-    registry must never lose a host that existed before this change (71 → 71).
+    registry must never lose a host that existed before this change (98 → 98).
   * the second ``katmovie`` block in ``normalize_url``: shadowed by the first
     block whenever the always-present ``katmoviehd`` key exists; its only live
     reference is the guard-escape case, pinned here, retirement marker not
@@ -40,30 +40,39 @@ sys.path.insert(0, str(HERE))
 import fast_fetch as ff  # noqa: E402
 import redact  # noqa: E402
 
-#: Snapshot of redact._registry_needles() taken 2026-11-05 against the lane's
-#: domain_registry.json BEFORE any drift-reconciliation edit. If a host
-#: disappears from the live set, the public scrubber is shrinking — that is a
+#: Snapshot of redact._registry_needles() RE-TAKEN on rebase onto main
+#: 14d9063 (2026-11-11): main's drift work rotated 18 dead mirrors out
+#: of domain_registry.json and 32 new hosts in since the branch base, so
+#: the 2026-11-05 snapshot (71 needles) no longer matches the live set.
+#: This snapshot is the new baseline: if a host disappears from the live
+#: set AFTER this point, the public scrubber is shrinking — that is a
 #: release-blocking regression, not a cleanup.
 NEEDLES_BEFORE = frozenset({
-    "10xflix", "10xflix.bond", "10xflix.hair", "10xflix.help",
-    "7starhd", "7starhd.dentist", "7starhd.rich", "7starhd.talk",
-    "9xmovie", "9xmovie.bayern", "9xmovies", "9xmovies.click",
-    "9xmovies.photo", "bolly4u", "bolly4u.org", "bolly4uv", "bolly4uv.com",
-    "bolly4uz", "bolly4uz.click", "desicinemas", "desicinemas.chat",
-    "desicinemas.tv", "filmyzilla", "filmyzilla74", "filmyzilla75",
-    "hdhub4u", "hdhub4u.fans", "hdtvb", "hdtvb.net", "hdutv", "hdutv.com",
-    "hindilinks4u", "hindilinks4u.pink", "katmoviehd", "katmoviehd.top",
-    "katmovieshd", "katmovieshd.net", "m1.multimovies.courses", "moviezguru",
-    "moviezguru.guru", "multimovies", "multimovies.garden",
-    "new.katmoviehd.top", "new1.vegamovies.lease", "new2.hdhub4u.free",
-    "new3.hdhub4u.free", "new8.hdhub4u.cl", "rareanimes", "rogmovies",
-    "rogmovies.one", "rogmovies.quest", "ssrmovies", "ssrmovies.gripe",
-    "ssrmovies.quest", "ssrmovies.surf", "thefilmyzilla",
-    "thefilmyzilla.in", "toonworld4all", "toonworld4all.me", "vegamovies",
-    "vegamovies.gallery", "vegamovies.lease", "world4ufree",
-    "world4ufree.garden", "world4ufree.tours", "www.desicinemas.pk",
-    "www.filmyzilla74.com", "www.filmyzilla75.com", "www.hindilinks4u.zip",
-    "www.rareanimes.mov", "www.toonworld4all.me",
+    "10xflix", "10xflix.asia", "10xflix.bond", "1vegamovies",
+    "1vegamovies.shop", "7starhd", "7starhd.dentist", "7starhd.surgery",
+    "9xmovie", "9xmovie.bayern", "9xmovie.camera", "9xmovies",
+    "bolly4u", "bolly4u.lgbt", "bolly4u.lol", "bolly4uv",
+    "bolly4uv.com", "bulwik", "castle", "co",
+    "desicinemas", "dramadog", "dramadog.app", "filmyzilla",
+    "filmyzilla74", "filmyzilla75", "filmyzilla80", "filmyzilla80.com",
+    "filmyzillahq", "filmyzillahq.in", "harpalgeo", "harpalgeo.tv",
+    "hdhub4u", "hdhub4us.co.in", "hdtvb", "hdtvb.net",
+    "hdutv", "hdutv.com", "hindilinks4u", "hindilinks4u.pink",
+    "katmoviehd", "katmoviehd.mom", "katmoviehd.top", "katmovieshd",
+    "katmovieshd.net", "m1.multimovies.courses", "megacartoons", "megacartoons.net",
+    "moviedrive", "moviedrive.org", "movienestbd", "movienestbd.best",
+    "moviesdrive", "moviesdrives", "moviesdrives.bid", "moviesdrives.cfd",
+    "moviezguru", "moviezguru.guru", "moviezguru.technology", "multimovies",
+    "multimovies.garden", "new.katmoviehd.top", "new1.moviesdrive.cyou", "new1.ssrmovies.page",
+    "new1.vegamovies.lease", "new11.hdhub4u.cl", "new12.hdhub4u.cl", "new2.moviesdrive.cyou",
+    "new4.moviesdrive.beer", "rareanimes", "rogmovies", "rogmovies.asia",
+    "ssrmovies", "ssrmovies.gripe", "ssrmovies.quest", "ssrmovies.surf",
+    "thefilmyzilla", "thefilmyzilla.in", "toonworld4all", "toonworld4all.me",
+    "vegamovies", "vegamovies.lease", "world4ufree", "world4ufree.gay",
+    "world4ufree.tours", "www.bulwik.com", "www.desicinemas.pk", "www.filmyzilla74.com",
+    "www.filmyzilla75.com", "www.filmyzilla80.com", "www.harpalgeo.tv", "www.hindilinks4u.zip",
+    "www.megacartoons.net", "www.rareanimes.fans", "www.rareanimes.mov", "www.toonworld4all.me",
+    "xprimehub", "xprimehub.pics"
 })
 
 
@@ -328,15 +337,15 @@ class TestRefreshDomains(unittest.TestCase):
 class TestNeedleSuperset(unittest.TestCase):
     """The one that protects the public edge: the scrubber's needle set is
     harvested from domain_registry.json by redact._registry_needles(). No host
-    or mirror string may vanish. 71 → 71."""
+    or mirror string may vanish. 98 → 98."""
 
     def test_needle_set_is_a_superset_of_the_pre_change_snapshot(self):
         current = set(redact._registry_needles())
         # Sibling literal pin (self-audit, crown order 2026-11-05): the
         # superset test alone is VACUOUS on an emptied NEEDLES_BEFORE — an
         # empty baseline loses nothing and the len floor below compares to
-        # itself. 71 is the snapshot's own count, pinned from outside it.
-        self.assertEqual(len(NEEDLES_BEFORE), 71)
+        # itself. 98 is the snapshot's own count, pinned from outside it.
+        self.assertEqual(len(NEEDLES_BEFORE), 98)
         lost = NEEDLES_BEFORE - current
         self.assertFalse(lost,
                          f"redactor needles disappeared: {sorted(lost)}")
@@ -349,8 +358,10 @@ class TestNeedleSuperset(unittest.TestCase):
         mirrors = sites["hdhub4u"]["known_mirrors"]
         # Floor pin (self-audit): the assertNotIn loop below is a
         # pass-on-nothing candidate if hdhub4u's mirror list is ever emptied.
-        # 4 = measured 2026-11-05; mirrors are added, never removed.
-        self.assertGreaterEqual(len(mirrors), 4)
+        # 3 = measured on main 14d9063's registry at rebase (the
+        # branch's 4th mirror rotated out in main's drift work;
+        # the floor still catches an emptied list).
+        self.assertGreaterEqual(len(mirrors), 3)
         for mirror in mirrors:
             self.assertNotIn("hdtvb", mirror)
 

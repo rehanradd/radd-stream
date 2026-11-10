@@ -192,7 +192,15 @@ class TestCiManifest(unittest.TestCase):
     def test_one_module_per_invocation(self):
         for cmd in self.run_commands:
             with self.subTest(cmd=cmd):
-                self.assertEqual(len(MODULE_PATH_RE.findall(cmd)), 1,
+                found = MODULE_PATH_RE.findall(cmd)
+                if not found:
+                    # A run step naming no test module is a TOOL step, not a
+                    # suite invocation — e.g. main's check_doc_citations.py
+                    # doc-citation checker, added after this guard was
+                    # written. The one-module law governs suite invocations
+                    # only; the stdlib-only test still covers tool steps.
+                    continue
+                self.assertEqual(len(found), 1,
                                  f"multi-module step silently gates one suite: {cmd}")
                 self.assertRegex(cmd, MODULE_RE,
                                  "steps must be 'python3 -S Fast_Fetch/<module>.py'")

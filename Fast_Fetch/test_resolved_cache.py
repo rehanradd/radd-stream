@@ -1204,7 +1204,7 @@ class TestEpochHygiene(unittest.TestCase):
 class TestViewerKindGate(unittest.TestCase):
     """Task #24 (crown order 2026-11-05): mega crypto-share URLs (the `#`
     fragment IS the AES key) and Google Drive ``/view`` HTML pages banked as
-    kind='file' Category A — ~185,000 measured rows — and ``/api/v1/download``
+    kind='file' Category A — and ``/api/v1/download``
     gates on exactly ``kind='file'``, so a viewer page could answer the
     single-file download route. Three laws, each with its own test:
 
@@ -1299,7 +1299,7 @@ class TestViewerKindGate(unittest.TestCase):
                          "fragment-free even for rows this fix predates")
 
     def test_law_c_download_route_refuses_viewer_rows_banked_before_the_fix(self):
-        """The 185k blast radius: rows ALREADY stored kind='file' for viewer
+        """The legacy-row blast radius: rows ALREADY stored kind='file' for viewer
         shapes. The stored kind cannot be trusted for old rows, so the
         download gate re-checks the URL shape at read time."""
         conn = fresh_conn()
@@ -1367,6 +1367,42 @@ class TestViewerKindGate(unittest.TestCase):
                                              "service": "google_cdn"}, now=now)
         self.assertIsNone(
             resolved_cache.lookup_cache(conn, 130, want="download", now=now))
+
+    def test_law_d_watch_refuses_viewer_rows(self):
+        """§6 fix 1: the kind gate is not download-only. A row banked as
+        kind='viewer' — an HTML page / Drive /view / mega share — must not
+        answer the watch route either, or the player gets a 302 to a page.
+        Real file and playlist rows still pass watch."""
+        conn = fresh_conn()
+        now = time.time()
+        for link_id, url in ((131, self.VIEWER), (132, self.MEGA)):
+            conn.execute(
+                "INSERT INTO resolved_cache (link_id, url, category, kind, "
+                "resolved_at, reverify_after, source, fail_count) "
+                "VALUES (?, ?, 'A', 'viewer', ?, ?, 'jit', 0)",
+                (link_id, url, now, now + 3600))
+        self.assertIsNone(
+            resolved_cache.lookup_cache(conn, 131, want="watch", now=now),
+            "a viewer-kind row must not answer the stream route, however "
+            "it was banked")
+        self.assertIsNone(
+            resolved_cache.lookup_cache(conn, 132, want="watch", now=now))
+        # The "either" fallback shares the watch rule, never the hole.
+        self.assertIsNone(
+            resolved_cache.lookup_cache(conn, 131, want="either", now=now))
+        # Real media still passes watch: a file and a playlist.
+        resolved_cache.record_resolved_cache(
+            conn, 133, {"url": self.REAL, "mime_type": "video/mp4",
+                        "service": "pixeldrain"}, now=now)
+        hit = resolved_cache.lookup_cache(conn, 133, want="watch", now=now)
+        self.assertIsNotNone(hit, "the fix must not fence real files out "
+                             "of watch")
+        self.assertEqual(hit["kind"], "file")
+        resolved_cache.record_resolved_cache(
+            conn, 134, playlist_resolve(), now=now)
+        hit = resolved_cache.lookup_cache(conn, 134, want="watch", now=now)
+        self.assertIsNotNone(hit, "playlists are watch media too")
+        self.assertEqual(hit["kind"], "playlist")
 
 
 if __name__ == "__main__":
