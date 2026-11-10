@@ -5,6 +5,22 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-10 — Muse [DRAMADOG-CASTLE-FOLLOWUP]: DramaDog episode API
+  (`GET /api/eps/<drama_id>` — one .m3u8 per episode, count ==
+  numberOfEpisodes, verified 30/30, 70/70, 28/28 live) unlocks the
+  no-stream platforms (dramawave, yourchannel, reelshort, …); Castle
+  signed master also on img1.tlnob.com (index_365, ~30% of titles),
+  retry-once for flaky signed-URL pages, sitemap locs sanitized for a
+  zero-width space. Castle series: JS-bundle analysis proves NO
+  per-episode stream endpoint exists (one signed .m3u8 is the
+  trailerUrl; play is an AES-CBC-encrypted handoff to an external
+  player) — series import NOT implemented, reported not faked. Tests:
+  dramadog 25, castle 19, host_resolvers 231, docs_invariants 22,
+  domain_resolver 39, database 217 — all OK solo. Proof syncs (staging
+  DBs, limit 50/site): DramaDog 48 posts / 2203 sources, 22 titles via
+  API, verify OK; Castle 47 posts, 2 img1 sources live, verify OK —
+  [20261110-muse-dramadog-castle-followup.md](20261110-muse-dramadog-castle-followup.md)
+
 - 2026-11-10 — Muse [V2-LISTING-TWO-STEP]: `/api/v2/browse` + `/api/v2/search`
   hung (504; direct calls past 90s) — `_run_listing` ran five correlated
   subqueries per matching work and the three `cat_links` COUNTs had no work_id

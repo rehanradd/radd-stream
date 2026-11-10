@@ -147,6 +147,23 @@ JS-bundle analysis (series page "Marshals" season 2, 4 episodes):
   Staging a series post with no playable source would also violate
   the verify gate (0 sources without final_url), so series stay out.
 
+## CI failure on the first push — fixed by a follow-up commit
+
+* First push (`aa25695`): backend CI run 42807581476 completed
+  **failure** — the only failing step was `test_docs_invariants.py`
+  (`test_the_index_counts_are_the_directory_listings`):
+  `CONTINUITY.md` claimed 135 archive files but
+  `Fast_Fetch/checkpoints` held 136 once this checkpoint file was
+  added. The local run had passed only because it ran BEFORE the
+  checkpoint file was written — the checkpoint itself broke the
+  invariant it documents. Lesson: re-run `test_docs_invariants.py`
+  AFTER writing the checkpoint file, never before.
+* Fix (second commit on the same branch): `CONTINUITY.md` count
+  135 → 136 (134 dated + 2 undated) + this session's entry at the top
+  of `Fast_Fetch/checkpoints/README.md` (newest-first list, same
+  practice as batch 1). `test_docs_invariants.py` 22/22 OK after the
+  fix; re-pushed, CI re-run pending (see report).
+
 ## Suites run solo (CI way), all green
 
 * test_dramadog_import.py 25/25 (was 15, +10)
