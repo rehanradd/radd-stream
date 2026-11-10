@@ -54,6 +54,23 @@ data class DeviceDownload(
         get() = state == DeviceDownloadState.QUEUED || state == DeviceDownloadState.DOWNLOADING
     val canResume: Boolean
         get() = state == DeviceDownloadState.PAUSED || state == DeviceDownloadState.FAILED
+
+    /**
+     * Robo run 9: the same shape as the keeps — a print label identical to
+     * the title would paint twice on one card, and two files sharing one
+     * quality label would speak identically. The row paints the label only
+     * when it says something the title does not already say.
+     */
+    internal fun shownPrintLabel(): String? =
+        printLabel.takeIf { it.isNotBlank() && it != title }
+
+    /**
+     * The row's spoken print label. The title rides along so two files that
+     * share a quality label never speak identically — the painted text stays
+     * the short label, the spoken line names the title too (the run-6
+     * printSpokenLabel pattern).
+     */
+    internal fun printLabelDescription(): String = "$title — $printLabel"
 }
 
 /** What one enqueue attempt did, so the caller can say something true to the viewer. */

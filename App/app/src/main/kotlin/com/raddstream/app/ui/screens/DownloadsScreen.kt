@@ -42,6 +42,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -281,8 +283,11 @@ private fun StorageCard(storage: StorageInfo?) {
     }
 }
 
+// Robo run 9: the print label is painted only when it says something the
+// title does not — and it speaks with the title, so two files sharing one
+// quality label never speak identically. Internal for the run-9 label test.
 @Composable
-private fun DeviceDownloadRow(
+internal fun DeviceDownloadRow(
     item: DeviceDownload,
     onPlay: () -> Unit,
     onPause: () -> Unit,
@@ -316,11 +321,12 @@ private fun DeviceDownloadRow(
             )
             DeviceStatusPill(item.state)
         }
-        if (item.printLabel.isNotBlank()) {
+        item.shownPrintLabel()?.let { label ->
             Text(
-                item.printLabel,
+                label,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.semantics { contentDescription = item.printLabelDescription() },
             )
         }
         Text(
@@ -394,8 +400,12 @@ private fun DeviceStatusPill(state: DeviceDownloadState) {
     )
 }
 
+// Robo run 9: the print label is painted only when it says something the
+// title does not — and it speaks with the title, so two keeps sharing one
+// rank label ("Rank #1") never speak identically. Internal for the run-9
+// label test.
 @Composable
-private fun KeptItemRow(
+internal fun KeptItemRow(
     item: KeptItem,
     onPlay: () -> Unit,
     onCancel: () -> Unit,
@@ -411,7 +421,18 @@ private fun KeptItemRow(
     ) {
         Text(item.title, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface, maxLines = 2)
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(item.printLabel, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Robo run 9: a "Rank #1" print label identical to the title (or
+            // shared with another card) speaks identically — the row paints
+            // the label only when it says something the title does not, and
+            // the spoken line names the title so two cards never share it.
+            item.shownPrintLabel()?.let { label ->
+                Text(
+                    label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.semantics { contentDescription = item.printLabelDescription() },
+                )
+            }
             Spacer(Modifier.weight(1f))
             StatusPill(item.state)
         }

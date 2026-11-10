@@ -1,10 +1,14 @@
 package com.raddstream.app.ui.screens
 
+import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddInk750
 import com.raddstream.app.ui.theme.RaddInk800
 import com.raddstream.app.ui.theme.RaddInk900
+import com.raddstream.app.ui.theme.RaddInk950
 import com.raddstream.app.ui.theme.RaddMistOnInk
+import com.raddstream.app.ui.theme.RaddOnTideContainer
 import com.raddstream.app.ui.theme.RaddPaperOnInk
+import com.raddstream.app.ui.theme.RaddTideContainerDark
 import com.raddstream.app.ui.theme.RaddWhisperOnInk
 import com.raddstream.app.ui.theme.contrastRatio
 import org.junit.Assert.assertTrue
@@ -65,6 +69,57 @@ class TextContrastTest {
         val ratio = contrastRatio(RaddPaperOnInk, RaddInk750)
         assertTrue(
             "primary text on the brightest raised tier is only $ratio:1, under the 4.5:1 floor",
+            ratio >= 4.5f,
+        )
+    }
+
+    @Test
+    fun detailHeaderTitleOnBackgroundMeetsContrastFloor() {
+        // Robo run 9 read 1.03:1 on two TextViews at the very top edge of the
+        // Fall detail screen (fg #030404 on bg #07090B) — but those are the
+        // theme's background (#06090B) and surface floor (#040708), not any
+        // text colour: no Text in the app is painted dark-on-dark, and the
+        // flagged nodes are header texts caught partially scrolled under the
+        // bar, where ATF samples background pixels (the run-6 artifact
+        // class). The real header pairs are pinned here, so a future
+        // darkening of any of them fails here first. Title: onBackground on
+        // background.
+        val ratio = contrastRatio(RaddPaperOnInk, RaddInk950)
+        assertTrue(
+            "detail header title on background is only $ratio:1, under the 4.5:1 floor",
+            ratio >= 4.5f,
+        )
+    }
+
+    @Test
+    fun detailHeaderMetaOnBackgroundMeetsContrastFloor() {
+        // The meta line ("2022 · Movie · 1 season"): onSurfaceVariant on
+        // background. Same run-9 artifact as the title above.
+        val ratio = contrastRatio(RaddMistOnInk, RaddInk950)
+        assertTrue(
+            "detail header meta on background is only $ratio:1, under the 4.5:1 floor",
+            ratio >= 4.5f,
+        )
+    }
+
+    @Test
+    fun detailHeaderIncludedLineOnBackgroundMeetsContrastFloor() {
+        // The "Included with VIP" line: primary on background. Same run-9
+        // artifact as the title above.
+        val ratio = contrastRatio(RaddCurrent500, RaddInk950)
+        assertTrue(
+            "detail header included line on background is only $ratio:1, under the 4.5:1 floor",
+            ratio >= 4.5f,
+        )
+    }
+
+    @Test
+    fun detailHeaderRatingPillMeetsContrastFloor() {
+        // The "★ 6.4 IMDb" pill: onTertiaryContainer on tertiaryContainer.
+        // Same run-9 artifact as the title above.
+        val ratio = contrastRatio(RaddOnTideContainer, RaddTideContainerDark)
+        assertTrue(
+            "detail header rating pill is only $ratio:1, under the 4.5:1 floor",
             ratio >= 4.5f,
         )
     }

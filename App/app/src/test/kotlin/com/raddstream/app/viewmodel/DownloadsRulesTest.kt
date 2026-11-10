@@ -4,6 +4,7 @@ import com.raddstream.app.data.downloads.DeviceDownload
 import com.raddstream.app.data.downloads.DeviceDownloadState
 import com.raddstream.app.data.local.WatchHistoryEntity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -92,5 +93,76 @@ class DownloadsRulesTest {
         assertEquals(2, rows.size)
         assertTrue(rows[0] is DownloadRow.Device)
         assertTrue(rows[1] is DownloadRow.Keep)
+    }
+
+    @Test
+    fun `a print label identical to the title is not painted twice`() {
+        // Robo run 9: a keep whose engine task has a blank title and a
+        // "Rank #1" print label renders "Rank #1" twice on one card — once
+        // as the title (the title-to-print-label fallback) and once as the
+        // print label. The row paints the label only when it says something
+        // the title does not already say.
+        val keep = KeptItem(
+            id = "7",
+            title = "Rank #1",
+            printLabel = "Rank #1",
+            bytesDownloaded = 0L,
+            bytesTotal = 0L,
+            state = KeepState.FAILED,
+            expiresAtMillis = null,
+        )
+        assertEquals(null, keep.shownPrintLabel())
+        val file = DeviceDownload(
+            id = "d7",
+            title = "Rank #1",
+            printLabel = "Rank #1",
+            state = DeviceDownloadState.FAILED,
+            bytesDownloaded = 0L,
+            bytesTotal = 0L,
+            localUri = null,
+            mimeType = "video/mp4",
+            fileName = "rank1.mp4",
+        )
+        assertEquals(null, file.shownPrintLabel())
+    }
+
+    @Test
+    fun `a real quality label is still painted`() {
+        val keep = KeptItem(
+            id = "7",
+            title = "Fall",
+            printLabel = "1080p · High bitrate",
+            bytesDownloaded = 0L,
+            bytesTotal = 0L,
+            state = KeepState.FAILED,
+            expiresAtMillis = null,
+        )
+        assertEquals("1080p · High bitrate", keep.shownPrintLabel())
+        assertEquals("Fall — 1080p · High bitrate", keep.printLabelDescription())
+    }
+
+    @Test
+    fun `two rows sharing a rank label speak differently`() {
+        val fall = KeptItem(
+            id = "7",
+            title = "Fall",
+            printLabel = "Rank #1",
+            bytesDownloaded = 0L,
+            bytesTotal = 0L,
+            state = KeepState.FAILED,
+            expiresAtMillis = null,
+        )
+        val dune = KeptItem(
+            id = "8",
+            title = "Dune",
+            printLabel = "Rank #1",
+            bytesDownloaded = 0L,
+            bytesTotal = 0L,
+            state = KeepState.FAILED,
+            expiresAtMillis = null,
+        )
+        assertEquals("Fall — Rank #1", fall.printLabelDescription())
+        assertEquals("Dune — Rank #1", dune.printLabelDescription())
+        assertNotEquals(fall.printLabelDescription(), dune.printLabelDescription())
     }
 }

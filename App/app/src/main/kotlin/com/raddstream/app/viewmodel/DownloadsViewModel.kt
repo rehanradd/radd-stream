@@ -55,6 +55,25 @@ data class KeptItem(
     val progress: Float
         get() = if (bytesTotal > 0) (bytesDownloaded.toFloat() / bytesTotal.toFloat()).coerceIn(0f, 1f) else 0f
 
+    /**
+     * Robo run 9: a keep whose engine task has a blank title and a "Rank #1"
+     * print label (displayLabel's fallback when a rendition carries no quality
+     * words) renders "Rank #1" twice on one card — once as the title (the
+     * title-to-print-label fallback in toKeptItem) and once as the print
+     * label — and two such keeps speak identically. The row paints the label
+     * only when it says something the title does not already say.
+     */
+    internal fun shownPrintLabel(): String? =
+        printLabel.takeIf { it.isNotBlank() && it != title }
+
+    /**
+     * The row's spoken print label. The title rides along so two keeps that
+     * share a rank label ("Rank #1") never speak identically — the painted
+     * text stays the short label, the spoken line names the title too (the
+     * run-6 printSpokenLabel pattern).
+     */
+    internal fun printLabelDescription(): String = "$title — $printLabel"
+
     /** Whole-file percent for the downloading line; null when the size was never learned. */
     val percent: Int?
         get() = if (bytesTotal > 0) (progress * 100).toInt().coerceIn(0, 100) else null
