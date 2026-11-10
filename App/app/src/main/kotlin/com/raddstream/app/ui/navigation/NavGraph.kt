@@ -1,20 +1,33 @@
 package com.raddstream.app.ui.navigation
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.vectorResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -63,6 +76,84 @@ private data class BottomNavItem(
      */
     val navigateRoute: String = route,
 )
+
+/** Test tag on a bottom-nav tab's indicator pill, so the a11y test can measure it directly. */
+internal const val BottomNavIndicatorTag = "bottomNavIndicator"
+
+/**
+ * Robo run 5: the bottom-nav touch target still measured 32dp — the M3
+ * NavigationBarItem's active-indicator pill, not the item itself. Run 4 set
+ * the bar to exactly 80dp and pinned the item clickables at 80dp (and that
+ * still holds), but Robo keeps measuring the 32dp pill inside the item, so
+ * the bar no longer uses NavigationBarItem at all. This tab owns its own
+ * clickable — the full 80dp bar height — and its own indicator pill, raised
+ * to 48dp so no node in the bar is under the 48dp touch-target floor. The
+ * bar stays exactly 80dp (the M3 spec height); never fillMaxHeight() on a
+ * tab — that expands the bar to fill the screen (run 4). The label keeps
+ * M3's labelMedium so the taller pill still fits the bar.
+ * Internal so BottomNavTouchTargetTest can pin the pill height directly.
+ */
+@Composable
+internal fun RowScope.BottomNavTab(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .height(80.dp)
+            .clickable(onClick = onClick, role = Role.Tab)
+            // The tab itself carries the spoken name (the SwitchRow pattern):
+            // the painted icon and label are silent, so the name is heard
+            // exactly once. No mergeDescendants — the pill stays its own
+            // node so the test can measure it.
+            .semantics { contentDescription = label; this.selected = selected },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(width = 64.dp, height = 48.dp)
+                    .background(
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.surfaceContainerHighest
+                        } else {
+                            Color.Transparent
+                        },
+                        shape = RoundedCornerShape(24.dp),
+                    )
+                    .testTag(BottomNavIndicatorTag),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    tint = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+            Text(
+                label,
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                modifier = Modifier.clearAndSetSemantics { },
+            )
+        }
+    }
+}
 
 /**
  * The whole navigable app.
@@ -191,32 +282,24 @@ fun RaddStreamNavGraph(
             if (showBottomBar) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    // Robo run 4: a bottom-nav item still measured 32dp tall —
-                    // the height of the M3 active-indicator pill, not the
-                    // item. The heightIn(min = 48.dp) from run 3 never reached
-                    // the measured node, and fillMaxHeight() on the item
-                    // (tried first in this round) is wrong — it makes the item
-                    // fill the available height instead of the bar, so the bar
-                    // expands to fill the screen. The bar is 80dp by the M3
-                    // spec, so it is set to exactly 80dp here; the item keeps
-                    // M3's own 80dp floor (defaultMinSize on the item Box), so
-                    // the item's own clickable is the 80dp bar height, not the
-                    // 32dp indicator.
+                    // Robo run 5: the bottom-nav touch target still measured
+                    // 32dp — the M3 NavigationBarItem's active-indicator
+                    // pill. Run 4 set the bar to exactly 80dp and pinned the
+                    // item clickables at 80dp, but Robo keeps measuring the
+                    // 32dp pill inside the item, so the bar no longer uses
+                    // NavigationBarItem: BottomNavTab owns its own clickable
+                    // (the full 80dp bar height) and its own indicator pill,
+                    // raised to 48dp. The bar stays exactly 80dp (the M3 spec
+                    // height); never fillMaxHeight() on a tab — that expands
+                    // the bar to fill the screen (run 4).
                     modifier = Modifier.height(80.dp),
                 ) {
                     bottomNavItems.forEach { item ->
                         val selected = currentRoute == item.route
-                        NavigationBarItem(
-                            icon = { Icon(item.icon, contentDescription = item.label) },
-                            label = { Text(item.label) },
+                        BottomNavTab(
+                            label = item.label,
+                            icon = item.icon,
                             selected = selected,
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = MaterialTheme.colorScheme.primary,
-                                selectedTextColor = MaterialTheme.colorScheme.primary,
-                                unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                                indicatorColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                            ),
                             onClick = {
                                 if (currentRoute != item.route) {
                                     navController.navigate(item.navigateRoute) {

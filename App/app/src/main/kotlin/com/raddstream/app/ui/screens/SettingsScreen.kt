@@ -85,6 +85,17 @@ import com.raddstream.app.viewmodel.UserPreferences
  * pins that a card can only ever seed a word this row can actually display. */
 internal val subtitleOptions = listOf("Off", "English", "Hindi", "Urdu", "Tamil", "Telugu")
 
+/**
+ * Robo run 5: the M3 default disabled button text (onSurface at 38%) reads
+ * 2.98:1 on the dark fill — under the 4.5:1 floor. The two buttons that can
+ * sit disabled on this screen ("Test & Save Connection" with no server typed,
+ * "Sign in" with no key typed) brighten their disabled text to onSurface at
+ * this alpha, which clears 4.5:1 against the disabled fill (≈5.7:1, pinned
+ * by DisabledButtonContrastTest) while the washed-out fill still reads as
+ * disabled. Internal so that test can read the same value the buttons use.
+ */
+internal const val DisabledButtonContentAlpha = 0.65f
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
@@ -167,6 +178,13 @@ fun SettingsScreen(
                     Button(
                         onClick = viewModel::testAndSaveServer,
                         enabled = !state.isTesting && state.serverUrl.isNotBlank(),
+                        // Robo run 5: the disabled text on this button read
+                        // 2.98:1 — see DisabledButtonContentAlpha.
+                        colors = ButtonDefaults.buttonColors(
+                            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(
+                                alpha = DisabledButtonContentAlpha,
+                            ),
+                        ),
                         modifier = Modifier.fillMaxWidth(),
                     ) {
                         if (state.isTesting) {
@@ -433,6 +451,13 @@ fun SettingsScreen(
                         Button(
                             onClick = viewModel::quickSignIn,
                             enabled = !account.isBusy && account.quickInput.isNotBlank(),
+                            // Robo run 5: the disabled text on this button read
+                            // 2.98:1 — see DisabledButtonContentAlpha.
+                            colors = ButtonDefaults.buttonColors(
+                                disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(
+                                    alpha = DisabledButtonContentAlpha,
+                                ),
+                            ),
                             modifier = Modifier.weight(1f),
                         ) {
                             BusyLabel(account.isBusy, "Sign in")
@@ -924,7 +949,7 @@ private fun BusyLabel(busy: Boolean, label: String) {
  * edited on its own.
  */
 @Composable
-private fun AccountLabelField(
+internal fun AccountLabelField(
     value: String,
     onValueChange: (String) -> Unit,
     onSave: (() -> Unit)?,
@@ -932,10 +957,17 @@ private fun AccountLabelField(
     OutlinedTextField(
         value = value,
         onValueChange = onValueChange,
-        label = { Text("Label (optional)") },
+        // Robo run 5: this field was flagged as having no label readable by
+        // screen readers, even though it carries a label — the label is
+        // paint-only here (the SwitchRow pattern) and the field itself
+        // carries the spoken name, so it is heard exactly once.
+        // Internal so the a11y test can pin the spoken name directly.
+        label = { Text("Label (optional)", modifier = Modifier.clearAndSetSemantics { }) },
         placeholder = { Text("A name or number, shown on this device only") },
         singleLine = true,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = "Label (optional)" },
     )
     Text(
         "Only so you can tell your own account apart. This stays on the device and is never sent.",
