@@ -64,7 +64,6 @@ import dagger.hilt.components.SingletonComponent
  * learns a viewer opened a title. [allowAnyHost] is the one documented exception:
  * live-TV channel logos come from the operator-curated channel registry, not the
  * catalog, and their hosts are the registry's own — the caller opts out by name.
- */
  *
  * A *failed* load is different from a *gated* one and gets its own art. Nothing about a
  * dead poster URL is the caller's fault — the server sent a link, the CDN did not answer —
