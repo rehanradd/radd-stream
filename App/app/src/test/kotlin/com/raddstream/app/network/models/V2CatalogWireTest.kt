@@ -54,7 +54,7 @@ class V2CatalogWireTest {
         assertEquals(1234L, post.workId)
         assertEquals("Oppenheimer", post.title)
         assertEquals("movie", post.contentType)
-        assertFalse(post.isAnimated)
+        assertFalse(post.isAnimated == true)
         assertEquals("imdb:tt15398776", post.workRef)
         assertEquals(5, post.releaseCount)
     }
@@ -67,7 +67,7 @@ class V2CatalogWireTest {
         )
         val post = item.toPost()
         assertEquals("series", post.contentType)
-        assertTrue(post.isAnimated)
+        assertTrue(post.isAnimated == true)
         assertEquals(-77, post.id)
         assertEquals(77L, post.workId)
     }
