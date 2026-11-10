@@ -244,11 +244,16 @@ fun DetailScreen(
                 title = {
                     // Session 121 (P-32): one line truncated long titles to a stub;
                     // two lines at titleMedium still fit the 64 dp bar.
+                    // Robo run 3: this title text is identical to the big title
+                    // below it, so the bar title carries its screen context.
+                    val barTitle = state.post?.cleanTitle ?: state.post?.title ?: "Details"
+                    val barDescription = if (state.post == null) "Details" else "Details for $barTitle"
                     Text(
-                        state.post?.cleanTitle ?: state.post?.title ?: "Details",
+                        barTitle,
                         style = MaterialTheme.typography.titleMedium,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.semantics { contentDescription = barDescription },
                     )
                 },
                 navigationIcon = {
@@ -701,13 +706,17 @@ private fun PosterHeader(
         }
 
         Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Robo run 3: this title text is identical to the bar title above
+            // it, so the big title carries its own spoken name.
+            val titleText = post.cleanTitle?.takeIf(String::isNotBlank) ?: post.title
             Text(
-                text = post.cleanTitle?.takeIf(String::isNotBlank) ?: post.title,
+                text = titleText,
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 3,
                 overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.semantics { contentDescription = "Title: $titleText" },
             )
             val meta = listOfNotNull(
                 post.year?.takeIf { it > 0 }?.toString(),

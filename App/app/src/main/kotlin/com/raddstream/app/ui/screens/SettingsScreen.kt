@@ -56,6 +56,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
@@ -956,7 +957,12 @@ private fun SwitchRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit, labe
         // CL-1: the row and its Switch must read as one control — "Download
         // only on Wi-Fi, On" — not as a bare label plus a Switch that only
         // announces its state. Two toggles both saying "On" was the bug.
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) { },
+        // Robo run 3 flagged it again: the merged row carried no spoken name
+        // of its own, so the Switch's bare "On" was all Robo heard. The row
+        // now carries the full spoken name, label plus state.
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) {
+            contentDescription = "$label, " + if (checked) "on" else "off"
+        },
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {

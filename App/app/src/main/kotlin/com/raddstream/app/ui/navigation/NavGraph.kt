@@ -1,5 +1,6 @@
 package com.raddstream.app.ui.navigation
 
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -197,6 +198,10 @@ fun RaddStreamNavGraph(
                             icon = { Icon(item.icon, contentDescription = item.label) },
                             label = { Text(item.label) },
                             selected = selected,
+                            // Robo run 3: a bottom-nav item measured 32dp tall — under the
+                            // 48dp touch-target floor. The bar is 80dp, but the item's own
+                            // hit box is what Robo measures, so the item carries the floor.
+                            modifier = Modifier.heightIn(min = 48.dp),
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = MaterialTheme.colorScheme.primary,
                                 selectedTextColor = MaterialTheme.colorScheme.primary,

@@ -723,18 +723,25 @@ private fun FilterSheetContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         SearchSort.entries.forEach { sort ->
+            val selected = state.sort == sort
             Row(
                 // CL-2: the row, its radio and its label must read as one option —
-                // "Newest, Selected" — not as a RadioButton that only says
-                // "Selected" or "Not selected".
+                // "Sort by Newest, selected" — not as a RadioButton that only says
+                // "Selected" or "Not selected". Robo run 3 flagged the bare radio
+                // state as identical across all four options, so the row carries
+                // the full spoken name and the radio itself is paint-only (its
+                // tap is the row's tap — same target, one control).
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 48.dp)
                     .clickable { viewModel.setSort(sort) }
-                    .semantics(mergeDescendants = true) { },
+                    .semantics(mergeDescendants = true) {
+                        contentDescription = "Sort by ${sort.label}, " +
+                            if (selected) "selected" else "not selected"
+                    },
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                RadioButton(selected = state.sort == sort, onClick = { viewModel.setSort(sort) })
+                RadioButton(selected = selected, onClick = null)
                 Spacer(Modifier.width(8.dp))
                 Text(sort.label)
             }
@@ -775,6 +782,9 @@ private fun <T> FacetChips(
     onSelect: (T) -> Unit,
     // CL-3: the spoken name for the "All" option in this group, so four rows
     // of "All" do not all announce identically. The visible label stays "All".
+    // Robo run 3: the same label repeats across groups too — "Anime" under
+    // Type and under Industry announced identically — so every chip carries
+    // its group in its spoken name ("Type: Anime" vs "Industry: Anime").
     allDescription: String,
 ) {
     Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
@@ -788,7 +798,7 @@ private fun <T> FacetChips(
                 modifier = if (label(option) == "All") {
                     Modifier.semantics { contentDescription = allDescription }
                 } else {
-                    Modifier
+                    Modifier.semantics { contentDescription = "$title: ${label(option)}" }
                 },
             )
         }

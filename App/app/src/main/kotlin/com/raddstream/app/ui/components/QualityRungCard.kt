@@ -21,6 +21,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.player.LadderForScope
@@ -118,7 +120,13 @@ private fun RungRow(
                         RungPill(text = "Auto", highlighted = false)
                     }
                     Spacer(Modifier.width(6.dp))
-                    RungPill(text = tier, highlighted = tier == "VIP")
+                    // Robo run 3: every rung's tier pill said bare "Standard",
+                    // identical across rungs — so the pill carries its rung.
+                    RungPill(
+                        text = tier,
+                        highlighted = tier == "VIP",
+                        contentDescription = "$tier tier, ${option.title}",
+                    )
                 }
                 Text(
                     text = option.detailLine,
@@ -127,6 +135,11 @@ private fun RungRow(
                         MaterialTheme.colorScheme.error
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    // Robo run 3: every rung's subtext said bare "Plays here",
+                    // identical across rungs — so the line carries its rung.
+                    modifier = Modifier.semantics {
+                        contentDescription = "${option.title}: ${option.detailLine}"
                     },
                 )
                 // The honest facts, each only when measured: the print's audio
@@ -199,7 +212,12 @@ private fun RungIconButton(
  * plays nothing. One word, never wrapped mid-word (Session 121, P-9).
  */
 @Composable
-private fun RungPill(text: String, highlighted: Boolean) {
+private fun RungPill(
+    text: String,
+    highlighted: Boolean,
+    /** Spoken name when the bare pill word repeats across rows (the tier pill). Null leaves the paint text as the spoken text. */
+    contentDescription: String? = null,
+) {
     Surface(
         shape = RoundedCornerShape(8.dp),
         color = if (highlighted) {
@@ -218,7 +236,13 @@ private fun RungPill(text: String, highlighted: Boolean) {
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             },
-            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp).then(
+                if (contentDescription != null) {
+                    Modifier.semantics { this.contentDescription = contentDescription }
+                } else {
+                    Modifier
+                }
+            ),
         )
     }
 }
