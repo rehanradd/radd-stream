@@ -1,10 +1,9 @@
 package com.raddstream.app.ui.screens
 
 import androidx.compose.foundation.layout.Column
-import androidx.compose.ui.test.assertDoesNotExist
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsOff
 import androidx.compose.ui.test.assertIsOn
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.raddstream.app.ui.theme.RaddStreamTheme
 import org.junit.Rule
@@ -52,13 +51,13 @@ class SwitchRowTest {
         }
         // Each toggle speaks its own label — not a bare "On" — and the two
         // are distinct, so a screen reader can tell them apart.
-        compose.onNodeWithContentDescription("Download only on Wi-Fi")
+        compose.onNode(hasContentDescription("Download only on Wi-Fi"))
             .assertExists()
             .assertIsOn()
-        compose.onNodeWithContentDescription("Delete watched downloads")
+        compose.onNode(hasContentDescription("Delete watched downloads"))
             .assertExists()
             .assertIsOn()
-        compose.onNodeWithContentDescription("On").assertDoesNotExist()
+        compose.onNode(hasContentDescription("On")).assertDoesNotExist()
     }
 
     @Test
@@ -72,10 +71,10 @@ class SwitchRowTest {
                 )
             }
         }
-        compose.onNodeWithContentDescription("Download only on Wi-Fi")
+        compose.onNode(hasContentDescription("Download only on Wi-Fi"))
             .assertExists()
             .assertIsOff()
-        compose.onNodeWithContentDescription("On").assertDoesNotExist()
-        compose.onNodeWithContentDescription("Off").assertDoesNotExist()
+        compose.onNode(hasContentDescription("On")).assertDoesNotExist()
+        compose.onNode(hasContentDescription("Off")).assertDoesNotExist()
     }
 }

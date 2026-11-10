@@ -1,9 +1,8 @@
 package com.raddstream.app.ui.screens
 
-import androidx.compose.ui.test.assertDoesNotExist
-import androidx.compose.ui.test.assertExists
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
 import com.raddstream.app.ui.theme.RaddStreamTheme
 import com.raddstream.app.viewmodel.SearchSort
@@ -40,12 +39,12 @@ class SortOptionRowTest {
                 SortOptionRow(sort = SearchSort.NEWEST, selected = true, onSelect = {})
             }
         }
-        compose.onNodeWithContentDescription("Sort by Newest")
+        compose.onNode(hasContentDescription("Sort by Newest"))
             .assertExists()
             .assertIsSelected()
-        compose.onNodeWithContentDescription("Sort by Newest, selected")
+        compose.onNode(hasContentDescription("Sort by Newest, selected"))
             .assertDoesNotExist()
-        compose.onNodeWithContentDescription("Sort by Newest, not selected")
+        compose.onNode(hasContentDescription("Sort by Newest, not selected"))
             .assertDoesNotExist()
     }
 
@@ -56,12 +55,12 @@ class SortOptionRowTest {
                 SortOptionRow(sort = SearchSort.MOST_SOURCES, selected = false, onSelect = {})
             }
         }
-        compose.onNodeWithContentDescription("Sort by Most Sources")
+        compose.onNode(hasContentDescription("Sort by Most Sources"))
             .assertExists()
             .assertIsNotSelected()
-        compose.onNodeWithContentDescription("Sort by Most Sources, selected")
+        compose.onNode(hasContentDescription("Sort by Most Sources, selected"))
             .assertDoesNotExist()
-        compose.onNodeWithContentDescription("Sort by Most Sources, not selected")
+        compose.onNode(hasContentDescription("Sort by Most Sources, not selected"))
             .assertDoesNotExist()
     }
 }
