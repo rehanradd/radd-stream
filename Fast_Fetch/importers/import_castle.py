@@ -14,10 +14,24 @@ Measured live 2026-11-10 from the Oracle VM:
     pages). The "1 lakh+ titles" claim is inflated; ~20,000 is measured.
   * A movie page (``/movie/<slug>/<id>``) ships JSON-LD ``Movie`` (name,
     image poster, description, genre, datePublished, duration ``PT123M``,
-    contentRating) and a signed HLS master:
-    ``https://img01.tlnob.com/video/<hash>/index_401.m3u8?auth_key=...&expire=...``
+    contentRating) and a signed HLS master on one of two tlnob hosts:
+    ``https://img01.tlnob.com/video/<hash>/index_401.m3u8`` or
+    ``https://img1.tlnob.com/video/<hash>/index_365.m3u8`` (same
+    ``?auth_key=...&expire=...`` signing; the img1 form serves ~30% of
+    titles — measured 2026-11-10 on a 53-title skip re-fetch: 16 of 53
+    carried the img1 form and were skipped by the img01-only regex).
     The URL is JSON-escaped in the page (``\\u0026`` for ``&``) and must be
     unescaped before use — a truncated URL (no expire param) 403s.
+  * The signed-URL block is flaky per request: on the same 53-title
+    re-fetch 15 titles that showed no signed URL the first time served
+    a fresh img01 URL the second time, so a page with no signed URL is
+    re-fetched once before it is skipped. The remaining no-stream pages
+    are mostly unreleased titles (datePublished 2026, no .m3u8 of any
+    kind on the page) and are correctly skipped.
+  * One sitemap loc carries a zero-width space in its slug
+    (``roma\\u200bnchakam``) which makes the fetch fail; sitemap locs
+    are sanitized (U+200B and the literal ``\\u200b`` text stripped)
+    before use.
   * The signature lives ~3h from minting, and the page itself may be
     CDN-cached with an already-expired signature (a URL minted ~13h
     before its page fetch 403d while a fresh one 200d with a real
@@ -28,10 +42,21 @@ Measured live 2026-11-10 from the Oracle VM:
     already expired at scrape time is stored ``unverified``, never
     ``active``.
   * Series season pages (``/series/<slug>-season-N/<id>``) carry JSON-LD
-    ``TVSeries`` (name, cast, numberOfEpisodes) but only ONE signed .m3u8
-    in static HTML — episodes 2+ load via JS with no discoverable
-    endpoint in the static page. Series are NOT in this batch; movies
-    only. The episode-loading endpoint is a follow-up (JS bundle work).
+    ``TVSeries`` (name, cast, numberOfEpisodes) and the full episode
+    list (id, number, duration, resolutions, audio tracks, subtitles)
+    in the Next.js RSC payload — but NO per-episode stream URL anywhere
+    in static HTML or in any discoverable endpoint. The ONE signed
+    .m3u8 on the page is the ``trailerUrl``, not an episode stream.
+    Episode play goes through an encrypted handoff: the page fetches a
+    player config from ``api.hbzws.com`` (``/film-api/v0.1/
+    configurationitem/get``, encrypted AES-CBC response, appCode
+    ``CaslteWeb``) holding a ``playerUrl``, then opens
+    ``playerUrl/<AES-CBC-encrypted {movieId, episodeId}>`` in a new
+    tab and the external player resolves the video itself. There is no
+    endpoint that returns a per-episode .m3u8, so series import is NOT
+    implemented — staging a series post with no playable source would
+    violate the verify gate. The JS-bundle analysis behind this is in
+    the follow-up checkpoint; do not fake a series stream.
 
 One post per movie (media_type "movie"), one release, one source.
 ``contentRating`` + the adult-title check set ``is_18_plus``.
@@ -108,7 +133,10 @@ JSON_LD_RE = re.compile(
     r"""<script[^>]*type=["']application/ld\+json["'][^>]*>(.*?)</script>""",
     re.I | re.S)
 SIGNED_M3U8_RE = re.compile(
-    r"""https://img01\.tlnob\.com/video/[^\s"'<>]+""", re.I)
+    # Two tlnob hosts serve the signed master: img01 (index_401) and
+    # img1 (index_365). The img1 form serves ~30% of titles; the old
+    # img01-only pattern skipped all of them (measured 2026-11-10).
+    r"""https://img0?1\.tlnob\.com/video/[^\s"'<>]+""", re.I)
 DURATION_RE = re.compile(
     r"""PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?""")
 EXPIRE_RE = re.compile(r"""[?&]expire=(\d+)""")
@@ -137,6 +165,18 @@ def unescape_page_url(raw: str) -> str:
         return json.loads('"%s"' % raw.replace('"', '\\"'))
     except Exception:
         return raw.replace("\\u0026", "&").replace("\\/", "/")
+
+
+def clean_sitemap_loc(loc: str) -> str:
+    """Strip junk out of a sitemap loc before it is fetched.
+
+    One live loc carries a zero-width space inside its slug
+    (``roma\\u200bnchakam`` — the sitemap literally contains the
+    U+200B character, and some mirrors carry the six-character escape
+    text instead), which makes the page fetch fail outright. Both
+    forms strip to the real slug.
+    """
+    return (loc or "").replace("\u200b", "").replace("\\u200b", "").strip()
 
 
 def parse_duration_iso(text: str | None) -> int | None:
@@ -567,11 +607,13 @@ def sync(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
          fetcher=None, prober=None) -> dict:
     """Walk /movies/sitemap/N.xml in order and stage up to ``limit`` movies.
 
-    Series are deliberately out of scope here: a season page carries only
-    one signed .m3u8 in static HTML and episodes 2+ load via JS with no
-    discoverable endpoint. On a 0-movie sync, ``resolve_if_dead`` runs the
-    domain-tracker chain once and the sync is retried on the verified base
-    only (Session 106 wiring).
+    Series are deliberately out of scope here: a season page carries no
+    per-episode stream URL anywhere (the one signed .m3u8 is the
+    trailer; episode play is an encrypted handoff to an external
+    player — see the module docstring). Pages that show no signed URL
+    are re-fetched once before being skipped. On a 0-movie sync,
+    ``resolve_if_dead`` runs the domain-tracker chain once and the sync
+    is retried on the verified base only (Session 106 wiring).
     """
     fetch = fetcher or (lambda url: http_get(url, timeout=SITEMAP_TIMEOUT)[0:2])
     probe = prober or probe_m3u8
@@ -579,6 +621,7 @@ def sync(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
                                             registry_path)).rstrip("/")
     totals = {"posts_written": 0, "releases_written": 0, "sources_written": 0,
               "skipped": 0, "pages_fetched": 0, "pages_failed": 0,
+              "pages_retried": 0, "retry_recovered": 0,
               "base_url": base}
     limit = limit if limit is not None else 200
 
@@ -590,7 +633,7 @@ def sync(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
             status, xml = fetch(url)
             if status != 200 or not xml:
                 break
-            locs = [loc for loc in SITEMAP_LOC_RE.findall(xml)
+            locs = [clean_sitemap_loc(loc) for loc in SITEMAP_LOC_RE.findall(xml)
                     if "/movie/" in loc]
             if not locs:
                 break
@@ -618,6 +661,19 @@ def sync(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
         if not page:
             totals["pages_failed"] += 1
             continue
+        if not page.get("signed_url"):
+            # The signed-URL block is flaky per request (measured: 15 of
+            # 53 first-pass skips served a fresh signed URL on re-fetch),
+            # so one retry before the title is skipped as sourceless.
+            time.sleep(delay)
+            totals["pages_retried"] += 1
+            rstatus, rhtml = fetch(url)
+            if rstatus == 200 and rhtml:
+                totals["pages_fetched"] += 1
+                rpage = parse_movie_page(rhtml, url)
+                if rpage and rpage.get("signed_url"):
+                    page = rpage
+                    totals["retry_recovered"] += 1
         record = build_record(page, probe=probe)
         if not record:
             totals["skipped"] += 1

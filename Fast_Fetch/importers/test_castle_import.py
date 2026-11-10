@@ -20,6 +20,13 @@ fact each one exists because of:
   carry only ONE signed .m3u8 in static HTML with episodes 2+ behind JS,
   so this batch is movies only — the enumerator walks
   /movies/sitemap/N.xml and skips anything else.
+* follow-up 2026-11-10: the signed master also lives on img1.tlnob.com
+  (index_365), ~30% of titles; a page with no signed URL is re-fetched
+  once (15 of 53 first-pass skips recovered live); sitemap locs are
+  sanitized for a zero-width space in one slug. Series stay out: the
+  one signed .m3u8 on a season page is the trailerUrl, and episode play
+  is an encrypted handoff to an external player — no per-episode
+  stream endpoint exists.
 """
 
 from __future__ import annotations
@@ -62,6 +69,14 @@ MOVIE_HTML_NO_STREAM = """<!DOCTYPE html><html><head>
 <title>Scene Full Movie Watch Online Free</title>
 <script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"Movie","name":"Scene","image":"https://img1.bhcxy.com/image/abc.jpg","description":"A film.","genre":["Thriller"],"datePublished":"2024-05-01","duration":"PT90M","contentRating":"PG"}]}</script>
 </head><body><p>No player on this page.</p></body></html>"""
+
+# Live 2026-11-10 (meesaya-murukku): the signed master lives on img1
+# (index_365), not img01 (index_401) — same signing, different host.
+MOVIE_HTML_IMG1 = MOVIE_HTML.replace(
+    "https://img01.tlnob.com/video/30a719e0b2063f6666445411191bb26c2be59d31/"
+    "index_401.m3u8",
+    "https://img1.tlnob.com/video/c94c96ebab3cab74f0cd0ce20d732551/"
+    "index_365.m3u8")
 
 
 def probe_ok(url):
@@ -134,6 +149,32 @@ class TestParseMoviePage(unittest.TestCase):
             html, "https://www.bulwik.com/movie/all-pass/10285268178004214")
         self.assertEqual(page["is_18_plus"], 1)
 
+    def test_img1_index_365_signed_url_parses(self):
+        page = ct.parse_movie_page(
+            MOVIE_HTML_IMG1,
+            "https://www.bulwik.com/movie/all-pass/10285268178004214")
+        self.assertEqual(
+            page["signed_url"],
+            "https://img1.tlnob.com/video/c94c96ebab3cab74f0cd0ce20d732551/"
+            "index_365.m3u8?auth_key=n2W309DOxzOumDaP%2FwlhF3eC9U%2FWdODY93ycfLmbH04%3D"
+            "&expire=1893456000000")
+        self.assertEqual(page["expire_ms"], 1893456000000)
+        self.assertFalse(page["stale"])
+
+    def test_clean_sitemap_loc_strips_zero_width_space(self):
+        # The live sitemap carries a real U+200B inside the slug.
+        self.assertEqual(
+            ct.clean_sitemap_loc(
+                "https://www.bulwik.com/movie/roma" + "\u200b" +
+                "nchakam/10114448992266374"),
+            "https://www.bulwik.com/movie/romanchakam/10114448992266374")
+        # Some mirrors carry the six-character escape text instead.
+        self.assertEqual(
+            ct.clean_sitemap_loc(
+                "https://www.bulwik.com/movie/roma" + "\\u200b" +
+                "nchakam/1"),
+            "https://www.bulwik.com/movie/romanchakam/1")
+
 
 class TestBuildRecord(unittest.TestCase):
     def _page(self, html=MOVIE_HTML):
@@ -180,6 +221,17 @@ class TestBuildRecord(unittest.TestCase):
             "https://www.bulwik.com/movie/scene/10270907647639352")
         self.assertIsNotNone(page)
         self.assertIsNone(ct.build_record(page, probe=probe_ok))
+
+    def test_img1_index_365_is_active_when_fresh_and_probed(self):
+        page = ct.parse_movie_page(
+            MOVIE_HTML_IMG1,
+            "https://www.bulwik.com/movie/all-pass/10285268178004214")
+        record = ct.build_record(page, probe=probe_ok)
+        src = record["releases"][0]["sources"][0]
+        self.assertEqual(src["status"], "active")
+        self.assertEqual(src["is_temporary"], 1)
+        self.assertIn("img1.tlnob.com", src["final_url"])
+        self.assertIn("index_365.m3u8", src["final_url"])
 
 
 class TestExportAndSync(unittest.TestCase):
@@ -243,6 +295,77 @@ class TestExportAndSync(unittest.TestCase):
                          fetcher=lambda url: (404, ""), prober=probe_ok,
                          delay=0)
         self.assertEqual(totals["posts_written"], 0)
+
+    def test_sync_retries_a_page_with_no_signed_url_once(self):
+        db = self._tmp_db()
+        calls = []
+
+        def fake_fetch(url):
+            calls.append(url)
+            if "movies/sitemap/1.xml" in url:
+                return (200, MOVIES_SITEMAP_1)
+            if "movies/sitemap/2.xml" in url:
+                return (200, MOVIES_SITEMAP_2)
+            if "/movie/" in url:
+                if "scene" in url:
+                    # First fetch: no signed URL (the flaky first-pass
+                    # miss measured live); second fetch: signed.
+                    if calls.count(url) == 1:
+                        return (200, MOVIE_HTML_NO_STREAM)
+                    return (200, MOVIE_HTML.replace(
+                        "all-pass/10285268178004214",
+                        "scene/10270907647639352").replace(
+                        '"name":"All Pass"', '"name":"Scene"'))
+                return (200, MOVIE_HTML.replace(
+                    "all-pass/10285268178004214",
+                    url.split("/movie/")[1].split("/")[0] + "/" +
+                    url.rstrip("/").split("/")[-1]).replace(
+                    '"name":"All Pass"',
+                    '"name":"%s"' % url.split("/movie/")[1].split("/")[0]))
+            return (404, "")
+
+        totals = ct.sync(db_path=db, limit=4, fetcher=fake_fetch,
+                         prober=probe_ok, delay=0)
+        # 3 movies from sitemap 1 + scene from sitemap 2, recovered by
+        # the one retry; the /series/ loc in sitemap 2 is never fetched.
+        self.assertEqual(totals["posts_written"], 4)
+        self.assertEqual(totals["skipped"], 0)
+        self.assertEqual(totals["pages_retried"], 1)
+        self.assertEqual(totals["retry_recovered"], 1)
+        ok, result = ct.verify_db(db)
+        self.assertTrue(ok)
+        self.assertEqual(result["posts"], 4)
+
+    def test_sync_sanitizes_zero_width_space_in_sitemap_loc(self):
+        db = self._tmp_db()
+        fetched = []
+        sitemap = MOVIES_SITEMAP_1.replace(
+            "https://www.bulwik.com/movie/meesaya-murukku/6689645106300928",
+            "https://www.bulwik.com/movie/roma" + "\u200b" +
+            "nchakam/10114448992266374")
+
+        def fake_fetch(url):
+            fetched.append(url)
+            if "movies/sitemap/1.xml" in url:
+                return (200, sitemap)
+            if "movies/sitemap/2.xml" in url:
+                return (404, "")
+            if "/movie/" in url:
+                return (200, MOVIE_HTML.replace(
+                    "all-pass/10285268178004214",
+                    url.split("/movie/")[1].split("/")[0] + "/" +
+                    url.rstrip("/").split("/")[-1]).replace(
+                    '"name":"All Pass"',
+                    '"name":"%s"' % url.split("/movie/")[1].split("/")[0]))
+            return (404, "")
+
+        totals = ct.sync(db_path=db, limit=3, fetcher=fake_fetch,
+                         prober=probe_ok, delay=0)
+        self.assertEqual(totals["pages_failed"], 0)
+        self.assertTrue(all("\u200b" not in u for u in fetched))
+        self.assertIn(
+            "https://www.bulwik.com/movie/romanchakam/10114448992266374",
+            fetched)
 
 
 if __name__ == "__main__":

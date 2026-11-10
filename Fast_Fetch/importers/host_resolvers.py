@@ -410,7 +410,10 @@ MOVIEBOX_DETAIL_RE = re.compile(
 CASTLE_HOST_RE = re.compile(r"(?:^|\.)bulwik\.com$", re.I)
 CASTLE_PAGE_RE = re.compile(r"^/(?:movie|series)/[^/?#]+/\d+", re.I)
 CASTLE_M3U8_RE = re.compile(
-    r"https://img01\.tlnob\.com/video/[^\s\"'<>]+", re.I)
+    # Two tlnob hosts serve the signed master: img01 (index_401) and
+    # img1 (index_365) — the img1 form serves ~30% of titles (measured
+    # 2026-11-10); the old img01-only pattern missed all of them.
+    r"https://img0?1\.tlnob\.com/video/[^\s\"'<>]+", re.I)
 CASTLE_EXPIRE_RE = re.compile(r"[?&]expire=(\d+)")
 
 # gofile (Session 103, verified live 2026-11-08): the real website token is
@@ -3101,8 +3104,9 @@ def unwrap_castle(url: str, fetch=None, verify: bool = True) -> dict:
     is_temporary, expires_in, status, notes, …}.
 
     Chain (verified live 2026-11-10): GET the page, take the first
-    ``img01.tlnob.com/video/<hash>/index_401.m3u8?auth_key=…&expire=…``
-    (JSON-unescaped — the raw page text carries ``\\u0026`` for ``&`` and a
+    ``img01.tlnob.com/video/<hash>/index_401.m3u8`` or
+    ``img1.tlnob.com/video/<hash>/index_365.m3u8`` (``?auth_key=…&expire=…``,
+    JSON-unescaped — the raw page text carries ``\\u0026`` for ``&`` and a
     truncated URL 403s), then Range-probe the playlist with the page URL
     as Referer. The signature lives ~3h, so the result is always
     ``is_temporary`` and the caller must re-resolve per press, never serve

@@ -21,6 +21,12 @@ fact each one exists because of:
   no playable first episode stages nothing.
 * when the last episode 404s but data-ep says fewer, the count falls
   back to the data-ep max instead of staging episodes that do not exist.
+* platforms with no ``v.dramadog.app`` stream on the page (dramawave,
+  yourchannel, reelshort, …) resolve through ``GET /api/eps/<drama_id>``,
+  which answers one .m3u8 per episode in order (count == numberOfEpisodes,
+  verified live 2026-11-10); the drama id is the poster ``/c/<id>``.
+  Ep1 + last are probed, middle episodes are active-by-pattern, and an
+  empty/failed API response stages nothing.
 """
 
 from __future__ import annotations
@@ -109,6 +115,49 @@ def probe_upto(ep_max):
     return _probe
 
 
+def probe_all_ok(url):
+    return {"ok": True, "status": 206, "is_playlist": True}
+
+
+def probe_fail_urls(failing):
+    def _probe(url):
+        if url in failing:
+            return {"ok": False, "status": 404, "is_playlist": False}
+        return {"ok": True, "status": 206, "is_playlist": True}
+    return _probe
+
+
+# Live 2026-11-10 (dramawave): the drama page carries NO v.dramadog.app
+# stream. It ships a JSON-LD VideoObject with ep1's contentUrl on the
+# platform CDN, a poster /c/22262.webp (the drama id), an /api/eps/22262
+# link, and data-ep buttons 1..30 twice over (desktop + mobile lists).
+DRAMA_HTML_API = """<!DOCTYPE html><html><head>
+<title>The Heir&#039;s Captive Full Episodes Free | DramaDog</title>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"TVSeries","name":"The Heir's Captive","url":"https://dramadog.app/drama/the-heirs-captive","image":"https://dramadog.app/c/22262.webp","description":"The Heir's Captive is an English short drama in 30 episodes, originally released on DramaWave.","numberOfEpisodes":30,"genre":["Heir & Heiress"],"inLanguage":"en"}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"VideoObject","name":"The Heir's Captive — Episode 1","description":"Episode 1","thumbnailUrl":"https://dramadog.app/c/22262.webp","uploadDate":"2026-11-09T10:54:20Z","contentUrl":"https://video-v1.mydramawave.com/vt/ee35958d-eae6-41d4-9a76-6d29c031236b/h264-70acfa19-8260-49ce-86a5-55e0673f9c94.m3u8","url":"https://dramadog.app/drama/the-heirs-captive","isAccessibleForFree":true,"inLanguage":"en","genre":["Heir & Heiress"]}</script>
+<link rel="preload" href="/api/eps/22262">
+</head><body>
+<div class="episodes">
+<button type="button" class="ep" data-ep="1">1</button><button type="button" class="ep" data-ep="30">30</button>
+</div>
+<div class="episodes">
+<button type="button" class="ep" data-ep="1">1</button><button type="button" class="ep" data-ep="30">30</button>
+</div>
+<video playsinline preload="none" poster="/c/22262.webp"></video>
+</body></html>"""
+
+# Live 2026-11-10: GET /api/eps/22262 answers
+# [{"host": "video-v1.mydramawave.com", "urls": [ep1, …, ep30]}] — one
+# .m3u8 per episode, in order, count == numberOfEpisodes.
+def api_eps_json(n=30, host="video-v1.mydramawave.com"):
+    urls = ["https://%s/vt/id%03d/h264-x%03d.m3u8" % (host, i, i)
+            for i in range(1, n + 1)]
+    return json.dumps([{"host": host, "urls": urls}])
+
+
+API_EPS_URLS = json.loads(api_eps_json())[0]["urls"]
+
+
 class TestSitemaps(unittest.TestCase):
     def test_index_lists_platform_sitemaps_and_skips_pages(self):
         children = dd.parse_sitemap_index(INDEX_XML)
@@ -174,6 +223,27 @@ class TestParsePage(unittest.TestCase):
         self.assertEqual(record["releases"][29]["sources"][0]["final_url"],
                          "https://v.dramadog.app/hls/blinkdrama/hearts-under-fire/ep30.m3u8")
 
+    def test_api_platform_page_yields_drama_id_and_video_object_url(self):
+        page = dd.parse_drama_page(
+            DRAMA_HTML_API, "https://dramadog.app/drama/the-heirs-captive")
+        self.assertEqual(page["title"], "The Heir's Captive")
+        self.assertEqual(page["episodes"], 30)
+        self.assertIsNone(page["platform"])
+        self.assertIsNone(page["stream_id"])
+        self.assertEqual(page["drama_id"], "22262")
+        self.assertEqual(
+            page["video_object_url"],
+            "https://video-v1.mydramawave.com/vt/ee35958d-eae6-41d4-9a76-6d29c031236b/"
+            "h264-70acfa19-8260-49ce-86a5-55e0673f9c94.m3u8")
+        self.assertEqual(page["poster_url"], "https://dramadog.app/c/22262.webp")
+
+    def test_drama_id_falls_back_to_poster_id(self):
+        html = DRAMA_HTML_API.replace(
+            '<link rel="preload" href="/api/eps/22262">', "")
+        page = dd.parse_drama_page(
+            html, "https://dramadog.app/drama/the-heirs-captive")
+        self.assertEqual(page["drama_id"], "22262")
+
 
 class TestBuildRecord(unittest.TestCase):
     def _page(self):
@@ -217,6 +287,71 @@ class TestBuildRecord(unittest.TestCase):
         page = self._page()
         page["platform"] = None
         self.assertIsNone(dd.build_record(page, probe=probe_ok))
+
+
+class TestEpisodeApi(unittest.TestCase):
+    def _page(self):
+        return dd.parse_drama_page(
+            DRAMA_HTML_API, "https://dramadog.app/drama/the-heirs-captive")
+
+    def test_fetch_episode_urls_parses_api_list(self):
+        urls = dd.fetch_episode_urls(
+            "https://dramadog.app", "22262",
+            fetch=lambda url: (200, api_eps_json(30)))
+        self.assertEqual(len(urls), 30)
+        self.assertEqual(urls[0], API_EPS_URLS[0])
+        self.assertEqual(urls[-1], API_EPS_URLS[-1])
+
+    def test_fetch_episode_urls_fails_closed(self):
+        for fetch in (lambda url: (404, ""),
+                      lambda url: (200, "not json"),
+                      lambda url: (200, "[]"),
+                      lambda url: (200, json.dumps([{"host": "x"}]))):
+            self.assertEqual(
+                dd.fetch_episode_urls("https://dramadog.app", "22262",
+                                      fetch=fetch), [])
+
+    def test_api_path_builds_one_release_per_url(self):
+        page = self._page()
+        page["episode_urls"] = API_EPS_URLS
+        record = dd.build_record(page, probe=probe_all_ok)
+        self.assertEqual(len(record["releases"]), 30)
+        self.assertEqual(record["releases"][0]["sources"][0]["final_url"],
+                         API_EPS_URLS[0])
+        self.assertEqual(record["releases"][29]["sources"][0]["final_url"],
+                         API_EPS_URLS[-1])
+        self.assertEqual(
+            record["releases"][0]["sources"][0]["resource_id"],
+            "api/22262/ep1")
+        self.assertEqual(
+            record["releases"][14]["sources"][0]["raw_meta"]["episode_source"],
+            "api")
+        self.assertTrue(
+            record["releases"][14]["sources"][0]["raw_meta"]["pattern_derived"])
+        self.assertTrue(record["releases"][0]["sources"][0]["raw_meta"]["probed"])
+        self.assertTrue(record["releases"][29]["sources"][0]["raw_meta"]["probed"])
+        # The API list is authoritative: the doubled data-ep buttons
+        # (60 for 30 episodes) must not inflate the count.
+        self.assertEqual(page["max_data_ep"], 30)
+
+    def test_api_path_ep1_probe_failure_stages_nothing(self):
+        page = self._page()
+        page["episode_urls"] = API_EPS_URLS
+        self.assertIsNone(dd.build_record(page, probe=probe_fail))
+
+    def test_api_path_trims_trailing_dead_urls(self):
+        page = self._page()
+        page["episode_urls"] = API_EPS_URLS
+        failing = {API_EPS_URLS[-1], API_EPS_URLS[-2]}
+        record = dd.build_record(page, probe=probe_fail_urls(failing))
+        self.assertEqual(len(record["releases"]), 28)
+        self.assertEqual(record["releases"][-1]["sources"][0]["final_url"],
+                         API_EPS_URLS[-3])
+
+    def test_api_path_no_urls_stages_nothing(self):
+        page = self._page()
+        page["episode_urls"] = []
+        self.assertIsNone(dd.build_record(page, probe=probe_all_ok))
 
 
 class TestExportAndSync(unittest.TestCase):
@@ -287,6 +422,78 @@ class TestExportAndSync(unittest.TestCase):
                              .replace("sitemap-reelshort", "sitemap-empty2")),
                          prober=probe_ok, delay=0)
         self.assertEqual(totals["posts_written"], 0)
+
+    def test_sync_resolves_api_platforms_via_episode_api(self):
+        db = self._tmp_db()
+        index = INDEX_XML.replace(
+            "sitemap-reelshort.xml", "sitemap-dramawave.xml")
+        wave_xml = GOODSHORT_XML.replace(
+            "after-divorce-my-three-brothers-spoil-me-rotten",
+            "the-heirs-captive").replace(
+            "reborn-to-freeze-them-all",
+            "revenge-begins-with-a-broken-engagement").replace(
+            "her-vengeance", "home-run-with-my-sons-crush")
+        pages = {
+            "https://dramadog.app/sitemap.xml": (200, index),
+            "https://dramadog.app/sitemap-goodshort.xml": (200, GOODSHORT_XML),
+            "https://dramadog.app/sitemap-dramawave.xml": (200, wave_xml),
+            "after-divorce": (200, DRAMA_HTML),
+            "the-heirs-captive": (200, DRAMA_HTML_API),
+            "/api/eps/22262": (200, api_eps_json(30)),
+        }
+
+        def fake_fetch(url):
+            for key, value in pages.items():
+                if key in url:
+                    return value
+            return (200, DRAMA_HTML_NO_LD)
+
+        totals = dd.sync(db_path=db, limit=2, fetcher=fake_fetch,
+                         prober=probe_all_ok, delay=0)
+        # Round-robin: goodshort #1 (pattern path), dramawave #1 (API).
+        self.assertEqual(totals["posts_written"], 2)
+        self.assertEqual(totals["api_resolved"], 1)
+        conn = sqlite3.connect(db)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM releases WHERE post_canonical_key = ?",
+            ("dramadog-the-heirs-captive",)).fetchone()
+        self.assertEqual(row[0], 30)
+        src = conn.execute(
+            "SELECT final_url FROM sources WHERE source_url LIKE ?",
+            ("%the-heirs-captive",)).fetchone()
+        self.assertEqual(src[0], API_EPS_URLS[0])
+        conn.close()
+
+    def test_sync_skips_api_title_when_api_is_empty(self):
+        db = self._tmp_db()
+        index = INDEX_XML.replace(
+            "sitemap-goodshort.xml", "sitemap-dramawave.xml").replace(
+            "sitemap-reelshort.xml", "sitemap-empty.xml")
+        wave_xml = GOODSHORT_XML.replace(
+            "after-divorce-my-three-brothers-spoil-me-rotten",
+            "the-heirs-captive").replace(
+            "reborn-to-freeze-them-all",
+            "revenge-begins-with-a-broken-engagement").replace(
+            "her-vengeance", "home-run-with-my-sons-crush")
+        pages = {
+            "https://dramadog.app/sitemap.xml": (200, index),
+            "https://dramadog.app/sitemap-dramawave.xml": (200, wave_xml),
+            "the-heirs-captive": (200, DRAMA_HTML_API),
+            "/api/eps/22262": (200, "[]"),
+        }
+
+        def fake_fetch(url):
+            for key, value in pages.items():
+                if key in url:
+                    return value
+            # Every other drama URL serves the same API-platform page.
+            return (200, DRAMA_HTML_API)
+
+        totals = dd.sync(db_path=db, limit=3, fetcher=fake_fetch,
+                         prober=probe_all_ok, delay=0)
+        self.assertEqual(totals["posts_written"], 0)
+        self.assertEqual(totals["skipped"], 3)
+        self.assertEqual(totals["api_resolved"], 0)
 
 
 if __name__ == "__main__":

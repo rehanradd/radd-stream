@@ -2124,6 +2124,16 @@ CASTLE_PLAYLIST = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:52\n"
 CASTLE_SIGNED = ("https://img01.tlnob.com/video/30a719e0b2063f6666445411191bb26c2be59d31/"
                  "index_401.m3u8?auth_key=n2W309DOxzOumDaP%2FwlhF3eC9U%2FWdODY93ycfLmbH04%3D"
                  "&expire=1893456000000")
+# Live 2026-11-10 (meesaya-murukku): the img1 form (index_365) serves
+# ~30% of titles — same signing, different host.
+CASTLE_PAGE_HTML_IMG1 = CASTLE_PAGE_HTML.replace(
+    "https://img01.tlnob.com/video/30a719e0b2063f6666445411191bb26c2be59d31/"
+    "index_401.m3u8",
+    "https://img1.tlnob.com/video/c94c96ebab3cab74f0cd0ce20d732551/"
+    "index_365.m3u8")
+CASTLE_SIGNED_IMG1 = ("https://img1.tlnob.com/video/c94c96ebab3cab74f0cd0ce20d732551/"
+                      "index_365.m3u8?auth_key=n2W309DOxzOumDaP%2FwlhF3eC9U%2FWdODY93ycfLmbH04%3D"
+                      "&expire=1893456000000")
 
 
 class TestUnwrapCastle(unittest.TestCase):
@@ -2193,6 +2203,18 @@ class TestUnwrapCastle(unittest.TestCase):
         verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch)
         self.assertEqual(verdict["status"], "blocked")
         self.assertIn("HTTP 403", json.dumps(verdict["notes"]))
+
+    def test_img1_index_365_variant_resolves(self):
+        fetch = scripted_fetch({
+            "bulwik.com/movie/all-pass": (200, CASTLE_PAGE_HTML_IMG1, {}),
+            "index_365.m3u8": (200, CASTLE_PLAYLIST,
+                               {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_castle(CASTLE_PAGE, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], CASTLE_SIGNED_IMG1)
+        self.assertIn("img1.tlnob.com", verdict["final_url"])
+        self.assertGreater(verdict["expires_in"], 0)
 
     def test_truncated_url_without_expire_is_never_served(self):
         # A page that only carries the auth_key half (no &expire=) must not

@@ -20,6 +20,22 @@ episodes free, no sign-up. Measured live 2026-11-10 from the Oracle VM:
     platform goodshort, id 31001925906) ep1/ep30/ep60 all answer 206
     with a real ``#EXTM3U`` playlist, while ep80 answers 404 — the
     pattern holds exactly to the declared episode count and no further.
+  * Platforms whose drama pages carry NO ``v.dramadog.app`` stream in
+    static HTML (dramawave, yourchannel, reelshort, stardust, joyreels,
+    …) are NOT sourceless: the page ships a JSON-LD ``VideoObject``
+    with ep1's ``contentUrl`` on the platform's own CDN
+    (``video-v1.mydramawave.com``, ``video.indouzhuan.cn``,
+    ``v-mps.crazymaplestudios.com``), and the site exposes an episode
+    API ``GET /api/eps/<drama_id>`` returning
+    ``[{"host": ..., "urls": [ep1.m3u8, …, epN.m3u8]}]`` — verified
+    2026-11-10 on three platforms: URL count == ``numberOfEpisodes``
+    exactly (30/30, 70/70, 28/28), all unique .m3u8, ep1/middle/last
+    all answer 206 with a real ``#EXTM3U``. The drama id is the poster
+    id (``/c/<id>.webp``) and the ``/api/eps/<id>`` link on the page.
+    The importer uses the API as the fallback when the page carries no
+    ``v.dramadog.app`` stream: ep1 + last episode are Range-probed, the
+    middle episodes are stored active-by-pattern exactly as in the
+    ``v.dramadog.app`` path.
 
 One post per series (media_type "series"), one release per episode
 (season 1, episode N), one source per release: source_url is the drama
@@ -108,6 +124,10 @@ M3U8_RE = re.compile(
 DATA_EP_RE = re.compile(r"""data-ep=["'](\d+)["']""")
 EPISODE_COUNT_RE = re.compile(
     r"""numberOfEpisodes["']?\s*:\s*(\d+)""", re.I)
+# The drama id behind /api/eps/<id>: the page links it, and the poster
+# /c/<id>.webp carries the same number (verified 3/3 platforms).
+DRAMA_ID_RE = re.compile(r"""/api/eps/(\d+)""")
+POSTER_ID_RE = re.compile(r"""/c/(\d+)\.webp""")
 
 
 def log(message: str) -> None:
@@ -179,12 +199,22 @@ def parse_child_sitemap(xml: str) -> list:
 
 
 def parse_drama_page(html: str, page_url: str) -> dict | None:
-    """JSON-LD + ep1 stream off one drama page. None when unparsable."""
+    """JSON-LD + ep1 stream off one drama page. None when unparsable.
+
+    Two stream shapes exist. The ``v.dramadog.app`` platforms embed the
+    ep1 .m3u8 directly (``platform``/``stream_id``). The other platforms
+    (dramawave, yourchannel, reelshort, …) embed no ``v.dramadog.app``
+    URL; they carry a JSON-LD ``VideoObject`` with ep1's ``contentUrl``
+    on the platform CDN plus a numeric ``drama_id`` (poster ``/c/<id>``
+    or the ``/api/eps/<id>`` link) that the ``/api/eps/<id>`` episode
+    API answers for — ``fetch_episode_urls`` fills ``episode_urls``.
+    """
     slug_m = re.search(r"""/drama/([A-Za-z0-9_-]+)""", page_url)
     slug = slug_m.group(1) if slug_m else ""
     if not slug:
         return None
     ld = {}
+    video_object_url = None
     for block in JSON_LD_RE.findall(html or ""):
         try:
             data = json.loads(block.strip())
@@ -201,6 +231,22 @@ def parse_drama_page(html: str, page_url: str) -> dict | None:
                     break
         if ld:
             break
+    for block in JSON_LD_RE.findall(html or ""):
+        try:
+            data = json.loads(block.strip())
+        except Exception:
+            continue
+        if isinstance(data, dict) and data.get("@type") == "VideoObject":
+            video_object_url = data.get("contentUrl")
+            break
+    drama_id = None
+    id_m = DRAMA_ID_RE.search(html or "")
+    if id_m:
+        drama_id = id_m.group(1)
+    if not drama_id:
+        poster_m = POSTER_ID_RE.search(html or "")
+        if poster_m:
+            drama_id = poster_m.group(1)
     title = _clean_title(ld.get("name")) if ld else ""
     if not title:
         title_m = re.search(r"""<title>([^<]*)</title>""", html or "", re.I)
@@ -241,10 +287,45 @@ def parse_drama_page(html: str, page_url: str) -> dict | None:
         "poster_url": poster if isinstance(poster, str) else None,
         "episodes": episodes, "max_data_ep": max_data_ep,
         "platform": platform, "stream_id": stream_id,
+        "drama_id": drama_id, "video_object_url": video_object_url,
+        "episode_urls": None,
         "is_18_plus": fast_fetch.is_adult_title(title, source_site=SITE),
         "raw_meta": {"platform": platform, "stream_id": stream_id,
+                     "drama_id": drama_id,
+                     "video_object_url": video_object_url,
                      "max_data_ep": max_data_ep},
     }
+
+
+def fetch_episode_urls(base_url: str, drama_id: str, fetch=None) -> list:
+    """Episode .m3u8 list off ``GET <base>/api/eps/<drama_id>``.
+
+    The API answers ``[{"host": ..., "urls": [ep1, …, epN]}]`` with one
+    URL per episode in order; the count matched ``numberOfEpisodes``
+    exactly on every platform probed live (30/30, 70/70, 28/28). Any
+    transport failure, non-200, unparsable body or empty list returns
+    [] — the caller then skips the title, never stages a guess.
+    """
+    fetch = fetch or (lambda url: http_get(url, timeout=SITEMAP_TIMEOUT)[0:2])
+    if not drama_id:
+        return []
+    status, body = fetch("%s/api/eps/%s" % (base_url.rstrip("/"), drama_id))
+    if status != 200 or not body:
+        return []
+    try:
+        data = json.loads(body)
+    except Exception:
+        return []
+    urls = None
+    if isinstance(data, list) and data and isinstance(data[0], dict):
+        urls = data[0].get("urls")
+    elif isinstance(data, dict):
+        urls = data.get("urls")
+    if not isinstance(urls, list):
+        return []
+    return [u for u in urls
+            if isinstance(u, str) and u.startswith("http")
+            and u.endswith(".m3u8")]
 
 
 def episode_url(platform: str, stream_id: str, episode: int) -> str:
@@ -256,23 +337,53 @@ def build_record(page: dict, probe=None) -> dict | None:
     """One drama page -> one post with one release per episode.
 
     ``probe`` is the Range-probe callable (default probe_m3u8); tests inject
-    a fake. Episode 1 and the last episode are probed; middle episodes are
-    stored active-by-pattern with raw_meta.pattern_derived set.
+    a fake. Two URL sources, same proof shape: the episode list is either
+    the ``v.dramadog.app`` pattern (platform + stream id) or the
+    ``/api/eps/<drama_id>`` list (one explicit .m3u8 per episode).
+    Episode 1 and the last episode are probed; middle episodes are
+    stored active-by-pattern with raw_meta.pattern_derived set. On the
+    API path a last episode that does not probe is trimmed (up to 3
+    trailing URLs) instead of staging episodes that do not exist; on
+    the pattern path the count falls back to the data-ep max, as before.
     """
     probe = probe or probe_m3u8
-    if not page.get("platform") or not page.get("stream_id"):
+    episode_source = None
+    urls = []
+    if page.get("platform") and page.get("stream_id"):
+        episode_source = "pattern"
+        total = min(int(page.get("episodes") or 1), MAX_EPISODES_PER_TITLE)
+        urls = [episode_url(page["platform"], page["stream_id"], n)
+                for n in range(1, total + 1)]
+    elif page.get("episode_urls"):
+        episode_source = "api"
+        urls = list(page["episode_urls"])[:MAX_EPISODES_PER_TITLE]
+    if not urls:
         return None
-    total = min(int(page.get("episodes") or 1), MAX_EPISODES_PER_TITLE)
-    first = probe(episode_url(page["platform"], page["stream_id"], 1))
+    first = probe(urls[0])
     if not first["ok"]:
         return None
-    last = probe(episode_url(page["platform"], page["stream_id"], total))
-    if not last["ok"] and page.get("max_data_ep"):
-        total = min(int(page["max_data_ep"]), MAX_EPISODES_PER_TITLE)
-        last = probe(episode_url(page["platform"], page["stream_id"], total))
+    last = probe(urls[-1])
+    if not last["ok"]:
+        if episode_source == "pattern" and page.get("max_data_ep"):
+            total = min(int(page["max_data_ep"]), MAX_EPISODES_PER_TITLE)
+            urls = [episode_url(page["platform"], page["stream_id"], n)
+                    for n in range(1, total + 1)]
+            last = probe(urls[-1])
+        elif episode_source == "api":
+            trimmed = 0
+            while len(urls) > 1 and not probe(urls[-1])["ok"] and trimmed < 3:
+                urls.pop()
+                trimmed += 1
+            last = probe(urls[-1])
+        if not last["ok"]:
+            return None
+    total = len(urls)
+    if episode_source == "pattern":
+        resource_prefix = "%s/%s" % (page["platform"], page["stream_id"])
+    else:
+        resource_prefix = "api/%s" % (page.get("drama_id") or "unknown")
     releases = []
-    for n in range(1, total + 1):
-        url = episode_url(page["platform"], page["stream_id"], n)
+    for n, url in enumerate(urls, start=1):
         releases.append({
             "label": "Episode %d" % n, "quality": None, "resolution": None,
             "size_bytes": None, "codec": None, "season": 1, "episode": n,
@@ -281,8 +392,7 @@ def build_record(page: dict, probe=None) -> dict | None:
             "sources": [{
                 "source_name": SERVICE, "service": SERVICE,
                 "service_tier": SERVICE_TIER,
-                "resource_id": "%s/%s/ep%d" % (
-                    page["platform"], page["stream_id"], n),
+                "resource_id": "%s/ep%d" % (resource_prefix, n),
                 "source_url": page["url"], "final_url": url,
                 "playback_type": PLAYBACK_DIRECT,
                 "status": DEFAULT_SOURCE_STATUS,
@@ -290,7 +400,8 @@ def build_record(page: dict, probe=None) -> dict | None:
                 "mime_type": "application/vnd.apple.mpegurl",
                 "last_checked": int(time.time()),
                 "raw_meta": {"pattern_derived": n not in (1, total),
-                             "probed": n in (1, total)},
+                             "probed": n in (1, total),
+                             "episode_source": episode_source},
             }],
         })
     return {
@@ -564,7 +675,9 @@ def sync(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
     """Walk the sitemapindex round-robin and stage up to ``limit`` dramas.
 
     ``fetcher``/``prober`` are injectable for offline tests; the live path
-    uses http_get / probe_m3u8. On a 0-drama sync, ``resolve_if_dead`` runs
+    uses http_get / probe_m3u8. Pages with no ``v.dramadog.app`` stream
+    resolve their episodes through ``GET /api/eps/<drama_id>`` instead
+    (``fetch_episode_urls``). On a 0-drama sync, ``resolve_if_dead`` runs
     the domain-tracker chain once and the sync is retried on the verified
     base only (Session 106 wiring).
     """
@@ -574,7 +687,7 @@ def sync(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
                                             registry_path)).rstrip("/")
     totals = {"posts_written": 0, "releases_written": 0, "sources_written": 0,
               "skipped": 0, "pages_fetched": 0, "pages_failed": 0,
-              "base_url": base}
+              "api_resolved": 0, "base_url": base}
     limit = limit if limit is not None else 200
 
     def _run_once(base_url_: str) -> list:
@@ -625,6 +738,15 @@ def sync(db_path: Path | str = DEFAULT_DB_PATH, limit: int | None = None,
         if not page:
             totals["pages_failed"] += 1
             continue
+        if not page.get("platform") and page.get("drama_id"):
+            # No v.dramadog.app stream on the page (dramawave,
+            # yourchannel, reelshort, …): the episode API carries the
+            # per-episode .m3u8 list for this drama id.
+            time.sleep(delay)
+            page["episode_urls"] = fetch_episode_urls(base, page["drama_id"],
+                                                      fetch)
+            if page["episode_urls"]:
+                totals["api_resolved"] += 1
         record = build_record(page, probe=probe)
         if not record:
             totals["skipped"] += 1
