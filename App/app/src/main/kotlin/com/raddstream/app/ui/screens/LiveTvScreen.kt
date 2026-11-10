@@ -44,6 +44,7 @@ import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.PosterGridSkeleton
+import com.raddstream.app.ui.layout.CardGeometry
 import com.raddstream.app.viewmodel.LiveTvViewModel
 
 /**
@@ -193,7 +194,7 @@ private fun LiveTvChannelCard(
                     allowAnyHost = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f),
+                        .aspectRatio(CardGeometry.WIDE_ART_ASPECT),
                 )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,

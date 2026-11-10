@@ -445,6 +445,7 @@ fun RaddStreamNavGraph(
                 MyListScreen(
                     onPostClick = { post -> navController.navigateToPost(post) },
                     onOpenWatchHistory = { navController.navigate(Screen.WatchHistory.route) },
+                    onBrowseClick = { navController.navigate(Screen.Browse.createRoute(null)) },
                 )
             }
 

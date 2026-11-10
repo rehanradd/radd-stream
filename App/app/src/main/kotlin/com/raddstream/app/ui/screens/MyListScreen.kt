@@ -19,6 +19,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
@@ -49,6 +50,8 @@ import com.raddstream.app.viewmodel.MyListViewModel
 fun MyListScreen(
     onPostClick: (Post) -> Unit,
     onOpenWatchHistory: () -> Unit = {},
+    /** The empty list's way out: the catalog, not a sentence telling the user to go find it. */
+    onBrowseClick: () -> Unit = {},
     viewModel: MyListViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -106,6 +109,9 @@ fun MyListScreen(
                     )
                 },
                 modifier = Modifier.padding(contentPadding),
+                action = {
+                    OutlinedButton(onClick = onBrowseClick) { Text("Browse the catalog") }
+                },
             )
             state.favorites.isEmpty() -> MyListEmptyContent(
                 popular = state.popular,

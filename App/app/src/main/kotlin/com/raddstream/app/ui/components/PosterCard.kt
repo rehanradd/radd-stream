@@ -35,6 +35,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.ui.layout.CardGeometry
 import com.raddstream.app.ui.theme.RaddArtScrim
 
 /**
@@ -47,7 +48,8 @@ import com.raddstream.app.ui.theme.RaddArtScrim
  * of ten, and the progress line when the app has one — so the facts arrive in an order that
  * reads, instead of as bare labels off the artwork. The painted star is decorative to a screen
  * reader for exactly that reason: the sentence already says it. Every tap target fills the tile
- * width, and the image is 0.68 of it, so it clears 48dp on any phone.
+ * width, and the image is one [CardGeometry.POSTER_ASPECT] box tall, so it clears 48dp on any
+ * phone.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -116,7 +118,7 @@ fun PosterCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(0.68f)
+                    .aspectRatio(CardGeometry.POSTER_ASPECT)
                     .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.BottomStart,
             ) {

@@ -176,6 +176,29 @@ Elevation: use container tiers (§2), shadows ≤8% alpha, never on posters.
 Posters **2:3** (`2:3` — `aspectRatio(2f/3f)`), radius 12dp, gap 8dp; grid:
 2 cols small phone → 3 → 4 landscape. Backdrops **16:9** (hero, 55–65% of
 viewport height), players 16:9 letterboxed on ink.
+
+**Geometry owner (added 2026-11-04, redesign batch 1):** every ratio and tile
+size above is written in ONE file — `ui/layout/CardGeometry.kt` — and screens
+name the constant. Until then this section said 2:3 while three call sites drew
+`0.68f`, and the rail placeholder pinned a 190dp box behind a card that is
+194dp tall: nobody was wrong enough to notice, which is why `CardGeometryTest`
+now refuses an `aspectRatio(…)` literal anywhere outside the token. **Open
+owner question, deliberately not decided here:** should the poster be exactly
+2:3 as this section says, or stay at the 0.68 the app has always drawn? The
+batch consolidated the value without changing it; the answer is one line in
+`CardGeometry` and a rebuild.
+
+**First paint is a skeleton, never a spinner:** a loading screen shows the
+shape that is arriving (`PosterGridSkeleton`, `PosterRailSkeleton`,
+`DetailSkeleton`), each built from the same `CardGeometry` box as the real
+thing, so nothing reflows when the data lands. A spinner stays where it
+belongs — a next page already behind visible content.
+
+**Empty states carry a next action:** no screen may answer "nothing here" with
+a sentence alone. Where the way out is another screen, the button is wired to
+it (Browse → the category picker, Downloads → back to the title, My List → the
+catalog, Search → a new query).
+
 **Scrim law:** text never floats on raw art. Chips/badges: `RaddArtScrim`
 (70% black — white text worst-case 8.6:1 over pure-white art; muted text on
 art must use `RaddScrimMuted` `#C9D6D2` = 5.7:1 — the screen-muted token
