@@ -723,28 +723,11 @@ private fun FilterSheetContent(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         SearchSort.entries.forEach { sort ->
-            val selected = state.sort == sort
-            Row(
-                // CL-2: the row, its radio and its label must read as one option —
-                // "Sort by Newest, selected" — not as a RadioButton that only says
-                // "Selected" or "Not selected". Robo run 3 flagged the bare radio
-                // state as identical across all four options, so the row carries
-                // the full spoken name and the radio itself is paint-only (its
-                // tap is the row's tap — same target, one control).
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .clickable { viewModel.setSort(sort) }
-                    .semantics(mergeDescendants = true) {
-                        contentDescription = "Sort by ${sort.label}, " +
-                            if (selected) "selected" else "not selected"
-                    },
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                RadioButton(selected = selected, onClick = null)
-                Spacer(Modifier.width(8.dp))
-                Text(sort.label)
-            }
+            SortOptionRow(
+                sort = sort,
+                selected = state.sort == sort,
+                onSelect = viewModel::setSort,
+            )
         }
 
         Spacer(Modifier.height(8.dp))
@@ -769,6 +752,37 @@ private fun FilterSheetContent(
             TextButton(onClick = viewModel::resetFilters) { Text("Reset") }
             Button(onClick = onDone) { Text("Apply") }
         }
+    }
+}
+
+/**
+ * One sort option: the row, its radio and its label read as a single option.
+ * The spoken name is the label only — "Sort by Newest" — and the
+ * RadioButton's own `selected` state is what a screen reader announces as
+ * selected or not selected. Robo run 3 embedded the state in the description
+ * ("Sort by Newest, selected"); Robo run 4 flagged that as an item-type
+ * label, because a description must not carry state words. Internal so the
+ * a11y test can pin the spoken name and the selected state directly.
+ */
+@Composable
+internal fun SortOptionRow(
+    sort: SearchSort,
+    selected: Boolean,
+    onSelect: (SearchSort) -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .clickable { onSelect(sort) }
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Sort by ${sort.label}"
+            },
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = null)
+        Spacer(Modifier.width(8.dp))
+        Text(sort.label)
     }
 }
 

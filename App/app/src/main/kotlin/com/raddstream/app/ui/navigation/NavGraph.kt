@@ -1,6 +1,6 @@
 package com.raddstream.app.ui.navigation
 
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -198,10 +198,16 @@ fun RaddStreamNavGraph(
                             icon = { Icon(item.icon, contentDescription = item.label) },
                             label = { Text(item.label) },
                             selected = selected,
-                            // Robo run 3: a bottom-nav item measured 32dp tall — under the
-                            // 48dp touch-target floor. The bar is 80dp, but the item's own
-                            // hit box is what Robo measures, so the item carries the floor.
-                            modifier = Modifier.heightIn(min = 48.dp),
+                            // Robo run 4: a bottom-nav item still measured 32dp tall —
+                            // the height of the M3 active-indicator pill, not the
+                            // item. The heightIn(min = 48.dp) from run 3 never
+                            // reached the measured node: the item's Box already
+                            // defaults to the 80dp bar height, and the indicator is
+                            // a 32dp child inside it. The measured touch target is
+                            // the clickable node, so the item is made to fill the
+                            // bar's full height — the item's own clickable is the
+                            // 80dp bar height, not the 32dp indicator.
+                            modifier = Modifier.fillMaxHeight(),
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = MaterialTheme.colorScheme.primary,
                                 selectedTextColor = MaterialTheme.colorScheme.primary,

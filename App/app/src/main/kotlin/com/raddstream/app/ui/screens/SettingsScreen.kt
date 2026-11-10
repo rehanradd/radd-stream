@@ -952,22 +952,30 @@ private fun PreferenceRowTitle(text: String) {    Text(text, style = MaterialThe
 }
 
 @Composable
-private fun SwitchRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit, label: String) {
+internal fun SwitchRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit, label: String) {
     Row(
-        // CL-1: the row and its Switch must read as one control — "Download
-        // only on Wi-Fi, On" — not as a bare label plus a Switch that only
-        // announces its state. Two toggles both saying "On" was the bug.
-        // Robo run 3 flagged it again: the merged row carried no spoken name
-        // of its own, so the Switch's bare "On" was all Robo heard. The row
-        // now carries the full spoken name, label plus state.
-        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).semantics(mergeDescendants = true) {
-            contentDescription = "$label, " + if (checked) "on" else "off"
-        },
+        // Robo run 4: the row-level merged name ("<label>, on/off") never
+        // reached Robo — the Switch's own toggleable node is what a screen
+        // reader hears, and it only announced its bare state ("On"). So the
+        // Switch itself carries the label as its spoken name, and its
+        // toggleable state is what announces on/off. The painted label is
+        // paint-only, so the words are heard once, on the control itself.
+        // Internal so the a11y test can pin the spoken name directly.
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
-        Switch(checked = checked, onCheckedChange = onCheckedChange)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.weight(1f).clearAndSetSemantics { },
+        )
+        Switch(
+            checked = checked,
+            onCheckedChange = onCheckedChange,
+            modifier = Modifier.semantics { contentDescription = label },
+        )
     }
 }
 

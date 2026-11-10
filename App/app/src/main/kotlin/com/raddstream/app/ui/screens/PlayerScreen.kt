@@ -920,7 +920,13 @@ private fun styleNativeSubtitles(view: PlayerView, state: PlayerUiState) {
             if (s.bold) Typeface.DEFAULT_BOLD else null,
         ),
     )
-    sv.setApplyEmbeddedStyles(true)
+    // Robo run 4: embedded styles were applied on top of the viewer's own
+    // colour, so a track that styles its cues dark renders black text on a
+    // black frame — invisible subtitles, and a 1.03:1 contrast flag. The
+    // viewer's picked colour (bright by the SubtitleColor rule, white by
+    // default) is the readable one, so it wins over whatever the file says.
+    // Position/size still come from the viewer's snapshot below.
+    sv.setApplyEmbeddedStyles(false)
 }
 
 @Composable
@@ -1384,10 +1390,12 @@ private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
                 IconButton(onClick = { vm.togglePlayPause() }, modifier = Modifier.size(72.dp)) {
                     Icon(
                         painter = if (state.isPlaying) painterResource(R.drawable.ic_player_pause) else painterResource(R.drawable.ic_player_play),
-                        // CL-5: the centre control says "Pause video", not bare
-                        // "Pause" — the bottom bar's pause button is visible at
-                        // the same time, and two "Pause" controls is the bug.
-                        contentDescription = if (state.isPlaying) stringResource(R.string.player_pause_centre) else stringResource(R.string.player_play),
+                        // CL-5: the centre control says "Pause video"/"Play video",
+                        // not bare "Pause"/"Play" — the bottom bar's button is
+                        // visible at the same time, and two controls with the
+                        // same name is the bug. Robo run 4 flagged the paused
+                        // pair (two "Play"); the playing pair already differed.
+                        contentDescription = if (state.isPlaying) stringResource(R.string.player_pause_centre) else stringResource(R.string.player_play_centre),
                         tint = Color.White,
                         modifier = Modifier.size(44.dp),
                     )
@@ -1481,8 +1489,11 @@ private fun EdgeHud(
         ) {
             ControlTarget(
                 // CL-5: the Ghost-mode edge control is the centre control by
-                // another name — it says "Pause video", not bare "Pause".
-                label = if (state.isPlaying) stringResource(R.string.player_pause_centre) else stringResource(R.string.player_play),
+                // another name — it says "Pause video"/"Play video", not bare
+                // "Pause"/"Play". Robo run 4 flagged two "Play" controls; the
+                // centre button now says "Play video", and this one is the
+                // centre button in Ghost mode, so it says the same.
+                label = if (state.isPlaying) stringResource(R.string.player_pause_centre) else stringResource(R.string.player_play_centre),
                 onClick = { if (state.isEnded) vm.playFrom(0) else vm.togglePlayPause() },
             ) {
                 Icon(
@@ -1758,7 +1769,19 @@ private fun BottomControls(
                 title = { RaddDialogTitle(stringResource(R.string.player_volume_title)) },
                 text = {
                     Column {
-                        Text(stringResource(R.string.player_volume, (state.userVolume * 100).toInt()))
+                        // Robo run 4: this level line says "Volume 100%" — and so
+                        // does the HUD toast — so the two read identically. The
+                        // dialog is the level control, so it announces itself as
+                        // one ("Volume level, 100 percent") while the paint stays
+                        // the short "Volume 100%".
+                        val volumeLevelSpoken = stringResource(
+                            R.string.player_volume_level,
+                            (state.userVolume * 100).toInt(),
+                        )
+                        Text(
+                            stringResource(R.string.player_volume, (state.userVolume * 100).toInt()),
+                            modifier = Modifier.semantics { contentDescription = volumeLevelSpoken },
+                        )
                         Slider(
                             value = state.userVolume,
                             onValueChange = { vm.setUserVolume(it) },
