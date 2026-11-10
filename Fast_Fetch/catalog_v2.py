@@ -479,6 +479,14 @@ CREATE INDEX IF NOT EXISTS idx_cat_works_browse ON cat_works(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_releases_work ON cat_releases(work_id, quality_score DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_links_release ON cat_links(release_id, rank_score DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_links_state ON cat_links(state, playability);
+-- v2-listing two-step (2026-11-10): the grid's three live-link COUNTs and the
+-- `available` facet's EXISTS all filter `cat_links` by work_id, and no index
+-- led with it — each COUNT was a full scan (or a bad state-index walk: one
+-- work's live_stream COUNT measured 29s) of the 3.8M-row table, which is what
+-- made /api/v2/browse and /api/v2/search hang. (work_id, playability, state)
+-- answers all three COUNTs from the index alone: work_id seeks the work,
+-- playability takes the IN list, state is filtered from the index rows.
+CREATE INDEX IF NOT EXISTS idx_cat_links_work ON cat_links(work_id, playability, state);
 CREATE INDEX IF NOT EXISTS idx_cat_links_ledger ON cat_links(ledger_link_id);
 CREATE INDEX IF NOT EXISTS idx_cat_episodes_work ON cat_episodes(work_id, number);
 

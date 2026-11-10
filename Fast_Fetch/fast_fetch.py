@@ -1422,6 +1422,22 @@ def _init_db(db_path: Path | None = None) -> None:
         # was measured and REJECTED here (it makes the grouped page query
         # 3-4x slower — see viewer.py), so this is the only new index.
         conn.execute("CREATE INDEX IF NOT EXISTS idx_releases_post_quality ON releases(post_id, quality)")
+        # v2-listing two-step (2026-11-10): the v2 grid's three live-link
+        # COUNTs and the `available` facet filter `cat_links` by work_id, and
+        # no index led with it — each COUNT was a full scan (one work's
+        # live_stream COUNT measured 29s) of the 3.8M-row table, which hung
+        # /api/v2/browse and /api/v2/search. `cat_links` is a projection
+        # table: a fresh ledger-only DB has no such table, so the index is
+        # created only when the table exists. The projection DDL mints the
+        # same index for future rebuilds; this is the live-DB path, built on
+        # the first request after restart like idx_releases_post_quality.
+        has_cat_links = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cat_links'"
+        ).fetchone()
+        if has_cat_links:
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_cat_links_work"
+                " ON cat_links(work_id, playability, state)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_site ON sitemap_cache(site, scraped)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_retry ON sitemap_cache(scraped, attempts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_tmdb ON posts(tmdb_id)")

@@ -1149,6 +1149,12 @@ def _run_listing(conn, *, sort, order, limit, include_adult, cursor,
     catalog is re-sorted by every ingestion run: an offset page can repeat or skip a
     title, a keyset page cannot, provided the sort expression is total — which is why
     every expression is COALESCEd and the `id` tiebreak is fixed at ASC.
+
+    The page is resolved in two steps: the ids (plus sort keys) from `cat_works`
+    alone, then the full rows — including the five correlated subqueries — for
+    just those ids. The one-query shape ran those subqueries over every matching
+    work before LIMIT, and the `cat_links` COUNTs had no work_id index, so a
+    plain browse never answered; see the note at the step-1 query.
     """
     clauses = ["1 = 1"] if include_adult else [_adult_clause("w")]
     clauses.extend(facet_clauses)
@@ -1180,26 +1186,32 @@ def _run_listing(conn, *, sort, order, limit, include_adult, cursor,
                       " WHERE cat_works_fts MATCH :fts)")
         params["fts"] = " ".join(f'"{token}"*' for token in query_tokens)
 
-    select_cols = """
-        w.*,
-        (SELECT COUNT(*) FROM cat_seasons s WHERE s.work_id = w.id) AS season_count,
-        (SELECT COUNT(*) FROM cat_review_queue q WHERE q.work_id = w.id
-          AND q.resolved_at IS NULL) AS open_reviews
-    """ + "," + _AVAIL_COLS
-    sql = f"SELECT {select_cols}, {expr} AS __sk FROM cat_works w WHERE {where_sql}"
+    direction = "DESC" if order == "desc" else "ASC"
+    collate = " COLLATE NOCASE" if sort == "title" else ""
+    # Two-step page resolution (2026-11-10, v2-listing hang): the page's ids
+    # first, from `cat_works` alone, then the details for just those ids.
+    # The one-query shape evaluated the five correlated subqueries in
+    # `select_cols` for EVERY matching work before LIMIT — and the three
+    # `cat_links` COUNTs have no work_id index, so each is a full scan (or a
+    # bad index walk: one work's live_stream COUNT measured 29s) of the
+    # 3.8M-row table. A plain browse therefore never answered (504 at the
+    # 15s nginx edge; direct calls ran past 90s). Step 1 resolves the page
+    # from `cat_works` alone (warm 0.1-0.7s on the live copy); step 2 runs
+    # the subqueries for just the page, served by `idx_cat_links_work`.
+    # The keyset clause and ORDER BY are byte-identical to the old shape,
+    # so cursors minted before this change keep paging the same rows.
+    keyset_sql = ""
     if cursor is not None:
         params["cv"] = cursor["v"]
         params["cid"] = int(cursor["i"])
         op = "<" if order == "desc" else ">"
-        sql += f" AND (({expr} {op} :cv) OR ({expr} = :cv AND w.id > :cid))"
-    direction = "DESC" if order == "desc" else "ASC"
-    collate = " COLLATE NOCASE" if sort == "title" else ""
-    sql += f" ORDER BY ({expr}{collate}) {direction}, id ASC"
-    sql += " LIMIT :lim"
+        keyset_sql = f" AND (({expr} {op} :cv) OR ({expr} = :cv AND w.id > :cid))"
+    step1_sql = (f"SELECT w.id, {expr} AS __sk FROM cat_works w WHERE {where_sql}"
+                 f"{keyset_sql} ORDER BY ({expr}{collate}) {direction}, id ASC"
+                 " LIMIT :lim")
     params["lim"] = limit + 1
-
     try:
-        rows = conn.execute(sql, params).fetchall()
+        step1_rows = conn.execute(step1_sql, params).fetchall()
     except sqlite3.OperationalError:
         if not use_fts_match:
             raise
@@ -1210,8 +1222,25 @@ def _run_listing(conn, *, sort, order, limit, include_adult, cursor,
                             facet_clauses=facet_clauses, facet_params=facet_params,
                             query_tokens=query_tokens, query_norm=query_norm,
                             use_fts_match=False)
-    has_more = len(rows) > limit
-    rows = rows[:limit]
+    has_more = len(step1_rows) > limit
+    step1_rows = step1_rows[:limit]
+    page_ids = [int(r["id"]) for r in step1_rows]
+    if not page_ids:
+        rows = []
+    else:
+        select_cols = """
+            w.*,
+            (SELECT COUNT(*) FROM cat_seasons s WHERE s.work_id = w.id) AS season_count,
+            (SELECT COUNT(*) FROM cat_review_queue q WHERE q.work_id = w.id
+              AND q.resolved_at IS NULL) AS open_reviews
+        """ + "," + _AVAIL_COLS
+        marks = ", ".join("?" for _ in page_ids)
+        rows = conn.execute(
+            f"SELECT {select_cols}, {expr} AS __sk FROM cat_works w"
+            f" WHERE w.id IN ({marks})", page_ids).fetchall()
+        # Step 2 has no ORDER BY: impose the step-1 page order in Python.
+        by_id = {int(r["id"]): r for r in rows}
+        rows = [by_id[pid] for pid in page_ids if pid in by_id]
     items = []
     for row in rows:
         item = _browse_item(row)

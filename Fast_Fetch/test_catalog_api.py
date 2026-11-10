@@ -545,6 +545,24 @@ class BrowseTests(CatalogApiTestCase):
         self.assertEqual(dead["available"]["state"], "unavailable")
         self.assertIn("no_playable_source", dead["flags"])
 
+    def test_listing_counts_seek_the_work_id_index_not_a_link_scan(self):
+        """v2-listing two-step (2026-11-10): the three live-link COUNTs must
+        seek by work_id. Without idx_cat_links_work each COUNT scanned the
+        whole link table (one work's live_stream COUNT measured 29s on the
+        live copy), which is what hung /api/v2/browse and /api/v2/search."""
+        row = self.conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index'"
+            " AND name = 'idx_cat_links_work'").fetchone()
+        self.assertIsNotNone(row, "projection must mint idx_cat_links_work")
+        work_id = self.work["Dune"]["id"]
+        plan = [r["detail"] for r in self.conn.execute(
+            "EXPLAIN QUERY PLAN SELECT COUNT(*) FROM cat_links la"
+            " WHERE la.work_id = ? AND COALESCE(la.state, 'active') <> 'dead'"
+            " AND la.playability IN ('stream', 'both')", (work_id,))]
+        self.assertTrue(
+            any("USING COVERING INDEX idx_cat_links_work" in d for d in plan), plan)
+        self.assertFalse(any(d.startswith("SCAN la") for d in plan), plan)
+
     def test_year_and_min_quality_facets(self):
         recent = catalog_api.browse(self.conn, year_from=2022, limit=100)
         self.assertTrue(all((item["year"] or 0) >= 2022 for item in recent["items"]))

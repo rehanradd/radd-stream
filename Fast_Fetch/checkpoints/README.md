@@ -5,6 +5,18 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-10 — Muse [V2-LISTING-TWO-STEP]: `/api/v2/browse` + `/api/v2/search`
+  hung (504; direct calls past 90s) — `_run_listing` ran five correlated
+  subqueries per matching work and the three `cat_links` COUNTs had no work_id
+  index (one work's live_stream COUNT 29.34s on the live copy). Two-step page
+  resolution (ids from `cat_works` alone, details for just the page) +
+  covering index `idx_cat_links_work (work_id, playability, state)` in the
+  projection DDL and in `_init_db` (guarded; builds on first request after
+  restart, ~2 min on the copy). After: browse 0.29s, search 0.03s, title
+  0.92s. Tests: catalog_api 135, api_v2 72, catalog_v2 103, database 217 —
+  all OK solo. Full local gate not run (557 MB avail); CI is the gate —
+  [20261110-muse-v2-listing-two-step.md](20261110-muse-v2-listing-two-step.md)
+
 - 2026-11-10 — Muse [PHASE7-BACKEND-WORK-REF]: `work_ref` on the v2 grid and
   detail — `_work_ref_for()` mints the account handle on `_browse_item` and the
   `work_detail` work object (None without key/secret, never forged); `test_api_v2`
