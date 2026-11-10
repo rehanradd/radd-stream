@@ -119,8 +119,10 @@ class BottomNavTouchTargetTest {
         showBar()
         // Robo run 5: the M3 indicator pill measured 32dp — under the 48dp
         // floor — even though the item clickable was 80dp. The custom tab's
-        // pill is 48dp, so even the pill itself clears the floor.
-        val pills = compose.onAllNodesWithTag(BottomNavIndicatorTag)
+        // pill is 48dp, so even the pill itself clears the floor. The pill
+        // carries the test tag, but the tab's own semantics node hides it
+        // in the merged tree, so the query uses the unmerged tree.
+        val pills = compose.onAllNodesWithTag(BottomNavIndicatorTag, useUnmergedTree = true)
         pills.assertCountEquals(items.size)
         for (node in pills.fetchSemanticsNodes()) {
             val height = with(compose.density) { node.boundsInRoot.height.toDp() }
