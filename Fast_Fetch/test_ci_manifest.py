@@ -52,7 +52,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 WORKFLOW = os.path.join(ROOT, ".github", "workflows", "backend-ci.yml")
-TRUNK_REF = os.environ.get("RADD_CI_MANIFEST_TRUNK", "origin/master")
+TRUNK_REF = os.environ.get("RADD_CI_MANIFEST_TRUNK", "origin/main")
 TRUNK_WORKFLOW = ".github/workflows/backend-ci.yml"
 # The commit whose tree defines "tracked". Default HEAD = exactly what a clean
 # CI checkout of the pushed commit gets; RADD_CI_MANIFEST_REF lets the branch

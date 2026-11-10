@@ -198,6 +198,12 @@ jobs:
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          # Full history + all branches: the ci-manifest guard reads
+          # origin/main (TRUNK_REF) to prove this file never drops a trunk
+          # suite. A depth-1 single-branch checkout has no trunk ref at
+          # all, and the guard fails loudly rather than passing blind.
+          fetch-depth: 0
 
       - name: 🐍 Interpreter report (no pip, no installs)
         run: |
