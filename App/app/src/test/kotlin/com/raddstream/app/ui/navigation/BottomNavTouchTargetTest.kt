@@ -1,6 +1,6 @@
 package com.raddstream.app.ui.navigation
 
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.Home
@@ -30,12 +30,18 @@ import org.robolectric.RobolectricTestRunner
  * even after run 3 added heightIn(min = 48.dp) to the item. The M3 source
  * (1.3.0, the version this app's compose-bom pins) shows why: the item's Box
  * already defaults to the 80dp bar height, and 32dp is the active-indicator
- * pill inside it — so the heightIn never reached the measured node. The item
- * now fills the bar's full height, and this test pins the rendered result: it
- * builds the bar exactly the way NavGraph does (NavigationBarItem, icon +
- * label, fillMaxHeight) and asserts every item's clickable node is at least
- * 48dp tall. Runs on the JVM under Robolectric because this project has no
- * emulator image.
+ * pill inside it — so the heightIn never reached the measured node. The bar
+ * is now set to exactly 80dp (the M3 spec height) and the item keeps M3's own
+ * 80dp floor. This test pins the rendered result: it builds the bar exactly
+ * the way NavGraph does (NavigationBar at 80dp, NavigationBarItem, icon +
+ * label) and asserts every item's clickable node is at least 48dp tall and
+ * is the full 80dp bar height. Runs on the JVM under Robolectric because this
+ * project has no emulator image.
+ *
+ * fillMaxHeight() on the item was tried first in this round and is WRONG:
+ * it makes the item fill the available height instead of the bar, so the bar
+ * expands to fill the screen (the test measured 470dp — the test surface
+ * height). It must never come back.
  *
  * Requires an x86_64 runner. Robolectric's native runtime has no Linux/aarch64
  * build (robolectric/robolectric#9166) and it fails while the runner boots, so
@@ -58,14 +64,13 @@ class BottomNavTouchTargetTest {
     private fun showBar() {
         compose.setContent {
             RaddStreamTheme {
-                NavigationBar {
+                NavigationBar(modifier = Modifier.height(80.dp)) {
                     items.forEach { (label, icon) ->
                         NavigationBarItem(
                             icon = { Icon(icon, contentDescription = label) },
                             label = { Text(label) },
                             selected = label == "Home",
                             onClick = {},
-                            modifier = Modifier.fillMaxHeight(),
                         )
                     }
                 }

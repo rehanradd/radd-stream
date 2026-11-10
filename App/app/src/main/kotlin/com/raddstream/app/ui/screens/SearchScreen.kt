@@ -66,6 +66,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -757,12 +758,14 @@ private fun FilterSheetContent(
 
 /**
  * One sort option: the row, its radio and its label read as a single option.
- * The spoken name is the label only — "Sort by Newest" — and the
- * RadioButton's own `selected` state is what a screen reader announces as
+ * The spoken name is the label only — "Sort by Newest" — and the row carries
+ * its selected state itself, which is what a screen reader announces as
  * selected or not selected. Robo run 3 embedded the state in the description
  * ("Sort by Newest, selected"); Robo run 4 flagged that as an item-type
- * label, because a description must not carry state words. Internal so the
- * a11y test can pin the spoken name and the selected state directly.
+ * label, because a description must not carry state words. The RadioButton's
+ * own `selected` does not merge into the row (proven by the run-4 test), so
+ * the row sets `selected` explicitly — the RadioButton is paint-only. Internal
+ * so the a11y test can pin the spoken name and the selected state directly.
  */
 @Composable
 internal fun SortOptionRow(
@@ -777,6 +780,13 @@ internal fun SortOptionRow(
             .clickable { onSelect(sort) }
             .semantics(mergeDescendants = true) {
                 contentDescription = "Sort by ${sort.label}"
+                // The RadioButton's own `selected` state does not merge into
+                // this row (proven by the run-4 test: the merged node carried
+                // the description and the text but no Selected property), so
+                // the row — which is the option, and whose tap is the control
+                // — carries its selected state itself. That is what a screen
+                // reader announces as selected / not selected.
+                selected = selected
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {

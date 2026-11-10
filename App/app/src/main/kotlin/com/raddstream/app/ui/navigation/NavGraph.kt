@@ -1,6 +1,6 @@
 package com.raddstream.app.ui.navigation
 
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -191,6 +191,18 @@ fun RaddStreamNavGraph(
             if (showBottomBar) {
                 NavigationBar(
                     containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    // Robo run 4: a bottom-nav item still measured 32dp tall —
+                    // the height of the M3 active-indicator pill, not the
+                    // item. The heightIn(min = 48.dp) from run 3 never reached
+                    // the measured node, and fillMaxHeight() on the item
+                    // (tried first in this round) is wrong — it makes the item
+                    // fill the available height instead of the bar, so the bar
+                    // expands to fill the screen. The bar is 80dp by the M3
+                    // spec, so it is set to exactly 80dp here; the item keeps
+                    // M3's own 80dp floor (defaultMinSize on the item Box), so
+                    // the item's own clickable is the 80dp bar height, not the
+                    // 32dp indicator.
+                    modifier = Modifier.height(80.dp),
                 ) {
                     bottomNavItems.forEach { item ->
                         val selected = currentRoute == item.route
@@ -198,16 +210,6 @@ fun RaddStreamNavGraph(
                             icon = { Icon(item.icon, contentDescription = item.label) },
                             label = { Text(item.label) },
                             selected = selected,
-                            // Robo run 4: a bottom-nav item still measured 32dp tall —
-                            // the height of the M3 active-indicator pill, not the
-                            // item. The heightIn(min = 48.dp) from run 3 never
-                            // reached the measured node: the item's Box already
-                            // defaults to the 80dp bar height, and the indicator is
-                            // a 32dp child inside it. The measured touch target is
-                            // the clickable node, so the item is made to fill the
-                            // bar's full height — the item's own clickable is the
-                            // 80dp bar height, not the 32dp indicator.
-                            modifier = Modifier.fillMaxHeight(),
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = MaterialTheme.colorScheme.primary,
                                 selectedTextColor = MaterialTheme.colorScheme.primary,
