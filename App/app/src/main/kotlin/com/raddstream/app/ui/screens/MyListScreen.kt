@@ -86,8 +86,6 @@ fun MyListScreen(
                         Icon(Icons.Default.History, contentDescription = "Watch history")
                     }
                 },
-                },
->>>>>>> 40370e2 (Session 81 (D1.3): Watch History screen)
             )
         },
     ) { contentPadding ->
