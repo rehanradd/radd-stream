@@ -785,8 +785,12 @@ internal fun SortOptionRow(
                 // the description and the text but no Selected property), so
                 // the row — which is the option, and whose tap is the control
                 // — carries its selected state itself. That is what a screen
-                // reader announces as selected / not selected.
-                selected = selected
+                // reader announces as selected / not selected. `this.selected`
+                // is the semantics property; the bare `selected` on the right
+                // is the row's parameter — the two share a name, so the
+                // receiver must be named or the compiler reads it as
+                // reassigning the parameter.
+                this.selected = selected
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {
