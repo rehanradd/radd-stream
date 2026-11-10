@@ -104,7 +104,9 @@ data class WireBrowseItem(
      * described in the file header — never a v1 post id.
      */
     fun toPost(): Post = Post(
-        id = if (id != null && id in 1..Int.MAX_VALUE) -id.toInt() else 0,
+        // Long, never an IntRange: `id in 1..Int.MAX_VALUE` does not compile
+        // (IntRange.contains takes Int; Kotlin converts no Long to Int).
+        id = if (id != null && id >= 1 && id <= Int.MAX_VALUE) -id.toInt() else 0,
         workId = id,
         title = title.orEmpty(),
         cleanTitle = title,
