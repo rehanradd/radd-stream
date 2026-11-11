@@ -530,5 +530,93 @@ class DatabaseAndWireTests(unittest.TestCase):
         self.assertEqual(detail["season_artwork"], [])
 
 
+#: The Masterplan poster the 2026-10-24 bad import wrote onto 13,234 posts
+#: (Fall post 7648 among them). A re-resolve run targets exactly these rows.
+WRONG_POSTER = "https://image.tmdb.org/t/p/original/7ULXMNvmZSi13zN3EZjz8wbER9B.jpg"
+
+MOVIE_DETAIL = {
+    "id": 587807,
+    "title": "Tom and Jerry",
+    "poster_path": "/tom-jerry.jpg",
+    "backdrop_path": "/tom-jerry-bg.jpg",
+    "images": {"posters": [], "backdrops": []},
+    "external_ids": {"imdb_id": "tt1361336"},
+}
+
+
+class PosterUrlScopeTests(unittest.TestCase):
+    """--poster-url scopes a --force run to the rows stuck on one wrong poster.
+
+    Without the filter, --force re-reads the whole catalog; with it, only the
+    rows carrying that exact poster_url are candidates, so a re-resolve can
+    fix the 13,234 Masterplan rows without touching the other ~144,000.
+    """
+
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.db_path = Path(self.temp_dir.name) / "catalog.db"
+        self.fast_patch = patch.object(fast_fetch, "DB_PATH", self.db_path)
+        self.fast_patch.start()
+        fast_fetch.init_db()
+        with fast_fetch.get_db() as conn:
+            conn.executescript(fast_fetch.POST_ARTWORK_DDL)
+            self.a_id = self._insert(
+                conn, "https://site.example/a/", WRONG_POSTER)
+            self.b_id = self._insert(
+                conn, "https://site.example/b/",
+                "https://image.tmdb.org/t/p/w500/good.jpg")
+            self.c_id = self._insert(conn, "https://site.example/c/", None)
+
+    def _insert(self, conn, url, poster_url):
+        cur = conn.execute(
+            "INSERT INTO posts (url, title, clean_title, year, content_type, "
+            "seasons, poster_url, tmdb_id, imdb_id, is_18_plus) "
+            "VALUES (?, 'Tom and Jerry', 'Tom and Jerry', 2021, 'movie', '', "
+            "?, 587807, 'tt1361336', 0)",
+            (url, poster_url),
+        )
+        return cur.lastrowid
+
+    def tearDown(self):
+        self.fast_patch.stop()
+        self.temp_dir.cleanup()
+
+    def _poster(self, conn, post_id):
+        return conn.execute("SELECT poster_url FROM posts WHERE id = ?",
+                            (post_id,)).fetchone()[0]
+
+    def test_poster_filter_rewrites_only_the_wrong_poster(self):
+        client = FakeClient(detail=MOVIE_DETAIL)
+        with fast_fetch.get_db() as conn:
+            counters = tmdb.run(conn, client, force=True,
+                                poster_url=WRONG_POSTER, fallback=None)
+        self.assertEqual(counters["processed"], 1)
+        self.assertEqual(counters["matched"], 1)
+        with fast_fetch.get_db() as conn:
+            self.assertEqual(
+                self._poster(conn, self.a_id),
+                "https://image.tmdb.org/t/p/w500/tom-jerry.jpg")
+            self.assertEqual(
+                self._poster(conn, self.b_id),
+                "https://image.tmdb.org/t/p/w500/good.jpg")
+            self.assertIsNone(self._poster(conn, self.c_id))
+
+    def test_poster_filter_sql_binds_before_the_id_cursor(self):
+        with fast_fetch.get_db() as conn:
+            columns = tmdb.post_columns(conn)
+            scoped = tmdb.candidate_sql(columns, art_table=True, force=True,
+                                        poster_url=WRONG_POSTER)
+            self.assertIn("p.poster_url = ?", scoped)
+            rows = conn.execute(scoped, (WRONG_POSTER, 0, 10)).fetchall()
+            self.assertEqual([row["id"] for row in rows], [self.a_id])
+            unscoped = tmdb.candidate_sql(columns, art_table=True, force=True)
+            self.assertNotIn("p.poster_url = ?", unscoped)
+
+    def test_poster_url_without_force_is_rejected(self):
+        with self.assertRaises(SystemExit) as caught:
+            tmdb.main(["--poster-url", WRONG_POSTER, "--db", str(self.db_path)])
+        self.assertEqual(caught.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

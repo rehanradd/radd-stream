@@ -148,7 +148,6 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     EXCLUDED: test_9xmovies.py  — per-site parser
 #     EXCLUDED: test_audit_staging.py  — owner not yet verified offline
 #     EXCLUDED: test_backfill_animated_flag.py  — operator migration, not a suite
-#     EXCLUDED: test_backfill_tmdb.py  — operator migration, not a suite
 #     EXCLUDED: test_bolly4u_import.py  — per-site parser
 #     EXCLUDED: test_desicinemas.py  — per-site parser
 #     EXCLUDED: test_download_endpoint.py  — owner not yet verified offline
@@ -315,6 +314,11 @@ jobs:
 
       - name: 🧪 test_backfill_cast.py
         run: python3 -S Fast_Fetch/test_backfill_cast.py
+
+      # TMDB/Cinemeta artwork backfill (A1 poster re-resolve): offline, stdlib,
+      # fake HTTP client, temp-file DB, no network.
+      - name: 🧪 test_backfill_tmdb.py
+        run: python3 -S Fast_Fetch/test_backfill_tmdb.py
 
       # The resolved-link cache (Session 123, scale plan B2): lazy-first
       # freshness reads over the ledger row + the top-200 eager warmer.

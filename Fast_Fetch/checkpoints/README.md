@@ -5,6 +5,14 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-11 — Muse [A1-POSTER-RERESOLVE]: `--poster-url` scope for
+  `backfill_tmdb.py` so a `--force` run re-resolves only the 13,234 posts
+  stuck on the Masterplan poster (one 2026-10-24 bad-import window, not an
+  ongoing scraper fault). `test_backfill_tmdb.py` registered in the gate
+  (84 suites). Tests: backfill_tmdb 38, docs_invariants 22, ci_manifest 10
+  — all OK solo. Live data run is parent-gated. —
+  [20261111-muse-a1-poster-reresolve.md](20261111-muse-a1-poster-reresolve.md)
+
 - 2026-11-10 — Muse [DRAMADOG-CASTLE-FOLLOWUP]: DramaDog episode API
   (`GET /api/eps/<drama_id>` — one .m3u8 per episode, count ==
   numberOfEpisodes, verified 30/30, 70/70, 28/28 live) unlocks the

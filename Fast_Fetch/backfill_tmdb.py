@@ -49,6 +49,8 @@ Typical use:
     python3 -S Fast_Fetch/backfill_tmdb.py --db <path> --limit 1000   # Cinemeta only
     python3 -S Fast_Fetch/backfill_tmdb.py --db <path> --no-cinemeta --dry-run
     TMDB_API_KEY=... python3 -S Fast_Fetch/backfill_tmdb.py --db <path> --force
+    python3 -S Fast_Fetch/backfill_tmdb.py --db <path> --poster-url <wrong-url> \
+        --force --dry-run   # re-resolve only the rows stuck on one wrong poster
 
 A run is safe to repeat: existing root art is left alone unless `--force`, and a
 season/episode row is upserted by its key. Rows with `is_18_plus = 1` are skipped
@@ -951,7 +953,7 @@ def _missing_metadata_sql(columns: set[str]) -> str | None:
 
 
 def candidate_sql(columns: set[str], *, art_table: bool, force: bool,
-                  fallback: bool = False) -> str:
+                  fallback: bool = False, poster_url: str | None = None) -> str:
     adult = "p.is_18_plus = 0" if "is_18_plus" in columns else "1 = 1"
     if force:
         where = adult
@@ -972,6 +974,11 @@ def candidate_sql(columns: set[str], *, art_table: bool, force: bool,
             where = f"{adult} AND ({missing_root} OR {missing_seasons} OR {missing_meta})"
         else:
             where = f"{adult} AND ({missing_root} OR {missing_seasons})"
+    if poster_url is not None:
+        # Scope the run to the rows stuck on one wrong poster (e.g. the
+        # Masterplan image shared by 13,234 posts after the 2026-10-24 bad
+        # import): without this, --force would re-read the whole catalog.
+        where = f"{where} AND p.poster_url = ?"
     return f"SELECT {select_columns(columns)} FROM posts p WHERE {where} AND p.id > ? " \
            f"ORDER BY p.id LIMIT ?"
 
@@ -1002,7 +1009,8 @@ def run(conn: sqlite3.Connection, client: TmdbClient | None, *, limit: int = 0,
         after_id: int = 0, workers: int = DEFAULT_WORKERS, force: bool = False,
         dry_run: bool = False, include_specials: bool = False,
         want_stills: bool = True, batch: int = BATCH,
-        fallback: CinemetaClient | None = None) -> dict:
+        fallback: CinemetaClient | None = None,
+        poster_url: str | None = None) -> dict:
     columns = post_columns(conn)
     required = {"id", "title", "clean_title", "year", "content_type", "seasons",
                 "poster_url", "backdrop_urls"}
@@ -1011,7 +1019,7 @@ def run(conn: sqlite3.Connection, client: TmdbClient | None, *, limit: int = 0,
         raise ValueError(f"posts is missing column(s): {', '.join(sorted(missing))}")
     art_table = table_exists(conn, "post_artwork")
     sql = candidate_sql(columns, art_table=art_table, force=force,
-                        fallback=fallback is not None)
+                        fallback=fallback is not None, poster_url=poster_url)
 
     counters = {"processed": 0, "matched": 0, "no_match": 0, "failed": 0,
                 "artwork_rows": 0, "last_id": after_id}
@@ -1023,7 +1031,11 @@ def run(conn: sqlite3.Connection, client: TmdbClient | None, *, limit: int = 0,
             take = batch if remaining is None else min(batch, remaining)
             if take <= 0:
                 break
-            rows = conn.execute(sql, (counters["last_id"], take)).fetchall()
+            params: tuple = (counters["last_id"], take)
+            if poster_url is not None:
+                # The poster filter binds before the id cursor in the SQL.
+                params = (poster_url, *params)
+            rows = conn.execute(sql, params).fetchall()
             if not rows:
                 break
             counters["last_id"] = int(rows[-1]["id"])
@@ -1118,6 +1130,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Include TMDB season 0 (specials)")
     parser.add_argument("--force", action="store_true",
                         help="Re-read every non-adult row and replace existing art/metadata")
+    parser.add_argument("--poster-url", default=None,
+                        help="Re-resolve only rows whose stored poster_url equals this URL "
+                             "(e.g. one wrong image shared by many posts). Use with --force "
+                             "and --dry-run first; without --force it is rejected.")
     parser.add_argument("--no-cinemeta", action="store_true",
                         help="Never consult the keyless Cinemeta fallback")
     parser.add_argument("--dry-run", action="store_true",
@@ -1131,6 +1147,10 @@ def main(argv=None) -> int:
     if args.limit < 0 or args.after_id < 0 or args.workers < 1 or args.min_interval < 0:
         parser.error("--limit/--after-id must be >= 0, --workers >= 1, "
                      "--min-interval >= 0")
+    if args.poster_url is not None and not args.force:
+        # Without --force the filter would select the rows and then leave
+        # their posters untouched: a silent no-op that looks like a fix.
+        parser.error("--poster-url re-resolves stored art: use it with --force")
     db_path = _target_path(args)
     if not db_path.exists():
         print(f"[!] no database at {db_path}", file=sys.stderr)
@@ -1177,6 +1197,7 @@ def main(argv=None) -> int:
             include_specials=args.include_specials,
             want_stills=not args.no_stills,
             fallback=fallback,
+            poster_url=args.poster_url,
         )
     except ValueError as error:
         print(f"[!] {error}", file=sys.stderr)
