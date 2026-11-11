@@ -89,7 +89,17 @@ def _build_panel(path):
         "theme_hero_autoplay INTEGER, theme_hero_interval_s INTEGER, "
         "hero_max INTEGER, tabs TEXT, disclaimer_text TEXT, "
         "disclaimer_version INTEGER, disclaimer_email TEXT, home_sections_max INTEGER, "
-        "section_cap INTEGER, free_quality_cap TEXT)")
+        "section_cap INTEGER, free_quality_cap TEXT, "
+        "resolver_concurrency INTEGER, candidate_cap INTEGER, cache_ttl_h INTEGER, "
+        "warmup_count INTEGER, warmup_interval_h INTEGER, "
+        "rate_limit_play_per_min INTEGER, import_cap INTEGER, "
+        "import_concurrency INTEGER, prefetch_queue INTEGER, "
+        "prefetch_concurrency INTEGER, domain_check_interval_min INTEGER)")
+    conn.execute(
+        "CREATE TABLE pauses (id INTEGER PRIMARY KEY, target_type TEXT NOT NULL, "
+        "target_id TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 1, "
+        "reason TEXT, paused_by INTEGER, paused_at INTEGER, "
+        "resumed_at INTEGER, resumed_by INTEGER)")
     conn.execute(
         "CREATE TABLE app_remote_config_history (id INTEGER PRIMARY KEY, "
         "config_version INTEGER NOT NULL, snapshot_json TEXT NOT NULL, "
@@ -130,9 +140,10 @@ def _build_panel(path):
             (9, "No such target", "Nobody", "info", "everyone", None, now - 10, now + 3600, "published"),
         ])
     conn.execute(
-        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (1, "light", "#2BC79A", 1, 0, 8, 4, "my_list,home,home,search",
-         "Links come from public sites. We host nothing.", 3, "radddao1@gmail.com", 12, 20, "720p"))
+         "Links come from public sites. We host nothing.", 3, "radddao1@gmail.com", 12, 20, "720p",
+         2, 10, 6, 50, 24, 30, 25, 1, 100, 1, 60))
     conn.execute(
         "INSERT INTO app_remote_config_history VALUES (?,?,?,?,?)",
         (1, 5, '{"config": {"min_version_code": 42, "config_version": 5}}',
@@ -433,6 +444,292 @@ class PanelFeedTests(unittest.TestCase):
         # The valid values in the same row still survive the bad ones.
         self.assertTrue(theme["dynamic_color"])
         self.assertFalse(theme["hero_autoplay"])
+
+    def test_live_tv_is_a_known_tab_and_readable(self):
+        # The app ships a Live TV screen; the backend tab list must accept
+        # the id the panel now publishes, and the default list carries it.
+        self.assertIn("live_tv", panel_feed.TAB_IDS)
+        self.assertIn("live_tv", panel_feed.TABS_DEFAULT)
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET tabs='home,live_tv,search' WHERE id=1")
+        conn.commit()
+        conn.close()
+        self.assertEqual(
+            panel_feed.read_tabs(panel_path=self.panel_path),
+            ["home", "live_tv", "search"])
+
+    def test_force_update_defaults_when_nothing_published(self):
+        # The fixture snapshot has a config but no force-update fields.
+        self.assertEqual(
+            panel_feed.read_force_update(panel_path=self.panel_path),
+            panel_feed.FORCE_UPDATE_DEFAULTS | {"region_order": []})
+
+    def test_force_update_reads_published_snapshot(self):
+        import json
+        conn = sqlite3.connect(self.panel_path)
+        snap = {"config": {
+            "min_version_code": 42, "latest_version_code": 350,
+            "latest_version_name": "1.0.5", "force_update": 1,
+            "force_update_message": "Please update to keep watching.",
+            "maintenance_message": "Back soon.",
+            "brand_primary": "#2563EB", "brand_accent": "#7C3AED",
+            "region_order": "pakistan,india,asia,international"}}
+        conn.execute(
+            "UPDATE app_remote_config_history SET snapshot_json=? WHERE id=1",
+            (json.dumps(snap),))
+        conn.commit()
+        conn.close()
+        self.assertEqual(
+            panel_feed.read_force_update(panel_path=self.panel_path),
+            {"latest_version_code": 350, "latest_version_name": "1.0.5",
+             "force_update": True,
+             "force_update_message": "Please update to keep watching.",
+             "maintenance_message": "Back soon.",
+             "brand_primary": "#2563EB", "brand_accent": "#7C3AED",
+             "region_order": ["pakistan", "india", "asia", "international"]})
+
+    def test_force_update_invalid_values_fall_back(self):
+        import json
+        conn = sqlite3.connect(self.panel_path)
+        snap = {"config": {
+            "latest_version_code": -5, "latest_version_name": "  ",
+            "force_update": 2, "brand_primary": "red",
+            "region_order": "pakistan,nowhere,india,pakistan"}}
+        conn.execute(
+            "UPDATE app_remote_config_history SET snapshot_json=? WHERE id=1",
+            (json.dumps(snap),))
+        conn.commit()
+        conn.close()
+        got = panel_feed.read_force_update(panel_path=self.panel_path)
+        self.assertEqual(got["latest_version_code"], 0)
+        self.assertEqual(got["latest_version_name"], "")
+        self.assertFalse(got["force_update"])
+        self.assertEqual(got["brand_primary"], "")
+        # Unknown regions drop; the duplicate collapses; the order stands.
+        self.assertEqual(got["region_order"], ["pakistan", "india"])
+
+    def test_feed_reads_published_snapshot_not_live_table(self):
+        # Publish a snapshot whose sections differ from the live table:
+        # only one section, "picks", with a single card (post 1). The
+        # feed must serve the snapshot, not the live home_sections rows.
+        import json
+        conn = sqlite3.connect(self.panel_path)
+        snap = {"config": {"min_version_code": 42},
+                "home": {"sections": [
+                    {"section": {"id": 2, "key": "picks", "title": "Picks",
+                                 "position": 1, "is_enabled": 1,
+                                 "is_adult_only": 0, "visible_to": "all",
+                                 "source_rule": "curated",
+                                 "category_key": None},
+                     "cards": [{"work_id": 1, "is_enabled": 1}]}]}}
+        conn.execute(
+            "UPDATE app_remote_config_history SET snapshot_json=? WHERE id=1",
+            (json.dumps(snap),))
+        conn.commit()
+        conn.close()
+        feed = self.feed()
+        self.assertEqual([s["key"] for s in feed["sections"]], ["picks"])
+        picks = feed["sections"][0]
+        self.assertEqual([int(r["id"]) for r in picks["rows"]], [1])
+
+    def test_feed_falls_back_to_live_table_without_snapshot_home(self):
+        # The fixture snapshot has a config but no home block: the feed
+        # serves the live home_sections table, as before.
+        feed = self.feed()
+        self.assertEqual(
+            [s["key"] for s in feed["sections"]],
+            ["latest", "picks", "comedy"])
+
+    def test_feed_snapshot_ignores_disabled_sections(self):
+        import json
+        conn = sqlite3.connect(self.panel_path)
+        snap = {"config": {},
+                "home": {"sections": [
+                    {"section": {"id": 1, "key": "off", "title": "Off",
+                                 "position": 1, "is_enabled": 0,
+                                 "is_adult_only": 0, "visible_to": "all",
+                                 "source_rule": "latest",
+                                 "category_key": None},
+                     "cards": []},
+                    {"section": {"id": 2, "key": "latest", "title": "Latest",
+                                 "position": 2, "is_enabled": 1,
+                                 "is_adult_only": 0, "visible_to": "all",
+                                 "source_rule": "latest",
+                                 "category_key": None},
+                     "cards": []}]}}
+        conn.execute(
+            "UPDATE app_remote_config_history SET snapshot_json=? WHERE id=1",
+            (json.dumps(snap),))
+        conn.commit()
+        conn.close()
+        feed = self.feed()
+        self.assertEqual([s["key"] for s in feed["sections"]], ["latest"])
+
+    def test_tuning_knobs_read_operator_values(self):
+        self.assertEqual(
+            panel_feed.read_tuning_knobs(panel_path=self.panel_path),
+            {"resolver_concurrency": 2, "candidate_cap": 10, "cache_ttl_h": 6,
+             "warmup_count": 50, "warmup_interval_h": 24,
+             "rate_limit_play_per_min": 30, "import_cap": 25,
+             "import_concurrency": 1, "prefetch_queue": 100,
+             "prefetch_concurrency": 1, "domain_check_interval_min": 60})
+
+    def test_tuning_knobs_clamp_to_panel_bounds(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "UPDATE tuning_settings SET resolver_concurrency=99, "
+            "candidate_cap=1, cache_ttl_h=0, rate_limit_play_per_min=500, "
+            "import_concurrency=0, prefetch_concurrency=9, "
+            "domain_check_interval_min=5 WHERE id=1")
+        conn.commit()
+        conn.close()
+        knobs = panel_feed.read_tuning_knobs(panel_path=self.panel_path)
+        # The panel's own bounds (1..4, 3..20, 1..24, 10..120, 1..3, 1..2,
+        # 30..1440) clamp every out-of-range value to its nearest bound.
+        self.assertEqual(knobs["resolver_concurrency"], 4)
+        self.assertEqual(knobs["candidate_cap"], 3)
+        self.assertEqual(knobs["cache_ttl_h"], 1)
+        self.assertEqual(knobs["rate_limit_play_per_min"], 120)
+        self.assertEqual(knobs["import_concurrency"], 1)
+        self.assertEqual(knobs["prefetch_concurrency"], 2)
+        self.assertEqual(knobs["domain_check_interval_min"], 30)
+
+    def test_tuning_knobs_default_when_panel_predates_columns(self):
+        # A panel database from before the knob columns still answers the
+        # panel's seed defaults — the feed never breaks for an old panel.
+        old_path = os.path.join(self.tmp.name, "old-panel.db")
+        conn = sqlite3.connect(old_path)
+        conn.execute(
+            "CREATE TABLE tuning_settings (id INTEGER PRIMARY KEY, "
+            "theme_mode TEXT)")
+        conn.execute("INSERT INTO tuning_settings VALUES (1, 'dark')")
+        conn.commit()
+        conn.close()
+        knobs = panel_feed.read_tuning_knobs(panel_path=old_path)
+        self.assertEqual(knobs, {
+            name: default
+            for name, (default, _lo, _hi) in panel_feed.TUNING_KNOBS.items()})
+
+    def test_tuning_knob_falls_back_to_caller_default_when_unwired(self):
+        # The single-knob primitive answers the CALLER's default when the
+        # panel cannot answer — a consumer's shipped behaviour is its own,
+        # not the panel's seed.
+        self.assertEqual(
+            panel_feed.tuning_knob(
+                panel_path=os.path.join(self.tmp.name, "nope.db"),
+                name="candidate_cap", default=5),
+            5)
+        self.assertEqual(
+            panel_feed.tuning_knob(
+                panel_path=self.panel_path,
+                name="candidate_cap", default=5),
+            10)
+        self.assertEqual(
+            panel_feed.tuning_knob(
+                panel_path=self.panel_path,
+                name="no_such_knob", default=7),
+            7)
+
+    def test_is_paused_reads_live_pause_rows(self):
+        self.assertFalse(panel_feed.is_paused(
+            panel_path=self.panel_path,
+            target_type="broadcast", target_id="1"))
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('broadcast', '1', 1, NULL)")
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('section', 'latest', 1, 123)")
+        conn.commit()
+        conn.close()
+        # The broadcast pause is live; the section pause was resumed.
+        self.assertTrue(panel_feed.is_paused(
+            panel_path=self.panel_path,
+            target_type="broadcast", target_id="1"))
+        self.assertFalse(panel_feed.is_paused(
+            panel_path=self.panel_path,
+            target_type="section", target_id="latest"))
+
+    def test_paused_broadcast_is_not_served(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('broadcast', '1', 1, NULL)")
+        conn.commit()
+        conn.close()
+        ids = [b["id"] for b in panel_feed.active_broadcasts(
+            panel_path=self.panel_path, now=self.now)]
+        self.assertNotIn(1, ids)
+        # The other published broadcasts still serve.
+        self.assertIn(4, ids)
+
+    def test_paused_section_is_not_served(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('section', 'latest', 1, NULL)")
+        conn.commit()
+        conn.close()
+        feed = self.feed()
+        self.assertNotIn("latest", [s["key"] for s in feed["sections"]])
+        self.assertIn("picks", [s["key"] for s in feed["sections"]])
+
+    def test_paused_category_section_is_not_served(self):
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('category', 'comedy', 1, NULL)")
+        conn.commit()
+        conn.close()
+        feed = self.feed()
+        self.assertNotIn("comedy", [s["key"] for s in feed["sections"]])
+
+    def test_paused_features_lists_only_live_feature_pauses(self):
+        self.assertEqual(
+            panel_feed.paused_features(panel_path=self.panel_path), set())
+        conn = sqlite3.connect(self.panel_path)
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('feature', 'downloads', 1, NULL)")
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('feature', 'chromecast', 1, 123)")
+        conn.execute(
+            "INSERT INTO pauses (target_type, target_id, is_paused, "
+            "resumed_at) VALUES ('broadcast', '1', 1, NULL)")
+        conn.commit()
+        conn.close()
+        # Only the live feature pause (downloads) is listed; the resumed
+        # chromecast pause and the broadcast pause are not features.
+        self.assertEqual(
+            panel_feed.paused_features(panel_path=self.panel_path),
+            {"downloads"})
+
+    def test_hero_falls_back_to_latest_when_curated_is_empty(self):
+        # A curated hero with no live cards must not leave the top of
+        # Home empty: it fills with the newest posts.
+        import json
+        conn = sqlite3.connect(self.panel_path)
+        snap = {"config": {},
+                "home": {"sections": [
+                    {"section": {"id": 1, "key": "hero", "title": "Hero",
+                                 "position": 1, "is_enabled": 1,
+                                 "is_adult_only": 0, "visible_to": "all",
+                                 "source_rule": "curated",
+                                 "category_key": None},
+                     "cards": []}]}}
+        conn.execute(
+            "UPDATE app_remote_config_history SET snapshot_json=? WHERE id=1",
+            (json.dumps(snap),))
+        conn.commit()
+        conn.close()
+        feed = self.feed()
+        hero = [s for s in feed["sections"] if s["key"] == "hero"][0]
+        # Newest first, adult row out, hidden row (2) out.
+        self.assertEqual(
+            [int(r["id"]) for r in hero["rows"]], [6, 5, 3, 1])
 
 
 class PostsHideTests(unittest.TestCase):

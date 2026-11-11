@@ -166,7 +166,10 @@ def active_broadcasts(panel_path=None, now=None):
     the app cannot read is dropped here, never served half-targeted: a
     `region` row with no region, or a `version` row with no version, stays
     unpublished to the app rather than leaking to the wrong audience. Text
-    is scrubbed the same way every other public string is.
+    is scrubbed the same way every other public string is. A broadcast the
+    operator PAUSED (`pauses`, target_type `broadcast`, target_id the
+    broadcast id) is omitted even though it is published — a pause is a
+    stop, and the panel's own list enforces the same rule.
     """
     now = int(now if now is not None else time.time())
     conn = _open_panel(panel_path)
@@ -175,6 +178,8 @@ def active_broadcasts(panel_path=None, now=None):
     try:
         if not _has_table(conn, "broadcasts"):
             return []
+        paused = {target_id for target_type, target_id in _paused_targets(conn)
+                  if target_type == "broadcast"}
         try:
             rows = conn.execute(
                 "SELECT id, title, body, severity, target, target_detail FROM broadcasts "
@@ -188,6 +193,8 @@ def active_broadcasts(panel_path=None, now=None):
         conn.close()
     out = []
     for r in rows:
+        if str(r["id"]) in paused:
+            continue
         try:
             target = str(r["target"] or "all").strip().lower()
         except (KeyError, IndexError):
@@ -295,9 +302,13 @@ def read_theme(panel_path=None):
 
 
 #: The tabs the bottom bar shows, in the operator's order, as set in
-#: `tuning_settings.tabs` (a comma list). The app's own four are the default;
+#: `tuning_settings.tabs` (a comma list). The app's own five are the default;
 #: Home is pinned first by the APP, not here — the server only validates.
-TABS_DEFAULT = ["home", "search", "my_list", "settings"]
+#: `live_tv` joins the default list because the app ships a Live TV screen
+#: and the panel now carries the channels (17 on, 18 off): a panel that never
+#: set its tabs still shows the tab. The order matches the panel's own
+#: stored default (home, search, my_list, settings, live_tv).
+TABS_DEFAULT = ["home", "search", "my_list", "settings", "live_tv"]
 TAB_IDS = frozenset(TABS_DEFAULT)
 
 
@@ -369,6 +380,40 @@ def read_free_quality_cap(panel_path=None):
         conn.close()
 
 
+def _published_snapshot(panel_path=None):
+    """The latest PUBLISHED config snapshot, or None.
+
+    The panel's publish is a real gate: `_do_publish` writes one row per
+    publish into ``app_remote_config_history`` with the whole published
+    config (``{"config": {...}, "home": {"sections": [...], ...}}``) as
+    ``snapshot_json``. The draft never lands here, so whatever this returns
+    is what the operator actually published — and a panel that never
+    published answers None, which every caller reads as "no publication
+    yet". Never raises: a missing table, a bad row, or bad JSON is None.
+    """
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return None
+    try:
+        if not _has_table(conn, "app_remote_config_history"):
+            return None
+        try:
+            row = conn.execute(
+                "SELECT snapshot_json FROM app_remote_config_history "
+                "ORDER BY config_version DESC LIMIT 1").fetchone()
+        except sqlite3.Error:
+            return None
+        if row is None:
+            return None
+        try:
+            snap = json.loads(row["snapshot_json"])
+        except (TypeError, ValueError):
+            return None
+        return snap if isinstance(snap, dict) else None
+    finally:
+        conn.close()
+
+
 def read_min_version(panel_path=None):
     """The lowest app version code the operator still supports, or 0.
 
@@ -377,26 +422,278 @@ def read_min_version(panel_path=None):
     with no publish history, a missing table, or an unreadable snapshot
     answers 0, which the app reads as "no minimum".
     """
-    conn = _open_panel(panel_path)
-    if conn is None:
+    snap = _published_snapshot(panel_path)
+    if snap is None:
         return 0
     try:
-        if not _has_table(conn, "app_remote_config_history"):
-            return 0
+        version = int(snap.get("config", {}).get("min_version_code") or 0)
+    except (TypeError, ValueError, AttributeError):
+        return 0
+    return version if version >= 0 else 0
+
+
+#: The regions a `region_order` list may name, in the panel's own order.
+#: Anything else in the stored list is dropped, never served to the app.
+REGION_ORDER_KNOWN = ("pakistan", "india", "asia", "international")
+
+#: The force-update block the app reads from the published snapshot, and
+#: the safe answer when nothing was ever published. A null latest code is
+#: "no latest published"; an empty name is "no name published"; force off
+#: is "do not force". The brand colours are empty until the operator sets
+#: them (the app falls back to its own brand), and the region order is an
+#: empty list until published.
+FORCE_UPDATE_DEFAULTS = {
+    "latest_version_code": 0,
+    "latest_version_name": "",
+    "force_update": False,
+    "force_update_message": "",
+    "maintenance_message": "",
+    "brand_primary": "",
+    "brand_accent": "",
+    "region_order": [],
+}
+
+
+def read_force_update(panel_path=None):
+    """The operator's published force-update block, or safe defaults.
+
+    Read from the latest PUBLISHED config snapshot — the same snapshot
+    `read_min_version` reads — so a force-update the operator drafted but
+    never published never reaches a phone. `latest_version_code` /
+    `latest_version_name` name the newest APK the operator published;
+    `force_update` says whether an older app must update before it may
+    play; the two messages are the copy the app shows for a forced update
+    and for maintenance; `brand_primary` / `brand_accent` are the operator's
+    brand colours (empty means the app's own brand); `region_order` is the
+    operator's region priority as a list. A panel that never published, a
+    missing table, or an unreadable snapshot answers the defaults — the app
+    reads that as "no update published, no force, own brand, no order".
+    Never raises.
+    """
+    out = dict(FORCE_UPDATE_DEFAULTS)
+    out["region_order"] = []
+    snap = _published_snapshot(panel_path)
+    if snap is None:
+        return out
+    try:
+        cfg = snap.get("config") or {}
+    except AttributeError:
+        return out
+    if not isinstance(cfg, dict):
+        return out
+    try:
+        latest = int(cfg.get("latest_version_code") or 0)
+        if latest >= 0:
+            out["latest_version_code"] = latest
+    except (TypeError, ValueError):
+        pass
+    name = cfg.get("latest_version_name")
+    if isinstance(name, str) and name.strip():
+        out["latest_version_name"] = name.strip()[:64]
+    try:
+        out["force_update"] = int(cfg.get("force_update") or 0) == 1
+    except (TypeError, ValueError):
+        pass
+    for key in ("force_update_message", "maintenance_message"):
+        text = cfg.get(key)
+        if isinstance(text, str) and text.strip():
+            out[key] = redact.scrub_text(text.strip())[:500]
+    for key in ("brand_primary", "brand_accent"):
+        colour = cfg.get(key)
+        if (isinstance(colour, str) and len(colour) == 7 and colour[0] == "#"
+                and all(c in "0123456789abcdefABCDEF" for c in colour[1:])):
+            out[key] = colour
+    order = cfg.get("region_order")
+    if isinstance(order, str) and order.strip():
+        seen = []
+        for part in order.split(","):
+            region = part.strip().lower()
+            if region in REGION_ORDER_KNOWN and region not in seen:
+                seen.append(region)
+        out["region_order"] = seen
+    elif isinstance(order, list):
+        seen = []
+        for part in order:
+            region = str(part or "").strip().lower()
+            if region in REGION_ORDER_KNOWN and region not in seen:
+                seen.append(region)
+        out["region_order"] = seen
+    return out
+
+
+#: The 11 tuning knobs the panel stores and the backend now applies, with
+#: the panel's own safe bounds and seed defaults (store.py TUNING_DEFAULTS,
+#: services.py TUNING_BOUNDS — the panel refuses a save outside these
+#: bounds, so a stored value is already inside them; the clamp here is
+#: defence for a panel database that predates the bounds, and the default
+#: is the answer when the panel is unwired or the column is missing).
+#: The bound is the operator's safe range, not a suggestion: a consumer
+#: must use the clamped value, never the raw stored one.
+TUNING_KNOBS = {
+    "resolver_concurrency": (2, 1, 4),
+    "candidate_cap": (10, 3, 20),
+    "cache_ttl_h": (6, 1, 24),
+    "warmup_count": (50, 0, 200),
+    "warmup_interval_h": (24, 6, 168),
+    "rate_limit_play_per_min": (30, 10, 120),
+    "import_cap": (25, 10, 1000),
+    "import_concurrency": (1, 1, 3),
+    "prefetch_queue": (100, 0, 500),
+    "prefetch_concurrency": (1, 1, 2),
+    "domain_check_interval_min": (60, 30, 1440),
+}
+
+
+def read_tuning_knobs(panel_path=None):
+    """The operator's 11 tuning knobs, clamped to the panel's own bounds.
+
+    Reads ``tuning_settings`` (id = 1), read-only, the same tolerant
+    pattern as :func:`read_theme`: a missing database, table, row or
+    column answers the panel's seed default for that knob; a non-integer
+    or out-of-range value answers the nearest bound. Every knob has a
+    consumer now (see the callers): resolver_concurrency caps the batch
+    resolver's workers, candidate_cap caps the play route's candidate
+    prints, cache_ttl_h caps the resolved-cache temporary horizon,
+    warmup_count / warmup_interval_h drive the prefetch pool's sweep,
+    rate_limit_play_per_min is the play bucket, import_cap /
+    import_concurrency bound the sync, prefetch_queue /
+    prefetch_concurrency bound the pool, and domain_check_interval_min
+    is the domain re-verify interval. Never raises.
+    """
+    out = {name: default for name, (default, _lo, _hi) in TUNING_KNOBS.items()}
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return out
+    try:
+        if not _has_table(conn, "tuning_settings"):
+            return out
         try:
             row = conn.execute(
-                "SELECT snapshot_json FROM app_remote_config_history "
-                "ORDER BY config_version DESC LIMIT 1").fetchone()
+                "SELECT %s FROM tuning_settings WHERE id = 1"
+                % ", ".join(TUNING_KNOBS)).fetchone()
         except sqlite3.Error:
-            return 0
+            return out
         if row is None:
-            return 0
+            return out
+        for name, (default, lo, hi) in TUNING_KNOBS.items():
+            try:
+                value = int(_theme_col(row, name) or 0)
+            except (TypeError, ValueError):
+                continue
+            out[name] = max(lo, min(hi, value))
+        return out
+    finally:
+        conn.close()
+
+
+#: The pause targets the panel can pause (services.py PAUSE_TARGETS), and
+#: what each one stops in the backend. A pause row is live while
+#: ``is_paused = 1`` and ``resumed_at IS NULL``; a resumed row stops
+#: nothing. The target_id is the panel's own spelling: a broadcast id, a
+#: section key, a category key, a feature name, a source name.
+PAUSE_TARGETS = (
+    "import_global", "prefetch_global", "source", "section", "category",
+    "feature", "broadcast", "domain_checks",
+)
+
+
+def _paused_targets(conn):
+    """{(target_type, target_id)}: the pauses live right now.
+
+    Only rows with ``is_paused = 1`` and no ``resumed_at`` count — a
+    resumed pause is history, not a stop. An unknown target type is
+    carried anyway (the panel is the authority on what it paused); the
+    consumers only act on the types they know.
+    """
+    out = set()
+    if conn is None or not _has_table(conn, "pauses"):
+        return out
+    try:
+        rows = conn.execute(
+            "SELECT target_type, target_id FROM pauses "
+            "WHERE is_paused = 1 AND resumed_at IS NULL").fetchall()
+    except sqlite3.Error:
+        return out
+    for r in rows:
         try:
-            snap = json.loads(row["snapshot_json"])
-            version = int(snap.get("config", {}).get("min_version_code") or 0)
-        except (TypeError, ValueError, AttributeError):
-            return 0
-        return version if version >= 0 else 0
+            target_type = str(r["target_type"] or "").strip()
+            target_id = str(r["target_id"] or "").strip()
+        except (KeyError, IndexError):
+            continue
+        if target_type and target_id:
+            out.add((target_type, target_id))
+    return out
+
+
+def is_paused(panel_path=None, target_type=None, target_id=None):
+    """True when the panel paused this target. Never raises.
+
+    ``target_type`` is one of PAUSE_TARGETS and ``target_id`` is the
+    panel's spelling of the target (a broadcast id, a section key, a
+    category key, a feature name, a source name). The two global targets
+    (``import_global``, ``prefetch_global``, ``domain_checks``) carry a
+    conventional target_id of ``"all"``. A missing database, a missing
+    table, or an unknown target answers False — nothing is paused by
+    default, so an unwired panel never stops the backend.
+    """
+    if not target_type or target_id is None:
+        return False
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return False
+    try:
+        return (str(target_type), str(target_id)) in _paused_targets(conn)
+    finally:
+        conn.close()
+
+
+def paused_features(panel_path=None):
+    """The feature names the operator paused, or an empty set.
+
+    One read of the pauses table, for the remote-config route: a paused
+    feature is served as off, whatever the catalog row says. Never raises.
+    """
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return set()
+    try:
+        return {target_id for target_type, target_id in _paused_targets(conn)
+                if target_type == "feature"}
+    finally:
+        conn.close()
+
+
+def tuning_knob(panel_path=None, name=None, default=None):
+    """One knob's value, or `default` when the panel cannot answer it.
+
+    The per-consumer primitive: a consumer's shipped behaviour is its own
+    default, not the panel's seed. When the panel is unwired, the table or
+    column is missing, or the stored value is not an integer, the caller
+    gets `default` — its own shipped value — and nothing changes. When the
+    panel IS wired, the stored value (clamped to the panel's own bounds)
+    wins, because the operator set it. Never raises.
+    """
+    if name not in TUNING_KNOBS:
+        return default
+    _seed, lo, hi = TUNING_KNOBS[name]
+    conn = _open_panel(panel_path)
+    if conn is None:
+        return default
+    try:
+        if not _has_table(conn, "tuning_settings"):
+            return default
+        try:
+            row = conn.execute(
+                "SELECT %s FROM tuning_settings WHERE id = 1" % name).fetchone()
+        except sqlite3.Error:
+            return default
+        if row is None:
+            return default
+        try:
+            value = int(_theme_col(row, name) or 0)
+        except (TypeError, ValueError):
+            return default
+        return max(lo, min(hi, value))
     finally:
         conn.close()
 
@@ -564,6 +861,61 @@ def _resolve_rows(catalog_conn, rule, category_key, curated_ids, limit, hidden):
     return out
 
 
+def _snapshot_sections(snapshot):
+    """(sections, cards_by_key): the published home feed, or ([], {}).
+
+    The published snapshot carries the home feed under ``home.sections``:
+    a list of ``{"section": {...}, "cards": [...]}`` — the section row as
+    the panel stored it, plus that section's slider cards. Only enabled
+    sections come back, in the snapshot's own order (the panel already
+    ordered them by position). A snapshot without a ``home`` block, without
+    a ``sections`` list, or with no enabled sections answers empty, which
+    the caller reads as "no publication to serve" and falls back to the
+    live table. The cards are the published card order (position, then
+    id); a disabled card, or one outside its window, is not carried — the
+    window is judged at the caller's `now`, not at publish time, because
+    a card that expired after publish must stop, not linger.
+    """
+    if not isinstance(snapshot, dict):
+        return [], {}
+    home = snapshot.get("home")
+    if not isinstance(home, dict):
+        return [], {}
+    entries = home.get("sections")
+    if not isinstance(entries, list):
+        return [], {}
+    sections = []
+    cards_by_key = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        sec = entry.get("section")
+        if not isinstance(sec, dict):
+            continue
+        try:
+            if int(sec.get("is_enabled") or 0) != 1:
+                continue
+            key = str(sec["key"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        sections.append(sec)
+        cards = entry.get("cards")
+        if not isinstance(cards, list):
+            cards = []
+        work_ids = []
+        for card in cards:
+            if not isinstance(card, dict):
+                continue
+            try:
+                if int(card.get("is_enabled") or 0) != 1:
+                    continue
+                work_ids.append(int(card["work_id"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+        cards_by_key[key] = work_ids
+    return sections, cards_by_key
+
+
 def load_panel_feed(catalog_conn, panel_path=None, now=None):
     """Sections, broadcasts and hides for the app feed.
 
@@ -572,6 +924,22 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
     raw post rows under ``rows`` — the caller projects them through the same
     ``post_brief`` + art-pair shape the posts route serves, because this
     module owns resolution and filtering, not the wire shape.
+
+    Publish is a real gate now: the sections come from the latest PUBLISHED
+    snapshot (``app_remote_config_history``), not the live ``home_sections``
+    table — a section the operator enabled but never published does not
+    reach a phone. A panel that never published, or a snapshot without a
+    home feed, falls back to the live table, so a panel that predates
+    publish still serves what it always served. The curated cards come
+    from the snapshot too; the live ``slider_cards`` table is only read on
+    that same fallback. Hides and broadcasts are live by nature (a hide
+    expires, a broadcast has a window), so they are always read from the
+    live tables, never the snapshot.
+
+    Pauses are enforced here: a section whose key is paused, and a
+    category section whose category is paused, are skipped outright.
+    The hero is never left empty: a curated hero with no live cards falls
+    back to the newest posts, so the top of Home always has something.
     """
     now = int(now if now is not None else time.time())
     empty = {"sections": [], "broadcasts": [], "hidden_work_ids": []}
@@ -582,41 +950,90 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
         caps = read_section_caps(panel_path)
         global_hidden, section_hidden = _active_hides(panel, now)
         hidden = set(sorted(global_hidden)[:HIDDEN_IDS_CAP])
-        if not _has_table(panel, "home_sections"):
-            return {"sections": [], "broadcasts": active_broadcasts(panel_path, now),
-                    "hidden_work_ids": sorted(hidden)}
-        try:
-            sections = panel.execute(
-                "SELECT * FROM home_sections WHERE is_enabled = 1 "
-                "ORDER BY position ASC, id ASC LIMIT ?",
-                (caps["sections_max"],)).fetchall()
-        except sqlite3.Error:
-            return {"sections": [], "broadcasts": active_broadcasts(panel_path, now),
-                    "hidden_work_ids": sorted(hidden)}
+        paused = _paused_targets(panel)
+        broadcasts = active_broadcasts(panel_path, now)
+        # The published snapshot is the feed when one exists; the live
+        # table is the fallback for a panel that never published.
+        snap = _published_snapshot(panel_path)
+        snap_sections, snap_cards = _snapshot_sections(snap)
+        live_sections = None
+        if snap_sections:
+            sections = [
+                {"key": str(sec["key"]),
+                 "title": str(sec.get("title") or ""),
+                 "rule": str(sec.get("source_rule") or "latest"),
+                 "category_key": sec.get("category_key"),
+                 "is_adult_only": sec.get("is_adult_only"),
+                 "cards": snap_cards.get(str(sec["key"]), [])}
+                for sec in snap_sections
+            ][:caps["sections_max"]]
+        else:
+            if not _has_table(panel, "home_sections"):
+                return {"sections": [], "broadcasts": broadcasts,
+                        "hidden_work_ids": sorted(hidden)}
+            try:
+                live_sections = panel.execute(
+                    "SELECT * FROM home_sections WHERE is_enabled = 1 "
+                    "ORDER BY position ASC, id ASC LIMIT ?",
+                    (caps["sections_max"],)).fetchall()
+            except sqlite3.Error:
+                return {"sections": [], "broadcasts": broadcasts,
+                        "hidden_work_ids": sorted(hidden)}
+            sections = [
+                {"key": str(sec["key"]),
+                 "title": str(_theme_col(sec, "title") or ""),
+                 "rule": str(_theme_col(sec, "source_rule") or "latest"),
+                 "category_key": _theme_col(sec, "category_key"),
+                 "is_adult_only": _theme_col(sec, "is_adult_only"),
+                 "cards": None}
+                for sec in live_sections
+            ]
         out_sections = []
         for sec in sections:
             try:
                 if int(sec["is_adult_only"] or 0):
                     continue
-                key = str(sec["key"])
+                key = sec["key"]
                 title = redact.scrub_text(str(sec["title"] or ""))
-                rule = str(sec["source_rule"] or "latest")
+                rule = sec["rule"]
                 category_key = sec["category_key"]
             except (KeyError, IndexError):
                 continue
-            curated_ids = []
-            if rule == "curated" and _has_table(panel, "slider_cards"):
-                try:
-                    cards = panel.execute(
-                        "SELECT work_id FROM slider_cards "
-                        "WHERE section_id = ? AND is_enabled = 1 "
-                        "AND (starts_at IS NULL OR starts_at <= ?) "
-                        "AND (ends_at IS NULL OR ends_at > ?) "
-                        "ORDER BY position ASC, id ASC",
-                        (sec["id"], now, now)).fetchall()
-                    curated_ids = [c["work_id"] for c in cards]
-                except sqlite3.Error:
+            # A paused section, or a category section whose category is
+            # paused, is skipped outright — a pause is a stop.
+            if ("section", key) in paused:
+                continue
+            if (rule == "category" and category_key
+                    and ("category", str(category_key)) in paused):
+                continue
+            if rule == "curated":
+                if sec["cards"] is not None:
+                    curated_ids = [int(i) for i in sec["cards"]
+                                   if str(i).strip()]
+                elif _has_table(panel, "slider_cards"):
+                    try:
+                        sec_id = None
+                        for live in (live_sections or []):
+                            if str(live["key"]) == key:
+                                sec_id = live["id"]
+                                break
+                        if sec_id is None:
+                            curated_ids = []
+                        else:
+                            cards = panel.execute(
+                                "SELECT work_id FROM slider_cards "
+                                "WHERE section_id = ? AND is_enabled = 1 "
+                                "AND (starts_at IS NULL OR starts_at <= ?) "
+                                "AND (ends_at IS NULL OR ends_at > ?) "
+                                "ORDER BY position ASC, id ASC",
+                                (sec_id, now, now)).fetchall()
+                            curated_ids = [c["work_id"] for c in cards]
+                    except sqlite3.Error:
+                        curated_ids = []
+                else:
                     curated_ids = []
+            else:
+                curated_ids = []
             section_hide = {
                 int(suffix) for tag in section_hidden
                 if tag.startswith(key + ":")
@@ -626,9 +1043,17 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
             rows = _resolve_rows(
                 catalog_conn, rule, category_key, curated_ids,
                 caps["section_cap"], hidden | section_hide)
+            # Hero fallback: a curated hero with no live cards must not
+            # leave the top of Home empty — fill it with the newest posts
+            # the operator did not hide, so the first rail always has
+            # something to show.
+            if key == "hero" and rule == "curated" and not rows:
+                rows = _resolve_rows(
+                    catalog_conn, "latest", None, [], caps["section_cap"],
+                    hidden | section_hide)
             out_sections.append({"key": key, "title": title, "rows": rows})
         return {"sections": out_sections,
-                "broadcasts": active_broadcasts(panel_path, now),
+                "broadcasts": broadcasts,
                 "hidden_work_ids": sorted(hidden)}
     finally:
         panel.close()
