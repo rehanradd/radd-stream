@@ -39,6 +39,7 @@ import panel_feed
 import contact_intake
 import search_fuzzy
 import did_you_mean
+import title_clean
 import mood_search
 import usage_stats
 
@@ -3228,6 +3229,58 @@ def _enrich_post_rows(conn, rows, base_url: str) -> list[dict]:
     return results
 
 
+#: A search that matches more than this many rows is too broad to dedupe
+#: exactly (a one-letter query matches the catalog); it keeps the row page
+#: and its row total instead of paying a full-catalog grouping. Real
+#: title searches match far fewer — "salaar" is 8 rows live.
+_SEARCH_DEDUPE_CAP = 1000
+
+
+def _dedupe_search_page(conn, where_sql, params, step1_order, page, limit):
+    """(page_ids, deduped_total): one representative id per work.
+
+    Audit #38: the same film filed by eight sites is one search row, not
+    eight. The candidates are fetched id-only (bounded by the cap), grouped
+    by work in Python, and paginated over groups — so the page keeps the
+    search's own order (a group's position is its earliest member's) and
+    `total` counts works, not rows. The representative is the row with the
+    most prints, then mirrors, then the newest id.
+    """
+    rows = conn.execute(
+        "SELECT p.id, p.clean_title, p.title, p.year, p.content_type"
+        " FROM posts p "
+        f"WHERE {where_sql} ORDER BY {step1_order}",
+        params).fetchall()
+    if not rows:
+        return [], 0
+    ids = [int(r["id"]) for r in rows]
+    counts: dict[int, tuple[int, int]] = {}
+    marks = ",".join("?" * len(ids))
+    for row in conn.execute(
+            "SELECT r.post_id, COUNT(DISTINCT r.id), COUNT(DISTINCT s.id)"
+            " FROM releases r"
+            " LEFT JOIN download_sources s ON s.release_id = r.id"
+            f" WHERE r.post_id IN ({marks}) GROUP BY r.post_id",
+            ids).fetchall():
+        counts[int(row[0])] = (int(row[1]), int(row[2]))
+    position = {post_id: index for index, post_id in enumerate(ids)}
+    candidates = [{
+        "id": int(r["id"]), "clean_title": r["clean_title"],
+        "title": r["title"], "year": r["year"],
+        "content_type": r["content_type"],
+        "release_count": counts.get(int(r["id"]), (0, 0))[0],
+        "source_count": counts.get(int(r["id"]), (0, 0))[1],
+    } for r in rows]
+    groups = title_clean.group_work_rows(candidates)
+    # The search's own order, not popularity order: a work sits where its
+    # earliest row sat in the id scan.
+    groups.sort(key=lambda g: min(position[int(c["id"])] for c in g))
+    total = len(groups)
+    start = max(0, (page - 1) * limit)
+    page_groups = groups[start:start + limit]
+    return [int(title_clean.representative(g)["id"]) for g in page_groups], total
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -3273,6 +3326,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     "total_pages": 1,
                     "results": [],
                     "fuzzy": False,
+                    "suggestion": None,
                 }
             where_clauses.append("p.id = ?")
             params.append(post_id)
@@ -3453,13 +3507,18 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
                     params).fetchone()[0]
                 fuzzy = True
-        if exact_missed:
-            # Gap A4 — "Did you mean": the fuzzy machinery already knew
-            # the correction; it just never surfaced it. Offer the
-            # corrected query so the UI can show it (and the viewer can
-            # tap it) — whether the fuzzy fallback already served rows
-            # from it or the page is still empty.
-            correction = did_you_mean.suggest_correction(conn, query)
+        if query and not work_ref:
+            # Gap A4 — "Did you mean": the fuzzy machinery already knew the
+            # correction; it just never surfaced it. Offer the corrected
+            # query so the UI can show it (and the viewer can tap it) — not
+            # only when the exact search missed, but also when it hit on
+            # stale lookalikes ("avtar" finds old "Avtar" rows while the
+            # catalog holds "Avatar"). An interrupted correction scan is
+            # silence, never a failed search.
+            try:
+                correction = did_you_mean.suggest_correction(conn, query)
+            except sqlite3.OperationalError:
+                correction = None
             if correction is not None:
                 did_you_mean_query = correction["query"]
 
@@ -3480,7 +3539,29 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # covering releases(post_id, quality) index is the fix instead.
         page_ids = None
         two_step = order_sql is None or sort_key in ("title", "rating")
-        if two_step:
+        if query and not work_ref and two_step and 0 < total <= _SEARCH_DEDUPE_CAP:
+            # Audit #38: one row per film. The dedupe runs on the same
+            # where-clause the count above used (adult clause, hides, all
+            # filters), so the page and the total agree; the step-1 scan
+            # below is skipped and step 2 fetches exactly these ids.
+            step1_order = (f"{_NEWEST_YEAR_SQL} DESC, p.id DESC"
+                           if order_sql is None else order_sql)
+            page_ids, total = _dedupe_search_page(
+                conn, where_sql, params, step1_order, page, limit)
+            if not page_ids:
+                return {
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "total_pages": max(1, (total + limit - 1) // limit),
+                    "results": [],
+                    "fuzzy": fuzzy,
+                    "moods": mood_words,
+                    "mood_genres": mood_genres,
+                    "did_you_mean": did_you_mean_query,
+                    "suggestion": did_you_mean_query,
+                }
+        if two_step and page_ids is None:
             step1_order = (f"{_NEWEST_YEAR_SQL} DESC, p.id DESC"
                            if order_sql is None else order_sql)
             # Step 1 — the page's ids, from `posts` alone. Every clause in
@@ -3504,6 +3585,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     "moods": mood_words,
                     "mood_genres": mood_genres,
                     "did_you_mean": did_you_mean_query,
+                    "suggestion": did_you_mean_query,
                 }
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
@@ -3553,6 +3635,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "moods": mood_words,
             "mood_genres": mood_genres,
             "did_you_mean": did_you_mean_query,
+            "suggestion": did_you_mean_query,
         }
 
 

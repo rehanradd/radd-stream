@@ -207,5 +207,69 @@ class SubtitledPostsTests(unittest.TestCase):
         self.assertEqual(viewer._subtitled_posts(self.conn, []), {})
 
 
+class SearchDedupeTests(ViewerSearchForgivingTests):
+    """Audit #37/#38: one row per film, and a suggestion even on a hit."""
+
+    def _seed_salaar(self):
+        variants = [
+            ("site_a", "Salaar Cease Fire"),
+            ("site_b", "Salaar: Part 1 – Ceasefire"),
+            ("site_c", "Salaar"),
+            ("site_d", "Salaar - Part 1 (2023) Multi Audios [Tel + Tam] NF WeB-DL"),
+        ]
+        for site, clean in variants:
+            fast_fetch.save_scraped_data(self.media(
+                site, "https://%s.example/salaar/" % site,
+                title="%s (2019)" % clean, clean_title=clean))
+
+    def test_salaar_variants_are_one_search_row(self):
+        self._seed_salaar()
+        resp = self.posts("salaar")
+        self.assertEqual(resp["total"], 1)
+        self.assertEqual(len(resp["results"]), 1)
+
+    def test_other_films_stay_separate(self):
+        self._seed_salaar()
+        fast_fetch.save_scraped_data(self.media(
+            "site_e", "https://site-e.example/avatar/",
+            title="Avatar (2019)", clean_title="Avatar"))
+        resp = self.posts("salaar")
+        self.assertEqual(resp["total"], 1)
+        resp = self.posts("avatar")
+        self.assertEqual(resp["total"], 1)
+
+    def test_second_page_of_a_deduped_search_is_empty(self):
+        self._seed_salaar()
+        resp = self.posts("salaar", page=2)
+        self.assertEqual(resp["total"], 1)
+        self.assertEqual(resp["total_pages"], 1)
+        self.assertEqual(resp["results"], [])
+
+    def test_typo_suggests_even_when_lookalikes_hit(self):
+        # "Avtar" rows exist, so the exact search hits — the suggestion
+        # must still offer "Avatar", which the catalog holds with far
+        # more prints (two sites against one).
+        fast_fetch.save_scraped_data(self.media(
+            "site_old", "https://site-old.example/avtar/",
+            title="Avtar (2019)", clean_title="Avtar"))
+        for site in ("site_new", "site_new2"):
+            fast_fetch.save_scraped_data(self.media(
+                site, "https://%s.example/avatar/" % site,
+                title="Avatar (2019)", clean_title="Avatar"))
+        resp = self.posts("avtar")
+        self.assertGreaterEqual(resp["total"], 1)
+        self.assertEqual(resp["suggestion"], "avatar")
+        self.assertEqual(resp["did_you_mean"], "avatar")
+
+    def test_correct_query_suggests_nothing(self):
+        resp = self.posts("inception")
+        self.assertIsNone(resp["suggestion"])
+        self.assertIsNone(resp["did_you_mean"])
+
+    def test_suggestion_key_present_on_a_miss(self):
+        resp = self.posts("incepton")
+        self.assertEqual(resp["suggestion"], "inception")
+
+
 if __name__ == "__main__":
     unittest.main()

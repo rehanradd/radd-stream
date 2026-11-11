@@ -33,6 +33,33 @@ def _query_tokens(query: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", (query or "").lower()) if t]
 
 
+def _candidate_rows(conn, like_sql, score_sql, patterns, limit, *,
+                    evidence):
+    """Gram-matching posts, newest within a gram-score tie.
+
+    With `evidence`, each row also carries its prints + mirrors
+    (releases + sources) so an exact-but-obscure title word can be
+    weighed against a popular near-miss. Without it the query touches
+    `posts` alone — for a v2-only fixture with no releases table.
+    """
+    if evidence:
+        select = ("SELECT p.clean_title,"
+                  " COUNT(DISTINCT r.id) AS rc, COUNT(DISTINCT s.id) AS sc"
+                  " FROM posts p"
+                  " LEFT JOIN releases r ON r.post_id = p.id"
+                  " LEFT JOIN download_sources s ON s.release_id = r.id")
+        group = " GROUP BY p.id"
+    else:
+        select = "SELECT p.clean_title, 0 AS rc, 0 AS sc FROM posts p"
+        group = ""
+    return conn.execute(
+        f"{select} WHERE {redact.adult_clause('p')}"
+        f" AND ({like_sql}){group}"
+        f" ORDER BY ({score_sql}) DESC, p.id DESC LIMIT ?",
+        patterns + patterns + [int(limit)],
+    ).fetchall()
+
+
 def correct_token(conn, token: str, *, limit: int = 1000) -> str | None:
     """The title word `token` most likely meant, or None.
 
@@ -44,6 +71,14 @@ def correct_token(conn, token: str, *, limit: int = 1000) -> str | None:
     is already correct and needs no suggestion. The adult clause applies
     here too: a suggestion must never name a title the public surface
     hides.
+
+    One exception to "exact needs no suggestion": a typed word that IS
+    an exact title word but only on old, barely-printed rows, while a
+    word one edit away is far better evidenced ("avtar" is a real old
+    title; "avatar" is the film with the prints). Then the popular
+    near-miss is offered — but only when its evidence (prints +
+    mirrors, summed over the window's rows carrying the word) strictly
+    exceeds the exact word's. A well-printed exact word never corrects.
 
     Recall: candidates are ordered by how many of the token's 3-grams
     the title shares, newest first within a tie — never by recency
@@ -62,33 +97,55 @@ def correct_token(conn, token: str, *, limit: int = 1000) -> str | None:
     if not grams:
         return None
     patterns = [f"%{gram}%" for gram in grams]
+    like_sql = " OR ".join("lower(p.clean_title) LIKE ?" for _ in grams)
+    # Parenthesise each term: in SQLite `+` binds tighter than
+    # LIKE, so an unparenthesised `a LIKE ? + b LIKE ?` parses as a
+    # chained comparison, not a sum of 0/1 matches — the score
+    # would be meaningless and the ordering would fall back to
+    # recency alone.
+    score_sql = " + ".join("(lower(p.clean_title) LIKE ?)" for _ in grams)
     try:
-        like_sql = " OR ".join("lower(p.clean_title) LIKE ?" for _ in grams)
-        # Parenthesise each term: in SQLite `+` binds tighter than
-        # LIKE, so an unparenthesised `a LIKE ? + b LIKE ?` parses as a
-        # chained comparison, not a sum of 0/1 matches — the score
-        # would be meaningless and the ordering would fall back to
-        # recency alone.
-        score_sql = " + ".join("(lower(p.clean_title) LIKE ?)" for _ in grams)
-        rows = conn.execute(
-            f"SELECT p.clean_title FROM posts p WHERE {redact.adult_clause('p')}"
-            f" AND ({like_sql}) ORDER BY ({score_sql}) DESC, p.id DESC LIMIT ?",
-            patterns + patterns + [int(limit)],
-        ).fetchall()
+        rows = _candidate_rows(conn, like_sql, score_sql, patterns,
+                               limit, evidence=True)
     except sqlite3.OperationalError:
-        # No `posts` ledger in this database (a v2-only fixture), or a
-        # posts table without the columns the clause needs: there is
-        # nothing to correct against, so there is no suggestion — never
-        # a 500 from a missing table.
-        return None
+        # No releases/sources tables in this database (a v2-only
+        # fixture): correct without evidence — an exact word never
+        # corrects, a near-miss still does. A posts table without
+        # the columns the clause needs still means no suggestion,
+        # never a 500 from a missing table.
+        try:
+            rows = _candidate_rows(conn, like_sql, score_sql, patterns,
+                                   limit, evidence=False)
+        except sqlite3.OperationalError:
+            return None
     words: list[str] = []
+    evidence: dict[str, int] = {}
     for row in rows:
-        title = row[0] if not isinstance(row, sqlite3.Row) else row["clean_title"]
-        words.extend(search_fuzzy.tokenize(title or ""))
+        if isinstance(row, sqlite3.Row):
+            title = row["clean_title"]
+            weight = int(row["rc"] or 0) + int(row["sc"] or 0)
+        else:
+            title = row[0]
+            weight = int(row[1] or 0) + int(row[2] or 0)
+        for word in search_fuzzy.tokenize(title or ""):
+            words.append(word)
+            evidence[word] = evidence.get(word, 0) + weight
     # Exact first, across the whole window: a newer misspelling must
-    # never outrank the exact title word.
+    # never outrank the exact title word — unless the near-miss is
+    # better evidenced (see the docstring).
     if token in words:
-        return None
+        exact_weight = evidence.get(token, 0)
+        best: str | None = None
+        best_weight = exact_weight
+        seen: set[str] = set()
+        for word in words:
+            if word == token or word in seen:
+                continue
+            seen.add(word)
+            if (evidence.get(word, 0) > best_weight
+                    and search_fuzzy.edit_distance_le1(token, word)):
+                best, best_weight = word, evidence[word]
+        return best
     for word in words:
         if search_fuzzy.edit_distance_le1(token, word):
             return word
