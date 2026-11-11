@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +81,11 @@ fun RegionSelectionScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            // Audit #28: the one scrolling screen without a Scaffold — the
+            // bottom Skip sat behind the system nav bar on gesture
+            // navigation. The 28 dp vertical padding stays; the nav bar
+            // gets its own room on top of it.
+            .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 28.dp),
         // Session 121 (P-23): on a tall phone the content ended mid-screen and the
         // bottom ~40% sat empty and black. Short content is centred; tall content

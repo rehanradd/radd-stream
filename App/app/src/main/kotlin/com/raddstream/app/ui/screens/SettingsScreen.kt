@@ -1081,18 +1081,25 @@ internal fun SwitchRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit, lab
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChipRow(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit) {
-    Row(
+    // Audit #46: a plain Row clipped the longest chip ("Battery saver") on a
+    // narrow phone — and a chip label must never break mid-word. A FlowRow
+    // wraps the group to a second line instead, each chip sizing to its
+    // own words (the contact categories below already wrap for the same
+    // reason).
+    FlowRow(
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         options.forEachIndexed { idx, label ->
             FilterChip(
                 colors = raddFilterChipColors(),
                 selected = idx == selectedIndex,
                 onClick = { onSelect(idx) },
-                label = { Text(label) },
+                label = { Text(label, maxLines = 1) },
                 // Audit #54: a FilterChip is 32 dp tall — the touch-target
                 // floor is 48 dp, so the chip itself carries it.
                 modifier = Modifier.heightIn(min = 48.dp),
