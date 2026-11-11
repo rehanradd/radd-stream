@@ -46,13 +46,14 @@ import kotlinx.coroutines.launch
  * whole result set before paging — so they stay opt-in and the default never pays
  * for them.
  *
- * "Most Sources" is named for its actual input: the ledger has no play-count column,
- * so the server ranks by how many prints and mirrors the catalog holds for a work.
- * Calling it "Trending" would promise popularity data that does not exist.
+ * "Most watched" is the viewer's word for this rail. The ledger has no play-count
+ * column, so the server ranks by how many prints and mirrors the catalog holds for a
+ * work — the label says what the rail feels like, never "Trending", which would promise
+ * popularity data that does not exist.
  */
 enum class SearchSort(val label: String, val wireValue: String) {
     NEWEST("Newest", "newest"),
-    MOST_SOURCES("Most Sources", "trending"),
+    MOST_SOURCES("Most watched", "trending"),
     HIGHEST_IMDB("Highest IMDb", "rating"),
     TITLE("Title A–Z", "title");
 

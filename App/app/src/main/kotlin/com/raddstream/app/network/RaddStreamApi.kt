@@ -116,10 +116,10 @@ interface RaddStreamApi {
     ): PostsResponse
 
     /**
-     * GET /api/v1/trending — the "Most Sources" order as its own route.
+     * GET /api/v1/trending — the "Most watched" order as its own route.
      * The same page `sort=trending` on /api/v1/posts returns (most prints
-     * and mirrors — no play counts exist, so it is not popularity), and
-     * the label stays "Most Sources" for the same reason.
+     * and mirrors — no play counts exist, so it is not popularity); the
+     * label is the viewer's word for that order, never "Trending".
      */
     @GET("api/v1/trending")
     suspend fun getTrending(

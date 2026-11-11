@@ -332,14 +332,17 @@ internal fun SearchField(
     onQueryChanged: (String) -> Unit,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
+    // Audit #17: the Home omnibox spells out what it takes — titles,
+    // actors, or a pasted link — while Search keeps the shorter hint.
+    label: String = "Search movies and shows",
 ) {
     TextField(
         value = query,
         onValueChange = onQueryChanged,
         modifier = modifier.fillMaxWidth()
-            .semantics { contentDescription = "Search movies and shows" },
+            .semantics { contentDescription = label },
         singleLine = true,
-        placeholder = { Text("Search movies and shows") },
+        placeholder = { Text(label) },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
         trailingIcon = {
             if (query.isNotEmpty()) {

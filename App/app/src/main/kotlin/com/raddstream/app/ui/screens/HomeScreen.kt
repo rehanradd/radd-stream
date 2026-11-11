@@ -87,6 +87,7 @@ import com.raddstream.app.ui.components.PosterRailSkeleton
 import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SeeAllButton
+import com.raddstream.app.ui.components.UserWords
 import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.update.InAppUpdate
 import com.raddstream.app.viewmodel.HomeSection
@@ -104,6 +105,8 @@ private const val HERO_LIMIT = 6
 @Composable
 fun HomeScreen(
     onSearchClick: () -> Unit,
+    /** The omnibox's submit: a query goes straight to Search with it applied. */
+    onSearchQuery: (String) -> Unit = { onSearchClick() },
     /** False when the operator's `feature_flags.search` is off: the entry point disappears. */
     searchEnabled: Boolean = true,
     onPostClick: (Post) -> Unit = {},
@@ -197,11 +200,19 @@ fun HomeScreen(
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
 
-            // Search first: the hero bar is the front door to the catalog — one tap opens
-            // Search, instead of hunting for the small icon in the top bar. It hides with
-            // the operator's search flag, exactly like the icon does.
+            // Search first: a REAL omnibox (audit #17) — the viewer types here,
+            // and Enter opens Search with the query applied. The top-bar icon
+            // stays as the empty-search door, and the bar hides with the
+            // operator's search flag, exactly like the icon does.
             if (searchEnabled) {
-                HeroSearchBar(onClick = onSearchClick)
+                var homeQuery by remember { mutableStateOf("") }
+                SearchField(
+                    query = homeQuery,
+                    onQueryChanged = { homeQuery = it },
+                    onSubmit = { onSearchQuery(homeQuery) },
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    label = "Search titles, actors, or paste a link",
+                )
                 Spacer(Modifier.height(12.dp))
             }
 
@@ -347,7 +358,6 @@ fun HomeScreen(
                 // not appear twice on one screen.
                 val heroSection = if (heroMax > 0) state.sections.firstOrNull { it.visible } else null
                 val heroItems = heroSection?.items.orEmpty().take(heroMax)
-                val heroIds = heroItems.map { it.id }.toSet()
                 if (heroMax > 0) {
                     if (heroItems.isNotEmpty()) {
                         HeroCarousel(
@@ -376,15 +386,27 @@ fun HomeScreen(
 
                 // At most 10 rows total, CW included: a panel that publishes 12
                 // sections does not get 12 rails on a phone, and the first rails win.
+                // Audit #18: the same title never appears twice on Home. The seen
+                // set is seeded with Continue Watching and the hero, so a rail
+                // never repeats a tile or a hero poster; HO-1 (hero out of its
+                // own rail) is now a special case of the same rule, by work
+                // identity — not by row id, because one film filed twice has
+                // two row ids.
+                var seenWorks = state.continueWatching
+                    .map { UserWords.workKey(it.post.workRef, it.post.displayTitle, it.post.year) }
+                    .toSet() + heroItems.map { UserWords.workKey(it.workRef, it.displayTitle, it.year) }
                 val renderedRows = shownRows.filter { it.visible || it.loading || it.error != null }
+                    .map { section ->
+                        val (kept, next) = UserWords.dedupeAcrossRails(
+                            section.items,
+                            seenWorks,
+                        ) { post -> UserWords.workKey(post.workRef, post.displayTitle, post.year) }
+                        seenWorks = next
+                        section.copy(items = kept)
+                    }
                 renderedRows.forEach { section ->
                     HomeRailSection(
-                        // HO-1: the hero's posters are not repeated in their own rail.
-                        section = if (section.key == heroSection?.key) {
-                            section.copy(items = section.items.filterNot { it.id in heroIds })
-                        } else {
-                            section
-                        },
+                        section = section,
                         onPostClick = onPostClick,
                         onSeeAll = { onBrowseType(section.type) },
                         // A sorted rail has no Browse equivalent (Browse takes a
@@ -884,13 +906,15 @@ private fun DailyCheckInCard(
  * opens it; nothing here promises general web browsing.
  */
 @Composable
-private fun BrowserStrip(
+internal fun BrowserStrip(
     onPlayVideoLink: () -> Unit,
     onOpenLocalFiles: () -> Unit,
     onOpenDownloads: () -> Unit,
 ) {
     Column(Modifier.padding(top = 4.dp)) {
-        SectionHeader(title = "Your library")
+        // Audit #15: every section heading carries the 16 dp phone margin —
+        // this one used to start at x=0 with its "Y" cut off.
+        SectionHeader(title = "Your library", modifier = Modifier.padding(horizontal = 16.dp))
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -955,7 +979,7 @@ private fun BrowserTile(
  * chips wait for a Search language filter to land on.
  */
 @Composable
-private fun FacetChipsRow(
+internal fun FacetChipsRow(
     facets: FacetsResponse?,
     onFacetSelected: (genre: String?, industry: String?) -> Unit,
 ) {
@@ -970,7 +994,8 @@ private fun FacetChipsRow(
     }
     if (chips.isEmpty()) return
     Column(Modifier.padding(top = 4.dp)) {
-        SectionHeader(title = "Browse by genre")
+        // Audit #15: the 16 dp phone margin, like every other heading.
+        SectionHeader(title = "Browse by genre", modifier = Modifier.padding(horizontal = 16.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1002,7 +1027,7 @@ private data class FacetChip(val label: String, val genre: String?, val industry
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
+internal fun JumpOffRow(onBrowseType: (String?) -> Unit) {
     val tiles = listOf(
         JumpOff("All", null),
         JumpOff("Movies", "movie"),
@@ -1011,7 +1036,8 @@ private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
         JumpOff("Seasons", "complete_season"),
     )
     Column(Modifier.padding(top = 4.dp)) {
-        SectionHeader(title = "Browse by type")
+        // Audit #15: the 16 dp phone margin, like every other heading.
+        SectionHeader(title = "Browse by type", modifier = Modifier.padding(horizontal = 16.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1035,36 +1061,6 @@ private fun JumpOffRow(onBrowseType: (String?) -> Unit) {
                     )
                 }
             }
-        }
-    }
-}
-
-/**
- * The search-first front door: a full-width bar that opens Search on one tap.
- * It is a door, not a field — typing happens on the Search screen, so this never
- * holds text state and never needs a keyboard.
- */
-@Composable
-private fun HeroSearchBar(onClick: () -> Unit) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(28.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant,
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        // HO-4: the bar sits inside the same 16dp margin as every other
-        // element on this screen instead of touching the screen edges.
-        modifier = Modifier.padding(horizontal = 16.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Icon(Icons.Default.Search, contentDescription = null)
-            Text(
-                text = "Search movies and shows",
-                style = MaterialTheme.typography.bodyLarge,
-            )
         }
     }
 }
