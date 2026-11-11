@@ -54,6 +54,7 @@ import time
 from pathlib import Path
 
 import db_pragmas  # serve-path SQLite pragmas (Session 125)
+import title_clean  # shared display-title / synopsis / rating cleaning
 
 # ── the vocabulary that must never be public ─────────────────────────────────
 
@@ -215,7 +216,7 @@ BASE_NEEDLES = frozenset({
 
 _IDENTITY = {"id"}
 _TITLE = {
-    "title", "clean_title", "year", "content_type", "seasons",
+    "title", "clean_title", "display_title", "year", "content_type", "seasons",
     "imdb_rating", "imdb_id", "tmdb_id", "genres", "synopsis",
     "is_animated", "industry", "country", "language",
 }
@@ -740,6 +741,30 @@ def public_list(value) -> str:
     return json.dumps(_clean_tokens(items), ensure_ascii=False)
 
 
+def _project_post_derived(out: dict) -> None:
+    """Derived display fields for a post row — the app renders these.
+
+    ``display_title`` is the clean title (never a raw scraped filename);
+    ``title`` / ``clean_title`` keep their stored values so existing clients
+    and the identity machinery never change. ``imdb_rating`` is normalised
+    to 0–10 (None when missing or unshowable, so the badge hides);
+    ``industry`` / ``country`` lose their ``"Unknown"`` placeholder (None,
+    so the chip hides); ``synopsis`` loses ``/PLOT``-style section markers.
+    The ledger is untouched — this is a serialisation decision at the edge.
+    """
+    display = title_clean.clean_display_title(
+        out.get("title"), out.get("clean_title"))
+    out["display_title"] = display or out.get("clean_title") or out.get("title") or ""
+    out["imdb_rating"] = title_clean.normalize_rating(out.get("imdb_rating"))
+    for key in ("industry", "country"):
+        value = out.get(key)
+        if isinstance(value, str) and (
+                value.strip().lower() in _BLANK_TOKENS or value.strip() == "[]"):
+            out[key] = None
+    if "synopsis" in out:
+        out["synopsis"] = title_clean.clean_synopsis(out.get("synopsis"))
+
+
 def project(row, view: str) -> dict:
     """Allowlist one row/dict into `view`. Unknown keys are dropped silently:
     that is the point. A view name that is not published raises."""
@@ -756,6 +781,8 @@ def project(row, view: str) -> dict:
         elif key in TEXT_KEYS and isinstance(value, str):
             value = scrub_text(value)
         out[key] = value
+    if view in ("post_brief", "post_detail"):
+        _project_post_derived(out)
     leaked = set(out) & PROVENANCE
     if leaked:
         # Unreachable while the allowlists are reviewed; loud if someone edits
