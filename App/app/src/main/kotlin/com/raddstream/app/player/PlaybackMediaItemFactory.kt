@@ -70,6 +70,27 @@ object PlaybackMediaItemFactory {
         return builder.build()
     }
 
+    /**
+     * A minimal MediaItem for the scrub-preview player (ScrubPreviewPlayer): the
+     * URI plus the manifest declaration, nothing else — no mediaId, no metadata,
+     * no subtitles, no DRM. The preview is muted, paused and never shown as a
+     * title, so it needs none of those; what it does need is the manifest
+     * declaration, or an HLS link is opened by the progressive reader and fails
+     * before the first frame (see manifestMimeType).
+     *
+     * This lives here, not in ScrubPreviewPlayer, because this file is the one
+     * place that composes MediaItems — UniversalSourceTest pins the census to
+     * this file alone, so a second MediaItem.Builder() anywhere else is a
+     * second answer to what a link contains.
+     */
+    fun buildPreview(rendition: PlaybackRendition): MediaItem {
+        val builder = MediaItem.Builder()
+            .setUri(rendition.playback.playUrl)
+        // A manifest must be told what it is before the reader is chosen: see manifestMimeType.
+        manifestMimeType(rendition.playback)?.let { builder.setMimeType(it) }
+        return builder.build()
+    }
+
     fun episodeAwareTitle(target: PlayTarget, title: String): String {
         if (target.season <= 0 && target.episode <= 0) return title
         val s = if (target.season > 0) "S%02d".format(target.season) else ""

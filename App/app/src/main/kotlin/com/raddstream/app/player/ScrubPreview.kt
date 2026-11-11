@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Build
 import android.view.TextureView
 import androidx.annotation.OptIn
-import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
@@ -116,17 +115,17 @@ class ScrubPreviewPlayer(context: Context) {
     /**
      * Point the preview at the rendition now playing. A no-op when the URL
      * is blank or unchanged (a quality switch is the only thing that moves
-     * it, and a scrub never changes quality). The media item is built the
-     * same way the main player builds it — an HLS link left undeclared is
-     * opened by the progressive reader and fails before the first frame.
+     * it, and a scrub never changes quality). The item comes from
+     * [PlaybackMediaItemFactory.buildPreview] — this file is the one place
+     * that composes MediaItems (UniversalSourceTest pins it), so the preview
+     * never builds one itself; the manifest declaration rides along, or an
+     * HLS link is opened by the progressive reader and fails.
      */
     fun setRendition(rendition: PlaybackRendition) {
         val url = rendition.playback.playUrl
         if (url.isNullOrBlank() || url == currentUrl) return
         currentUrl = url
-        val builder = MediaItem.Builder().setUri(url)
-        PlaybackMediaItemFactory.manifestMimeType(rendition.playback)?.let { builder.setMimeType(it) }
-        player.setMediaItem(builder.build())
+        player.setMediaItem(PlaybackMediaItemFactory.buildPreview(rendition))
         player.prepare()
     }
 
