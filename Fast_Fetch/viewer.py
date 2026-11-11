@@ -38,6 +38,8 @@ import media_search
 import panel_feed
 import contact_intake
 import search_fuzzy
+import did_you_mean
+import mood_search
 import usage_stats
 
 if sys.platform.startswith("win"):
@@ -3251,22 +3253,74 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
 
         fuzzy = False
+        did_you_mean_query = None
+        # Mood intent is computed for every query, not only on a miss —
+        # the response reports it even when the literal search hit (a title
+        # that happens to contain a mood word), the same as v2 search.
+        mood_words = mood_search.moods_for_query(query) if query else []
+        mood_genres = mood_search.genres_for_query(query) if query else []
+        # The title LIKE is always clause 1; how many leading params it
+        # owns (4 for the LIKE, N for a replacement clause). Every
+        # fallback below replaces clause 1 and must slice the params at
+        # this count, not at a hardcoded 4 — a replacement clause owns a
+        # different number of params than the LIKE it replaced.
+        title_param_count = 4
+        # The exact search missed: the fallbacks below run from this, and
+        # the correction is offered whenever it did — even when the fuzzy
+        # fallback already found rows, so the UI can say what produced them.
+        exact_missed = bool(query and not work_ref and total == 0)
+        if exact_missed:
+            # Gap A4 — a pure mood/descriptive query ("something funny",
+            # "sad love story", "mazahiya") is a feeling, not a title:
+            # answer it from the genre facet instead of the title LIKE.
+            # Only when no literal remainder is left — a title that
+            # happens to contain a mood word was already searched
+            # literally above, so the mood can never filter it out.
+            if mood_genres and not mood_search.strip_mood_words(query):
+                genre_clauses = []
+                genre_params: list = []
+                for mood_genre in mood_genres:
+                    if mood_genre == "science fiction":
+                        genre_clauses.append(
+                            "(lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?"
+                            " OR lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?)")
+                        genre_params.extend(["%sci-fi%", "%sci fi%", "%scifi%",
+                                             "%science fiction%"])
+                    else:
+                        genre_clauses.append("lower(p.genres) LIKE ?")
+                        genre_params.append(f"%{mood_genre}%")
+                where_clauses[1] = "(" + " OR ".join(genre_clauses) + ")"
+                params = genre_params + params[title_param_count:]
+                title_param_count = len(genre_params)
+                where_sql = " AND ".join(where_clauses)
+                total = conn.execute(
+                    f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
+                    params).fetchone()[0]
         if query and not work_ref and total == 0:
             # Exact search found nothing: one edit away is the only honest
             # second chance. The candidate ids only ever replace the LIKE
-            # clause (always index 1, always the first four params — title,
-            # clean title, slug, cast) — every other filter, the adult
+            # clause (always index 1) — every other filter, the adult
             # clause and the hides stay exactly as they were.
             fuzzy_ids = _fuzzy_post_ids(conn, query)
             if fuzzy_ids:
                 where_clauses[1] = (
                     "p.id IN (%s)" % ", ".join("?" for _ in fuzzy_ids))
-                params = fuzzy_ids + params[4:]
+                params = fuzzy_ids + params[title_param_count:]
+                title_param_count = len(fuzzy_ids)
                 where_sql = " AND ".join(where_clauses)
                 total = conn.execute(
                     f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
                     params).fetchone()[0]
                 fuzzy = True
+        if exact_missed:
+            # Gap A4 — "Did you mean": the fuzzy machinery already knew
+            # the correction; it just never surfaced it. Offer the
+            # corrected query so the UI can show it (and the viewer can
+            # tap it) — whether the fuzzy fallback already served rows
+            # from it or the page is still empty.
+            correction = did_you_mean.suggest_correction(conn, query)
+            if correction is not None:
+                did_you_mean_query = correction["query"]
 
         # Two-step page resolution: the page's ids first, from `posts` alone,
         # then the counts for just those ids. The one-query shape groups the
@@ -3306,6 +3360,9 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     "total_pages": max(1, (total + limit - 1) // limit),
                     "results": [],
                     "fuzzy": fuzzy,
+                    "moods": mood_words,
+                    "mood_genres": mood_genres,
+                    "did_you_mean": did_you_mean_query,
                 }
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
@@ -3359,6 +3416,9 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "total_pages": total_pages,
             "results": results,
             "fuzzy": fuzzy,
+            "moods": mood_words,
+            "mood_genres": mood_genres,
+            "did_you_mean": did_you_mean_query,
         }
 
 

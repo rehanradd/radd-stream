@@ -56,6 +56,8 @@ import time
 import unicodedata
 
 import catalog_v2
+import did_you_mean
+import mood_search
 import redact
 import subtitle_tracks
 import tiers
@@ -1365,6 +1367,19 @@ def search(conn, *, q, limit=DEFAULT_LIMIT, include_adult=False, content_type=No
     `sort='relevance'` orders by the documented `_relevance()` score; any browse
     sort key is also accepted.
 
+    Gap A4 — forgiving search. A mood or descriptive word in the query
+    ("funny", "sad love story", "mazahiya") is not a title token: it maps
+    to genre tokens (`mood_search`), and a query with no literal remainder
+    ("something funny") is answered as a genre browse. A query WITH a
+    literal remainder is searched literally first — a title that happens
+    to contain a mood word ("The Comedy of Errors") can never be filtered
+    out by the mood; the mood browse is only the fallback when the literal
+    search finds nothing. Hindi/Urdu words map to the same English genre
+    tokens, so a Hindi query finds English titles. When the literal search
+    finds nothing and a typo correction exists, the answer carries
+    `"did_you_mean"` with the corrected query, and when the corrected
+    query finds rows those rows are served with `"fuzzy": True`.
+
     Known limit: without an FTS index this is a full scan of `cat_works` (O(rows));
     correct but linear, and it does not use an index. See HANDOFF_api_read.md.
     """
@@ -1372,31 +1387,91 @@ def search(conn, *, q, limit=DEFAULT_LIMIT, include_adult=False, content_type=No
     _register_udfs(conn)
     query_norm = normalize_text(q)
     tokens = query_norm.split()
-    if not tokens:
+    # Mood words are genre intent, not title tokens — see the docstring.
+    moods = mood_search.moods_for_query(q)
+    mood_genres = mood_search.genres_for_query(q)
+    remainder = mood_search.strip_mood_words(q) if moods else ""
+    literal_tokens = normalize_text(remainder).split() if moods else tokens
+    if not literal_tokens and not mood_genres:
         return {"ok": True, "items": [], "count": 0, "query": q, "normalized": query_norm,
                 "limit": _clamp_limit(limit, ceiling=MAX_SEARCH_LIMIT), "next_cursor": None,
                 "has_more": False, "total_estimate": 0, "adult_included": bool(include_adult),
                 "truncated": False, "fields": fields or None,
+                "moods": moods, "mood_genres": mood_genres,
                 "note": "empty query returns no results by design"}
     effective_sort = "trending" if sort in ("relevance", "", None) else sort
     err = _listing_error(effective_sort, order)
     if err:
         return err
     limit = _clamp_limit(limit, ceiling=MAX_SEARCH_LIMIT)
+    use_fts = _has_table(conn, "cat_works_fts")
+    decoded_cursor = decode_cursor(cursor) if cursor else None
+    genre_list = [genres] if isinstance(genres, str) else list(genres or ())
+    # The mood genres join the facet only on a mood browse (a pure mood
+    # query, or the fallback below) — never on the literal run, where
+    # they would filter out a title that merely contains a mood word.
+    pure_mood = not literal_tokens
+    browse_genres = (list(dict.fromkeys([*genre_list, *mood_genres]))
+                     if pure_mood else genre_list)
     facet_clauses, facet_params = _facet_clauses(
-        content_type, genres, languages, qualities, None, None, None, None)
+        content_type, browse_genres, languages, qualities, None, None, None, None)
     result = _run_listing(
         conn, sort=effective_sort, order=order, limit=limit,
         include_adult=bool(include_adult),
-        cursor=(decode_cursor(cursor) if cursor else None),
+        cursor=decoded_cursor,
         facet_clauses=facet_clauses, facet_params=facet_params,
-        query_tokens=tokens, query_norm=query_norm,
-        use_fts_match=_has_table(conn, "cat_works_fts"))
+        query_tokens=literal_tokens, query_norm=query_norm,
+        use_fts_match=use_fts)
     if cursor not in (None, "") and not result.get("ok"):
         return result
+    used_tokens = literal_tokens
+    used_normalized = query_norm
+    # Fallbacks run only on the first page (a cursor means a previous
+    # page already answered) and only when the first run found nothing.
+    if cursor in (None, "") and not result.get("items"):
+        if mood_genres and literal_tokens:
+            # Mixed query, literal missed: answer the mood.
+            mood_clauses, mood_params = _facet_clauses(
+                content_type, list(dict.fromkeys([*genre_list, *mood_genres])),
+                languages, qualities, None, None, None, None)
+            mood_result = _run_listing(
+                conn, sort=effective_sort, order=order, limit=limit,
+                include_adult=bool(include_adult), cursor=None,
+                facet_clauses=mood_clauses, facet_params=mood_params,
+                query_tokens=[], query_norm=query_norm, use_fts_match=use_fts)
+            if mood_result.get("ok") and mood_result.get("items"):
+                result = mood_result
+                used_tokens = []
+                result["mood_fallback"] = True
+        if not result.get("items") and literal_tokens:
+            # "Did you mean": the fuzzy machinery already knew the
+            # correction (v1 omnibox); it just never surfaced it. Offer
+            # the corrected query and, when it finds rows, serve those.
+            correction = did_you_mean.suggest_correction(conn, q)
+            if correction is not None:
+                corrected_tokens = normalize_text(correction["query"]).split()
+                if corrected_tokens and corrected_tokens != literal_tokens:
+                    retry = _run_listing(
+                        conn, sort=effective_sort, order=order, limit=limit,
+                        include_adult=bool(include_adult), cursor=None,
+                        facet_clauses=facet_clauses, facet_params=facet_params,
+                        query_tokens=corrected_tokens,
+                        query_norm=normalize_text(correction["query"]),
+                        use_fts_match=use_fts)
+                    if retry.get("ok") and retry.get("items"):
+                        result = retry
+                        used_tokens = corrected_tokens
+                        used_normalized = normalize_text(correction["query"])
+                        result["fuzzy"] = True
+                # Set AFTER the retry: a successful retry REPLACES the
+                # result dict, so a key set before it would be discarded
+                # with the old dict.
+                result["did_you_mean"] = correction["query"]
     result["query"] = q
-    result["normalized"] = query_norm
-    result["tokens"] = tokens
+    result["normalized"] = used_normalized
+    result["tokens"] = used_tokens
+    result["moods"] = moods
+    result["mood_genres"] = mood_genres
     result["sort"] = sort
     result["fields"] = fields or None
     if fields:
@@ -1410,7 +1485,12 @@ def search(conn, *, q, limit=DEFAULT_LIMIT, include_adult=False, content_type=No
 
 @public_edge
 def suggest(conn, *, q, limit=10, include_adult=False) -> dict:
-    """Cheap type-ahead: normalised title prefixes only, no aliases, no ranking maths."""
+    """Cheap type-ahead: normalised title prefixes only, no aliases, no ranking maths.
+
+    Gap A4 — typo-tolerant: a mistyped prefix still suggests the titles
+    it meant, and the answer says so (`"did_you_mean"`). The correction
+    comes from the same fuzzy machinery as the v1 omnibox fallback.
+    """
     _require_row_factory(conn)
     _register_udfs(conn)
     query_norm = normalize_text(q)
@@ -1419,14 +1499,27 @@ def suggest(conn, *, q, limit=10, include_adult=False) -> dict:
                 "note": "suggest requires at least 2 characters"}
     limit = _clamp_limit(limit, default=10, ceiling=20)
     where = "w.title IS NOT NULL" if include_adult else f"{_adult_clause('w')}"
-    rows = conn.execute(
-        f"""
-        SELECT w.id, w.title, w.year, w.work_type, w.poster_url, w.max_resolution
-        FROM cat_works w WHERE {where} AND radd_norm(w.title) LIKE :pfx
-        ORDER BY LENGTH(radd_norm(w.title)) ASC, COALESCE(w.year, 0) DESC, w.id ASC
-        LIMIT :lim
-        """, {"pfx": f"{query_norm}%", "lim": limit}).fetchall()
-    return {
+
+    def _prefix_rows(norm):
+        return conn.execute(
+            f"""
+            SELECT w.id, w.title, w.year, w.work_type, w.poster_url, w.max_resolution
+            FROM cat_works w WHERE {where} AND radd_norm(w.title) LIKE :pfx
+            ORDER BY LENGTH(radd_norm(w.title)) ASC, COALESCE(w.year, 0) DESC, w.id ASC
+            LIMIT :lim
+            """, {"pfx": f"{norm}%", "lim": limit}).fetchall()
+
+    rows = _prefix_rows(query_norm)
+    corrected_query = None
+    if not rows:
+        correction = did_you_mean.suggest_correction(conn, q)
+        if correction is not None:
+            corrected_norm = normalize_text(correction["query"])
+            if corrected_norm != query_norm and len(corrected_norm) >= 2:
+                rows = _prefix_rows(corrected_norm)
+                if rows:
+                    corrected_query = correction["query"]
+    result = {
         "ok": True,
         "query": q,
         "normalized": query_norm,
@@ -1436,6 +1529,9 @@ def suggest(conn, *, q, limit=10, include_adult=False) -> dict:
         "count": len(rows),
         "adult_included": bool(include_adult),
     }
+    if corrected_query is not None:
+        result["did_you_mean"] = corrected_query
+    return result
 
 
 # ── work detail ──────────────────────────────────────────────────────────────
