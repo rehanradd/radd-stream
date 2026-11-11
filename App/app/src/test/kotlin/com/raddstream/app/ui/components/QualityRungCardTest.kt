@@ -107,13 +107,15 @@ class QualityRungCardTest {
                 )
             }
         }
-        compose.onAllNodes(hasContentDescription("4K Ultra HD: Hindi + English audio"))
+        // The facts line carries its rung AND its data estimate (audit #11):
+        // the spoken line is "<title>: <audio> · <estimate>".
+        compose.onAllNodes(hasContentDescription("4K Ultra HD: Hindi + English audio · ≈ 7–11 GB/hour"))
             .assertCountEquals(1)
-        compose.onAllNodes(hasContentDescription("Full HD: Hindi + English audio"))
+        compose.onAllNodes(hasContentDescription("Full HD: Hindi + English audio · ≈ 3 GB/hour"))
             .assertCountEquals(1)
-        compose.onAllNodes(hasContentDescription("HD: Hindi + English audio"))
+        compose.onAllNodes(hasContentDescription("HD: Hindi + English audio · ≈ 1.5 GB/hour"))
             .assertCountEquals(1)
-        compose.onAllNodes(hasContentDescription("480p: Hindi + English audio"))
+        compose.onAllNodes(hasContentDescription("480p: Hindi + English audio · ≈ 700 MB/hour"))
             .assertCountEquals(1)
     }
 }

@@ -856,7 +856,7 @@ fun SettingsScreen(
                 Text(
                     Brand.copy(
                         "settings_about_body",
-                        "Radd Stream finds movies and shows from public catalogs and plays them in one place.",
+                        "${Brand.shortName} finds movies and shows from public catalogs and plays them in one place.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

@@ -261,7 +261,9 @@ class QualityLadderTest {
         assertEquals(setOf("Hindi", "Urdu"), preferredAudioLanguages("  DESI_DUBS "))
         assertEquals(emptySet<String>(), preferredAudioLanguages("international"))
         assertEquals(emptySet<String>(), preferredAudioLanguages("east_asian"))
-        assertEquals(emptySet<String>(), preferredAudioLanguages(null))
+        // No region stored yet falls back to the shipped default (Desi),
+        // so it leads with Hindi and Urdu like any fresh install.
+        assertEquals(setOf("Hindi", "Urdu"), preferredAudioLanguages(null))
     }
 
     @Test

@@ -506,7 +506,7 @@ private fun effectiveDynamicColor(storedEnabled: Boolean, panelAllowed: Boolean)
  * opens Setup.
  */
 /**
- * Audit #42: the branded loading screen (logo + "RADD Stream" + spinner,
+ * Audit #42: the branded loading screen (logo + RADD Stream + spinner,
  * Session 120) must never wait on the network. The silent default-server
  * probe used to get two 15 s attempts — up to 30 s of splash when the
  * default answered slowly — before the first route appeared. One cheap
