@@ -142,8 +142,8 @@ class ScrubPreviewPlayer(context: Context) {
     }
 
     /** Detach the surface (the toast hid). The player stays prepared. */
-    fun clearVideoTextureView() {
-        player.clearVideoTextureView()
+    fun clearVideoTextureView(view: TextureView) {
+        player.clearVideoTextureView(view)
     }
 
     /** Release the preview player. Call when the player screen leaves. */

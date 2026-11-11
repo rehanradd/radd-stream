@@ -1340,7 +1340,7 @@ private fun ScrubToast(
                     factory = { ctx ->
                         TextureView(ctx).also { previewPlayer.setVideoTextureView(it) }
                     },
-                    onRelease = { _ -> previewPlayer.clearVideoTextureView() },
+                    onRelease = { view -> previewPlayer.clearVideoTextureView(view) },
                     modifier = Modifier
                         .size(
                             ScrubThumbnails.THUMBNAIL_WIDTH_DP.dp,
