@@ -46,7 +46,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _ingest(conn, title, *, is_18_plus, direct_url):
+def _ingest(conn, title, *, is_18_plus, direct_url, quality="720p"):
+    # The fixture is a free-tier print on purpose: the server-side quality
+    # gate (audit critical 5) 402s 1080p/2160p for a free viewer, so a
+    # 1080p fixture would 402 every ordinary download test below. The gate
+    # itself is pinned by its own tests at the bottom of this file.
     data = {
         "url": f"https://{SITE}/movie/{title.lower().replace(' ', '-')}/",
         "slug": title.lower().replace(" ", "-"),
@@ -64,11 +68,11 @@ def _ingest(conn, title, *, is_18_plus, direct_url):
         "language": "Hindi",
         "canonical_key": fast_fetch.generate_canonical_key(title, 2024),
         "releases": [{
-            "release_title": f"{title} 1080p", "quality": "1080p",
+            "release_title": f"{title} {quality}", "quality": quality,
             "codec": "x264", "size": "1.5GB", "languages": '["Hindi"]',
             "season": "", "episode": "", "intermediate_url": "",
             "origin_url": "", "source_site": SITE,
-            "sources": [{"source_url": direct_url, "quality": "1080p",
+            "sources": [{"source_url": direct_url, "quality": quality,
                          "status": "active"}],
         }],
     }
@@ -84,6 +88,25 @@ def _ingest(conn, title, *, is_18_plus, direct_url):
     return row[0]
 
 
+def _stage2_probe_stub(url):
+    """Stage-2 probe stand-in for the offline fixture URLs.
+
+    The resolver probes every candidate address over the network, and this
+    suite is offline (the fixture URLs are fake hosts). The probe is a
+    network boundary, so it is stubbed here — the same pattern
+    `test_redact.py` uses — but only for the fixture hosts: any other
+    address fails the probe, so a dead link still answers
+    `no_playable_source` instead of being stubbed alive.
+    """
+    if str(url or "").startswith("https://media.example.test/"):
+        return {"ok": True, "kind": "file", "mime": "video/mp4",
+                "size": None, "resumable": True, "renditions": [],
+                "failure": None}
+    return {"ok": False, "kind": None, "mime": None, "size": None,
+            "resumable": False, "renditions": [],
+            "failure": "probe_failed"}
+
+
 class DownloadEndpointTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -93,6 +116,8 @@ class DownloadEndpointTests(unittest.TestCase):
         self.state_path = root / "user_state.db"
         for patcher in (mock.patch.object(fast_fetch, "DB_PATH", self.db_path),
                         mock.patch.object(viewer, "DB_PATH", self.db_path),
+                        mock.patch.object(fast_fetch, "_stage2_probe",
+                                          side_effect=_stage2_probe_stub),
                         mock.patch.dict("os.environ",
                                         {"RADD_USER_STATE_DB": str(self.state_path),
                                          "RADD_ADMIN_TOKEN": TOKEN})):
@@ -472,6 +497,58 @@ class DownloadEndpointTests(unittest.TestCase):
             self.assertEqual(status, 302, forged)
             self.assertEqual(headers["Location"], "https://short.test/free", forged)
             call.assert_called_once()
+
+    # ---- the server-side quality gate (audit critical 5) ----------------- #
+    def test_a_premium_download_is_402_for_a_free_user(self):
+        """The 720p free cap is server-side, not app-only: a free viewer
+        asking for a 1080p print gets 402 `premium_quality_requires_vip`,
+        never the file — and the body names no hoster and no URL."""
+        premium_id = _ingest(self.conn, "Premium Film", is_18_plus=0,
+                             direct_url="https://media.example.test/premium.mp4",
+                             quality="1080p")
+        token = self.token(premium_id)
+        status, _headers, raw = self.fetch(
+            self.public_url, f"/api/v1/download?id={token}&redirect=0")
+        self.assertEqual(status, 402)
+        self.assertEqual(json.loads(raw),
+                         {"success": False,
+                          "error": "premium_quality_requires_vip"})
+        self.assertNotIn("media.example.test", raw.decode("utf-8", "replace"))
+
+    def test_a_premium_download_plays_for_a_signed_vip_pass(self):
+        """The gate is a purchase boundary, not a denial: the same 1080p
+        print with a signed VIP pass downloads as a file."""
+        premium_id = _ingest(self.conn, "Premium Film", is_18_plus=0,
+                             direct_url="https://media.example.test/premium.mp4",
+                             quality="1080p")
+        token = self.token(premium_id)
+        pass_token = redact.mint_vip_pass(time.time() + 3600,
+                                          viewer.signing_secret())
+        with mock.patch.object(
+                viewer, "call_shortener",
+                side_effect=AssertionError("VIP must not be shortened")):
+            status, headers, _body = self.fetch(
+                self.public_url,
+                f"/api/v1/download?id={token}&vip={pass_token}", follow=False)
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"],
+                         "https://media.example.test/premium.mp4")
+        self.assertIn("attachment", headers["Content-Disposition"])
+
+    def test_a_premium_download_is_exempt_on_the_operator_port(self):
+        """The operator port is the healing and audit surface, loopback-only
+        by design: the paywall boundary has no reason to blind the person
+        who owns the ledger, so a 1080p print resolves there without VIP."""
+        premium_id = _ingest(self.conn, "Premium Film", is_18_plus=0,
+                             direct_url="https://media.example.test/premium.mp4",
+                             quality="1080p")
+        status, headers, _body = self.fetch(
+            self.operator_url,
+            f"/api/v1/download?id={premium_id}", follow=False,
+            headers={"Authorization": f"Bearer {TOKEN}"})
+        self.assertEqual(status, 302)
+        self.assertEqual(headers["Location"],
+                         "https://media.example.test/premium.mp4")
 
     def test_shortener_replies_are_parsed_conservatively(self):
         parse = viewer._shortened_from_body

@@ -2454,8 +2454,13 @@ class V2SurfaceTests(V2WireFixture):
         saver = self.post("/api/v2/play", {"release_id": self.public_release_id,
                                           "prefer": "data_saver"})
         self.assertEqual(saver.json["prefer"], "data_saver")
-        self.assertEqual(speed.json["candidates"][0]["stream_id"],
-                         quality.json["candidates"][0]["stream_id"],
+        # Compare the stable link identity, not the minted handle:
+        # `stream_id` is a signed handle carrying a second-resolution
+        # expiry, so two calls straddling a second boundary mint different
+        # handles for the same link and the comparison flakes. `link_id`
+        # is the ledger row — the same candidate either way.
+        self.assertEqual(speed.json["candidates"][0]["link_id"],
+                         quality.json["candidates"][0]["link_id"],
                          "the ladder is not a re-sort of the same candidates")
         # An unknown word is not an error and is not silently obeyed either: the
         # answer names the axis it actually used (the app's own `Prefer.fromWire`
@@ -2465,7 +2470,13 @@ class V2SurfaceTests(V2WireFixture):
         self.assertEqual(weird.status, 200)
         self.assertEqual(weird.json["prefer"], "quality")
         self.assertIn("prefer", weird.json)
-        self.assertEqual(weird.json["candidates"], quality.json["candidates"])
+        # Same ladder, compared by stable link identity in order: the whole
+        # candidate dicts carry minted `stream_id` handles (second-resolution
+        # expiry), so a verbatim dict comparison flakes when the two calls
+        # straddle a second boundary. The ladder IS the ordered link list.
+        self.assertEqual([link["link_id"] for link in weird.json["candidates"]],
+                         [link["link_id"] for link in quality.json["candidates"]],
+                         "an unknown prefer word must fall back to the quality ladder")
         for field in ("recommended_link_id", "ladder_exhausted", "tiers", "tried"):
             self.assertIn(field, quality.json)
         self.assertEqual(quality.json["ladder_exhausted"], False)

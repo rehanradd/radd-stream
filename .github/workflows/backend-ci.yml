@@ -150,7 +150,6 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     EXCLUDED: test_backfill_animated_flag.py  — operator migration, not a suite
 #     EXCLUDED: test_bolly4u_import.py  — per-site parser
 #     EXCLUDED: test_desicinemas.py  — per-site parser
-#     EXCLUDED: test_download_endpoint.py  — owner not yet verified offline
 #     EXCLUDED: test_filmyzilla_import.py  — per-site parser
 #     EXCLUDED: test_hdhub4u_import.py  — per-site parser
 #     EXCLUDED: test_hdtvb_import.py  — per-site parser
@@ -285,6 +284,12 @@ jobs:
 
       - name: 🧪 test_redact.py
         run: python3 -S Fast_Fetch/test_redact.py
+
+      # Socket-level download twin of /api/v1/stream: the 302, the JSON
+      # descriptor, the shortener waterfall, the credit path and the 720p
+      # free cap. Offline — temp ledger, loopback servers, no catalog read.
+      - name: 🧪 test_download_endpoint.py
+        run: python3 -S Fast_Fetch/test_download_endpoint.py
 
       # Two public-edge decisions, pinned: the /api/v1/posts offset window (a pair of
       # values that each satisfy bounded_int can still ask SQLite to walk OFFSET

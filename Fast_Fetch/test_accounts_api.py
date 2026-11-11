@@ -471,9 +471,27 @@ class VipPass(EdgeFixture, unittest.TestCase):
         status, _ctype, raw = self.get(P + "/vip-pass", headers=self.auth())
         self.assertEqual(status, 200, raw)
         payload = json.loads(raw.decode("utf-8"))
-        header = {redact.VIP_PASS_HEADER: "x" + payload["pass"]}
-        self.assertFalse(viewer.request_is_vip(header, {}, secret=SECRET))
-        self.assertFalse(api_v2._request_is_vip(header, {}, secret=SECRET))
+        good = payload["pass"]
+        self.assertEqual(len(good), 23, "a pass is 17 bytes, 23 base64 chars")
+
+        def _flip(token, index):
+            flipped = "A" if token[index] != "A" else "B"
+            return token[:index] + flipped + token[index + 1:]
+
+        # The tamper must flip a bit the HMAC actually covers. The pass is
+        # unpadded base64, so the LAST character's low two bits are padding:
+        # mutating only them decodes to the identical bytes and the pass still
+        # verifies (~1 in 21 single-character last-char mutations, measured) —
+        # that is the flake. So the tampers here flip a character inside the
+        # tag (char 15) and inside the expiry body (char 5), where every bit
+        # is significant, plus the prepend (which breaks the length check).
+        tampered = ("x" + good, _flip(good, 15), _flip(good, 5))
+        for bad in tampered:
+            self.assertIsNone(redact.parse_vip_pass(bad, SECRET, now=now),
+                              bad)
+            header = {redact.VIP_PASS_HEADER: bad}
+            self.assertFalse(viewer.request_is_vip(header, {}, secret=SECRET))
+            self.assertFalse(api_v2._request_is_vip(header, {}, secret=SECRET))
 
     def test_an_expired_header_pass_is_free(self):
         import viewer
