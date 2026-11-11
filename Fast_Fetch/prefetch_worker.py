@@ -85,10 +85,30 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
-try:
-    import panel_feed  # the operator's tuning knobs + pauses
-except Exception:  # pragma: no cover - panel_feed is always importable in-repo
-    panel_feed = None
+#: panel_feed is imported lazily (see _load_panel_feed), never at module
+#: top: it imports config, and config freezes DB_PATH at import time, so
+#: an eager import here would freeze the default DB before main() honours
+#: --db (the dry-run CLI test caught it: "no such table: posts" on a
+#: scratch DB, because get_db opened the frozen default instead).
+_panel_feed = None
+_panel_feed_tried = False
+
+
+def _load_panel_feed():
+    """The operator's tuning-knob/pause reader, or None. Never raises.
+
+    Imported on first use — by then main() has already set RADD_DB_PATH
+    from --db, so config freezes the right database.
+    """
+    global _panel_feed, _panel_feed_tried
+    if not _panel_feed_tried:
+        _panel_feed_tried = True
+        try:
+            import panel_feed as _pf
+            _panel_feed = _pf
+        except Exception:  # pragma: no cover - panel_feed is importable in-repo
+            _panel_feed = None
+    return _panel_feed
 
 #: The pool this worker keeps warm, and the rhythm it keeps it warm with.
 #: The shipped pool size (200) and the shipped resolve concurrency (1,
@@ -123,20 +143,22 @@ def _tuning_knob(name, default):
     A consumer's shipped behaviour is its own default, not the panel's
     seed, so an unwired panel changes nothing. Never raises.
     """
-    if panel_feed is None:
+    feed = _load_panel_feed()
+    if feed is None:
         return default
     try:
-        return panel_feed.tuning_knob(name=name, default=default)
+        return feed.tuning_knob(name=name, default=default)
     except Exception:
         return default
 
 
 def _prefetch_paused():
     """True when the operator paused all prefetching. Never raises."""
-    if panel_feed is None:
+    feed = _load_panel_feed()
+    if feed is None:
         return False
     try:
-        return panel_feed.is_paused(
+        return feed.is_paused(
             target_type="prefetch_global", target_id="all")
     except Exception:
         return False
@@ -422,9 +444,13 @@ def prefetch_once(*, limit: int, min_fresh: float, load_ceiling: float,
                 if outcome == "timed_out":
                     stats["gated"] += 1
                     break
-                if outcome in ("resolved", "resolved_gated"):
+                # "resolved" counts every attempted resolve (A7's pinned
+                # meaning: a failed attempt is resolved=1 AND failed=1);
+                # "failed" counts the failures among them.
+                if outcome in ("resolved", "resolved_gated",
+                               "failed", "failed_gated"):
                     stats["resolved"] += 1
-                elif outcome in ("failed", "failed_gated"):
+                if outcome in ("failed", "failed_gated"):
                     stats["failed"] += 1
                 if outcome.endswith("_gated"):
                     stats["gated"] += 1
@@ -450,9 +476,10 @@ def prefetch_once(*, limit: int, min_fresh: float, load_ceiling: float,
                     if outcome == "timed_out":
                         stats["gated"] += 1
                         break
-                    if outcome in ("resolved", "resolved_gated"):
+                    if outcome in ("resolved", "resolved_gated",
+                                   "failed", "failed_gated"):
                         stats["resolved"] += 1
-                    elif outcome in ("failed", "failed_gated"):
+                    if outcome in ("failed", "failed_gated"):
                         stats["failed"] += 1
                     if outcome.endswith("_gated"):
                         stats["gated"] += 1
