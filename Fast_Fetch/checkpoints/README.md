@@ -5,6 +5,13 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-12 — self-check [LIVE-TV-503]: the six test channels (ids 36–41) shipped
+  with empty `logo_url`, and `validate_registry()` fails closed, so the whole Live
+  TV list 503'd since 2026-11-11. Logos fixed (verified 200 + image/*); repo
+  registry synced to the live 23-channel file; seeded-count test updated 35/17 →
+  23/23. Tests: `test_live_tv.py` (26), `test_panel_feed.py` (48),
+  `test_redact.py` (82). NOT deployed — gate decides. Full note:
+  `20261112-selfcheck-live-tv-503-logos.md`.
 - 2026-11-11 — Muse [HOME-RAILS]: the Home rails — GET /api/v1/trending,
   /api/v1/related and /api/v1/facets, plus the app wiring (Because you
   watch rail, facet chips landing on Search, GenreFilter 5 → 10). Every

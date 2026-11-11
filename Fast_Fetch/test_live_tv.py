@@ -292,11 +292,14 @@ class SeededRegistryTests(unittest.TestCase):
     """The shipped registry itself: shape + counts, no network."""
 
     def test_seeded_registry_loads_and_counts(self):
+        # 2026-11-11: panel dropped the 18 third-party restreams outright
+        # (user order) and added 6 public test channels (ids 36-41), so the
+        # shipped registry is now exactly the 23 live channels, all enabled.
         registry = live_tv.load_registry()
-        self.assertEqual(len(registry["channels"]), 35)
+        self.assertEqual(len(registry["channels"]), 23)
         enabled = [c for c in registry["channels"] if c["enabled"]]
-        self.assertEqual(len(enabled), 17)
-        self.assertEqual(len({c["id"] for c in registry["channels"]}), 35)
+        self.assertEqual(len(enabled), 23)
+        self.assertEqual(len({c["id"] for c in registry["channels"]}), 23)
 
     def test_seeded_enabled_sports_are_three(self):
         registry = live_tv.load_registry()

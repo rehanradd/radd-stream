@@ -7,7 +7,7 @@
 
 ## ✅ Open items — index (q3, 2026-10-30; pointers only)
 
-1. **This file is a pointer, not a history** 139 session files (137 dated + 2 undated) cover
+1. **This file is a pointer, not a history** 140 session files (138 dated + 2 undated) cover
 
    every one of them verbatim: [`checkpoints/README.md`](checkpoints/README.md). Nothing was
    deleted, reworded, or summarized. The count is `ls Fast_Fetch/checkpoints/*.md` minus `README.md`,
@@ -74,6 +74,7 @@
 
 Session blocks moved verbatim to [`Fast_Fetch/checkpoints/`](checkpoints/README.md); nothing was deleted or reworded.
 The newest are listed here; `Fast_Fetch/checkpoints/README.md` is the complete index.
+- [Session 2026-11-12 — self-check `[LIVE-TV-503]`](checkpoints/20261112-selfcheck-live-tv-503-logos.md)
 - [Session 2026-11-08 — Muse [MUSE-SESSION107-DATA-TRUTH]: Phase D data-truth](checkpoints/20261108-muse-session107-data-truth.md)
 - [Session 2026-11-06 — crown `[CROWN-NIGHT-CHAIN]`: five trunk commits, the live-tree gap, what was rejected](checkpoints/20261106-crown-night-chain-five-trunk-commits-one-live-tree-gap.md)
 - [Session 2026-11-06 crown `[Q75-LAND]`: 3 producer chars, red-first 18 tests, the `_sN` merge loss filed](checkpoints/20261106-crown-q75-three-producer-fixes-landed-and-the-s-n-key-loss-filed.md)

@@ -1,8 +1,8 @@
 {
   "version": "1.0",
-  "updated_at": "2026-11-08T19:25:00Z",
+  "updated_at": "2026-11-11T15:11:30.646501+00:00",
   "source": "iptv-org public playlists (countries/pk.m3u, countries/in.m3u, categories/news.m3u, categories/sports.m3u), probed live from the Oracle VM with curl + ffprobe",
-  "note": "Only streams verified playing are listed. enabled=true means the stream host is the broadcaster's own (or its official playout / FAST / public-broadcaster) outlet. enabled=false means the stream plays but is a third-party restream — the endpoint hides it until an operator enables it. Probes ran from the Mumbai VM; Pakistan-side geo-blocking is unproven for any channel.",
+  "note": "Only streams verified playing are listed. enabled=true means the stream host is the broadcaster's own (or its official playout / FAST / public-broadcaster) outlet. enabled=false means the stream plays but is a third-party restream — the endpoint hides it until an operator enables it. Probes ran from the Mumbai VM; Pakistan-side geo-blocking is unproven for any channel. | Test channels 36-41 added 2026-11-11 from public Free-TV list (broadcaster-published, stream probed OK).",
   "channels": [
     {
       "id": 1,
@@ -18,123 +18,6 @@
       "disabled_reason": ""
     },
     {
-      "id": 2,
-      "name": "24 News HD",
-      "category": "news",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://upload.wikimedia.org/wikipedia/en/9/93/24_News_HD_Lo",
-      "stream_url": "https://cdn4.mjunoon.tv:8087/streamtest/146M/chunks.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 3,
-      "name": "Such TV",
-      "category": "news",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://i.imgur.com/yYMh3JJ.png",
-      "stream_url": "https://video.primexsports.com/suchnews/live/playlist.m3u8",
-      "source": "unknown",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 4,
-      "name": "News One",
-      "category": "news",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://i.imgur.com/ivrRYMk.png",
-      "stream_url": "https://vodzong.mjunoon.tv:8087/streamtest/NEWS1-128/playlist.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 5,
-      "name": "KTN News",
-      "category": "news",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://i.imgur.com/RtEzpPQ.png",
-      "stream_url": "https://vodzong.mjunoon.tv:8087/streamtest/KTNNews-151/playlist.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 6,
-      "name": "Hum TV",
-      "category": "entertainment",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://i.ibb.co/Tx4GfKT5/Hum-TV-HD.png",
-      "stream_url": "https://g4wlkwx8l23a-hls-live.5centscdn.com/HUM/271ddf829afeece44d8732757fba1a66.sdp/playlist_dvr.m3u8",
-      "source": "aggregator-cdn",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 7,
-      "name": "Bol Entertainment HD",
-      "category": "entertainment",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://i.imgur.com/eajSRFo.png",
-      "stream_url": "https://vodzong.mjunoon.tv:8087/streamtest/Channel5-159-4/playlist.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 8,
-      "name": "8XM",
-      "category": "music",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://i.ibb.co/Kc0xHyBb/8XM-Logo.png",
-      "stream_url": "https://cdn4.mjunoon.tv:8087/streamtest/131M/chunks.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 9,
-      "name": "M Sports",
-      "category": "sports",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://msports.pk/wp-content/uploads/2026/02/m-sports-300.p",
-      "stream_url": "https://cdn.rabta.stream/M-Sports/index.m3u8",
-      "source": "unknown",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 10,
-      "name": "PK Sports",
-      "category": "sports",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://i.imgur.com/qtbSnrY.png",
-      "stream_url": "https://lbgo.bozztv.com/ssh101/ssh101/pksportshd/playlist.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
       "id": 11,
       "name": "Madani Channel Urdu",
       "category": "religious",
@@ -146,32 +29,6 @@
       "verified_at": "2026-11-08T19:25:00Z",
       "enabled": true,
       "disabled_reason": ""
-    },
-    {
-      "id": 12,
-      "name": "Peace TV Urdu",
-      "category": "religious",
-      "country": "PK",
-      "language": "ur",
-      "logo_url": "https://github.com/fawazahmed0/tiger/raw/master/peace/urdu.j",
-      "stream_url": "https://dzkyvlfyge.erbvr.com/PeaceTvUrdu/index.m3u8",
-      "source": "unknown",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 13,
-      "name": "Cartoon Network Pakistan",
-      "category": "kids",
-      "country": "PK",
-      "language": "en",
-      "logo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/80/Ca",
-      "stream_url": "https://vodzong.mjunoon.tv:8087/streamtest/cartoon-network-87/live/87H/chunks.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
     },
     {
       "id": 14,
@@ -187,19 +44,6 @@
       "disabled_reason": ""
     },
     {
-      "id": 15,
-      "name": "NDTV 24x7",
-      "category": "news",
-      "country": "IN",
-      "language": "en",
-      "logo_url": "https://dtil.tmsimg.com/assets/s154895_ld_h15_aa.png?lock=72",
-      "stream_url": "https://raw.githubusercontent.com/amazeyourself/adaptive-streams/refs/heads/main/streams/in/YuppTV/NDTV24x7.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
       "id": 16,
       "name": "DD News",
       "category": "news",
@@ -211,19 +55,6 @@
       "verified_at": "2026-11-08T19:25:00Z",
       "enabled": true,
       "disabled_reason": ""
-    },
-    {
-      "id": 17,
-      "name": "DD News HD",
-      "category": "news",
-      "country": "IN",
-      "language": "hi",
-      "logo_url": "https://ltsk-cdn.s3.eu-west-1.amazonaws.com/jumpstart/Temp_L",
-      "stream_url": "https://fta.ektv.in/live/117/117_0.m3u8",
-      "source": "fta-aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
     },
     {
       "id": 18,
@@ -250,19 +81,6 @@
       "verified_at": "2026-11-08T19:25:00Z",
       "enabled": true,
       "disabled_reason": ""
-    },
-    {
-      "id": 20,
-      "name": "Zee News",
-      "category": "news",
-      "country": "IN",
-      "language": "hi",
-      "logo_url": "https://dtil.tmsimg.com/assets/GNLZZGG0023VWYC.png?lock=720x",
-      "stream_url": "https://dknttpxmr0dwf.cloudfront.net/index_57.m3u8",
-      "source": "unknown-cdn",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
     },
     {
       "id": 21,
@@ -302,32 +120,6 @@
       "verified_at": "2026-11-08T19:25:00Z",
       "enabled": true,
       "disabled_reason": ""
-    },
-    {
-      "id": 24,
-      "name": "DD National HD",
-      "category": "entertainment",
-      "country": "IN",
-      "language": "hi",
-      "logo_url": "https://ltsk-cdn.s3.eu-west-1.amazonaws.com/jumpstart/Temp_L",
-      "stream_url": "https://fta.ektv.in/live/15/master.m3u8",
-      "source": "fta-aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
-      "id": 25,
-      "name": "DD India",
-      "category": "news",
-      "country": "IN",
-      "language": "en",
-      "logo_url": "https://dtil.tmsimg.com/assets/s158251_ld_h15_aa.png?lock=72",
-      "stream_url": "https://fta.ektv.in/live/119/119_0.m3u8",
-      "source": "fta-aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
     },
     {
       "id": 26,
@@ -395,19 +187,6 @@
       "disabled_reason": ""
     },
     {
-      "id": 31,
-      "name": "Euronews English",
-      "category": "news",
-      "country": "INTL",
-      "language": "en",
-      "logo_url": "https://jiotvimages.cdn.jio.com/dare_images/images/Euro_News",
-      "stream_url": "https://jmp2.uk/plu-61de96114757070008d33cae.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
       "id": 32,
       "name": "Africanews English",
       "category": "news",
@@ -434,19 +213,6 @@
       "disabled_reason": ""
     },
     {
-      "id": 34,
-      "name": "FIFA+",
-      "category": "sports",
-      "country": "INTL",
-      "language": "en",
-      "logo_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9c/FI",
-      "stream_url": "https://jmp2.uk/plu-660c29b5aec9680008f5b4a4.m3u8",
-      "source": "aggregator",
-      "verified_at": "2026-11-08T19:25:00Z",
-      "enabled": false,
-      "disabled_reason": "third-party restream, not broadcaster-published — needs owner call"
-    },
-    {
       "id": 35,
       "name": "FUEL TV",
       "category": "sports",
@@ -456,6 +222,84 @@
       "stream_url": "https://amg01074-fueltv-fueltvemeaen-rakuten-b6j62.amagi.tv/hls/amagi_hls_data_rakutenAA-fueltvemeaen/CDN/master.m3u8",
       "source": "official-fast",
       "verified_at": "2026-11-08T19:25:00Z",
+      "enabled": true,
+      "disabled_reason": ""
+    },
+    {
+      "id": 36,
+      "name": "ABC News Australia",
+      "category": "news",
+      "country": "AU",
+      "language": "en",
+      "logo_url": "https://i.imgur.com/BrW7gk8.png",
+      "stream_url": "https://c.mjh.nz/abc-news.m3u8",
+      "source": "official",
+      "verified_at": "2026-11-11T14:57:15Z",
+      "enabled": true,
+      "disabled_reason": ""
+    },
+    {
+      "id": 37,
+      "name": "Bloomberg TV",
+      "category": "news",
+      "country": "UK",
+      "language": "en",
+      "logo_url": "https://upload.wikimedia.org/wikipedia/commons/6/66/Bloomberg_Television_logo.svg",
+      "stream_url": "https://bloomberg.com/media-manifest/streams/eu.m3u8",
+      "source": "official",
+      "verified_at": "2026-11-11T14:57:15Z",
+      "enabled": true,
+      "disabled_reason": ""
+    },
+    {
+      "id": 38,
+      "name": "Rakuten Viki",
+      "category": "entertainment",
+      "country": "INTL",
+      "language": "en",
+      "logo_url": "https://upload.wikimedia.org/wikipedia/commons/8/88/Rakuten_Viki_logo.svg",
+      "stream_url": "https://fd18f1cadd404894a31a3362c5f319bd.mediatailor.us-east-1.amazonaws.com/v1/master/04fd913bb278d8775298c26fdca9d9841f37601f/RakutenTV-eu_RakutenViki-1/playlist.m3u8",
+      "source": "official",
+      "verified_at": "2026-11-11T14:57:15Z",
+      "enabled": true,
+      "disabled_reason": ""
+    },
+    {
+      "id": 39,
+      "name": "Now 70s",
+      "category": "music",
+      "country": "INTL",
+      "language": "en",
+      "logo_url": "https://upload.wikimedia.org/wikipedia/commons/c/cd/NOW_70s.png",
+      "stream_url": "https://lightning-now70s-samsungnz.amagi.tv/playlist.m3u8",
+      "source": "official",
+      "verified_at": "2026-11-11T14:57:15Z",
+      "enabled": true,
+      "disabled_reason": ""
+    },
+    {
+      "id": 40,
+      "name": "Al Jazeera Mubasher",
+      "category": "news",
+      "country": "QA",
+      "language": "ar",
+      "logo_url": "https://i.imgur.com/7bRVpnu.png",
+      "stream_url": "https://live-hls-web-ajm.getaj.net/AJM/index.m3u8",
+      "source": "official",
+      "verified_at": "2026-11-11T14:57:15Z",
+      "enabled": true,
+      "disabled_reason": ""
+    },
+    {
+      "id": 41,
+      "name": "Class CNBC",
+      "category": "news",
+      "country": "IT",
+      "language": "it",
+      "logo_url": "https://upload.wikimedia.org/wikipedia/commons/8/8d/Class_CNBC_2026.svg",
+      "stream_url": "https://amg14891-amg14891c5-amgplt0020.playout.now3.amagi.tv/playlist.m3u8",
+      "source": "official",
+      "verified_at": "2026-11-11T14:57:15Z",
       "enabled": true,
       "disabled_reason": ""
     }
