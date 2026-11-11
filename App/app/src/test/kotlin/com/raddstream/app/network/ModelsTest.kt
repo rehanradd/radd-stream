@@ -98,6 +98,21 @@ class ModelsTest {
     }
 
     @Test
+    fun `posts response carries the did-you-mean suggestion when the server sends one`() {
+        // Audit #37: "avtar" -> "Avatar". Absent on old servers: null, not a crash.
+        val withSuggestion = gson.fromJson(
+            """{"page":1,"total":0,"total_pages":1,"results":[],"suggestion":"Avatar"}""",
+            PostsResponse::class.java,
+        )
+        assertEquals("Avatar", withSuggestion.suggestion)
+        val withoutSuggestion = gson.fromJson(
+            """{"page":1,"total":0,"total_pages":1,"results":[]}""",
+            PostsResponse::class.java,
+        )
+        assertNull(withoutSuggestion.suggestion)
+    }
+
+    @Test
     fun `post model accepts year ranges and optional metadata`() {
         val post = gson.fromJson(
             """{"id":1,"title":"Example series","year":"2017–2019","content_type":"series"}""",

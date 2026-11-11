@@ -57,6 +57,14 @@ data class PostsResponse(
      * viewer who typed "Avngers" knows why "Avengers" is what came back.
      */
     val fuzzy: Boolean = false,
+    /**
+     * App-design audit #37: the server's "did you mean" spelling for the
+     * query ("avtar" → "Avatar"), or null when the query needs no
+     * correction. Added to the wire ahead of the backend (the backend
+     * worker is adding the field server-side); a server that does not
+     * send it simply shows no line.
+     */
+    val suggestion: String? = null,
 )
 
 /** One entry of GET /api/v1/facets — a jump-off chip with its honest count. */

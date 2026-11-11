@@ -195,45 +195,14 @@ fun SearchScreen(
                 .imePadding()
                 .padding(horizontal = 16.dp),
         ) {
-            // D-15: one search affordance everywhere — a filled rounded pill
-            // with the same prompt Home's bar uses ("Search movies and
-            // shows"), no border-box form look. The field still searches titles
-            // and cast names (the omnibox); only the prompt is unified, not the
-            // capability. E-L1: the label below is the field's accessible name —
-            // a placeholder alone does not label it — and it floats only once
-            // the viewer starts typing, so the empty pill looks the same.
-            TextField(
-                value = state.query,
-                onValueChange = viewModel::onQueryChanged,
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text("Search movies and shows") },
-                placeholder = { Text("Search movies and shows") },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-                trailingIcon = {
-                    if (state.query.isNotEmpty()) {
-                        IconButton(onClick = { viewModel.onQueryChanged("") }) {
-                            Icon(Icons.Default.Close, contentDescription = "Clear search")
-                        }
-                    }
-                },
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                // Session 121 (P-12): searching dismisses the keyboard so the
-                // results are visible instead of sitting under it.
-                keyboardActions = KeyboardActions(onSearch = {
+            SearchField(
+                query = state.query,
+                onQueryChanged = viewModel::onQueryChanged,
+                onSubmit = {
                     focusManager.clearFocus()
                     keyboardController?.hide()
                     viewModel.submitCurrentQuery()
-                }),
-                shape = RoundedCornerShape(28.dp),
-                colors = TextFieldDefaults.colors(
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    focusedIndicatorColor = Color.Transparent,
-                    unfocusedIndicatorColor = Color.Transparent,
-                    disabledIndicatorColor = Color.Transparent,
-                ),
+                },
             )
 
             Spacer(Modifier.height(8.dp))
@@ -313,17 +282,10 @@ fun SearchScreen(
                             )
                         }
                     }
-                } else if (state.suggestionsUnavailable && state.query.length >= 2) {
-                    // The suggest call itself failed — blocked route, old
-                    // server, dead socket. Say so, instead of silently
-                    // showing no chips as if nothing matched.
-                    Text(
-                        text = "Suggestions aren't available on this server — type the full title and search.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    )
                 }
+                // Audit #34: when the suggest call fails, the chips simply
+                // stay empty until results arrive — the screen never
+                // apologises for a missing feature inside the feature.
 
                 SearchBody(
                     state = state,
@@ -353,6 +315,53 @@ fun SearchScreen(
             }
         }
     }
+}
+
+/**
+ * The omnibox field, extracted so its hint behaviour is unit-testable
+ * (see SearchFieldHintTest): a filled rounded pill whose prompt is a
+ * PLACEHOLDER only. A label with the same text used to float above the
+ * typed text (audit #33) — the placeholder vanishes the moment the first
+ * character is typed, and the accessible name rides on semantics instead.
+ * The field searches titles and cast names; only the prompt is unified
+ * with Home's bar, not the capability.
+ */
+@Composable
+internal fun SearchField(
+    query: String,
+    onQueryChanged: (String) -> Unit,
+    onSubmit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    TextField(
+        value = query,
+        onValueChange = onQueryChanged,
+        modifier = modifier.fillMaxWidth()
+            .semantics { contentDescription = "Search movies and shows" },
+        singleLine = true,
+        placeholder = { Text("Search movies and shows") },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+        trailingIcon = {
+            if (query.isNotEmpty()) {
+                IconButton(onClick = { onQueryChanged("") }) {
+                    Icon(Icons.Default.Close, contentDescription = "Clear search")
+                }
+            }
+        },
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        // Session 121 (P-12): searching dismisses the keyboard so the
+        // results are visible instead of sitting under it.
+        keyboardActions = KeyboardActions(onSearch = { onSubmit() }),
+        shape = RoundedCornerShape(28.dp),
+        colors = TextFieldDefaults.colors(
+            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            focusedIndicatorColor = Color.Transparent,
+            unfocusedIndicatorColor = Color.Transparent,
+            disabledIndicatorColor = Color.Transparent,
+        ),
+    )
 }
 
 /**
@@ -573,7 +582,10 @@ private fun SearchBody(
             Modifier.fillMaxWidth().padding(top = 16.dp),
         )
         state.error != null && state.groups.isEmpty() -> ErrorState(message = state.error ?: "Search failed.", onRetry = viewModel::submitCurrentQuery)
-        state.groups.isEmpty() -> EmptyState(
+        // Audit #36: "No matches" only after a completed search returns zero
+        // rows — never while a search is still in flight (the skeleton owns
+        // that window), and never before the first search.
+        state.groups.isEmpty() && state.hasSearched && !state.isLoading -> EmptyState(
             title = "No matches",
             message = when {
                 state.query.isNotBlank() && state.hasActiveFilters ->
@@ -620,6 +632,19 @@ private fun SearchBody(
                         Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Sort · ${state.sort.label}")
+                    }
+                }
+            }
+
+            // Audit #37: the server's "did you mean" spelling, one tap to
+            // search for it — shown only when it differs from the query.
+            state.didYouMean?.let { suggestion ->
+                item {
+                    TextButton(
+                        onClick = { viewModel.runSuggestion(suggestion) },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("Did you mean $suggestion?")
                     }
                 }
             }

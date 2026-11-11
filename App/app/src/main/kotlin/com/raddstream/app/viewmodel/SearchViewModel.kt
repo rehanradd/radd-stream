@@ -148,6 +148,12 @@ data class SearchUiState(
     val hasSearched: Boolean = false,
     /** A VIP viewer has everything included, so the chip never shows for them. */
     val isVip: Boolean = false,
+    /**
+     * App-design audit #37: the server's "did you mean" spelling for the
+     * current query, or null when none was offered. The screen renders it
+     * as one tappable line; a tap searches for the suggested spelling.
+     */
+    val didYouMean: String? = null,
     /** Type-ahead titles for the current query; empty when the route is blocked or the server is old. */
     val suggestions: List<SuggestItem> = emptyList(),
     /**
@@ -398,7 +404,7 @@ class SearchViewModel @Inject constructor(
                 it.copy(
                     isLoading = false, error = null, groups = emptyList(), resultCount = 0,
                     serverTotal = 0, hasSearched = false, hasMore = false, page = 1,
-                    isFuzzy = false, showExactOnly = false,
+                    isFuzzy = false, showExactOnly = false, didYouMean = null,
                 )
             }
             return
@@ -413,7 +419,7 @@ class SearchViewModel @Inject constructor(
                     isLoading = false, error = null, groups = emptyList(), resultCount = 0,
                     serverTotal = 0, hasSearched = false, hasMore = false, page = 1,
                     isFuzzy = false, showExactOnly = false, suggestions = emptyList(),
-                    suggestionsUnavailable = false,
+                    suggestionsUnavailable = false, didYouMean = null,
                 )
             }
             return
@@ -455,6 +461,9 @@ class SearchViewModel @Inject constructor(
                                 error = null,
                                 isFuzzy = false,
                                 showExactOnly = false,
+                                // v2 carries no suggestion yet; the v1
+                                // fallback below is the only source of one.
+                                didYouMean = null,
                             )
                         }
                         recompute()
@@ -484,6 +493,11 @@ class SearchViewModel @Inject constructor(
                         error = null,
                         isFuzzy = resp.fuzzy,
                         showExactOnly = false,
+                        // A suggestion that only repeats the query is no
+                        // suggestion at all.
+                        didYouMean = resp.suggestion?.trim()?.takeIf {
+                            it.isNotBlank() && !it.equals(query, ignoreCase = true)
+                        },
                     )
                 }
                 recompute()
