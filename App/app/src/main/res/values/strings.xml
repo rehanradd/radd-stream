@@ -44,6 +44,7 @@
          player_pause_centre ("Pause video"), which exists for the same reason. -->
     <string name="player_play_centre">Play video</string>
     <string name="player_buffering">Buffering…</string>
+    <string name="player_paused">Paused</string>
     <string name="player_leave_cinema">Leave cinema mode</string>
     <string name="player_lock">Lock controls</string>
     <string name="player_quality_label">Quality: %1$s</string>
@@ -90,8 +91,8 @@
     <string name="player_share_moment">Share a moment</string>
     <string name="player_data_saver">Data Saver</string>
     <string name="player_data_saver_detail">Cap Auto at 480p on mobile data</string>
-    <string name="player_step_finding">Finding the best print</string>
-    <string name="player_step_warming">Warming the link</string>
+    <string name="player_step_finding">Finding the best version</string>
+    <string name="player_step_warming">Finding your video</string>
     <string name="player_step_buffering">Buffering</string>
     <string name="player_volume_boost">Volume boost</string>
     <string name="player_seek">Seek: %1$s of %2$s</string>
@@ -103,8 +104,8 @@
     <!-- Session 126 (NAV-4/NAV-5): the catch-all deep-link destination. -->
     <string name="dead_link_title">This link didn’t lead anywhere</string>
     <string name="dead_link_body">The link doesn’t name a title this app knows. It may be mistyped, or from an older share. Go back home and find the title again.</string>
-    <string name="player_start_slow">Taking longer than usual — your link is being found</string>
-    <string name="player_start_try_another">Try another print</string>
+    <string name="player_start_slow">Taking longer than usual — finding your video</string>
+    <string name="player_start_try_another">Try another version</string>
     <string name="player_attempt_counter">Trying copy %1$d of %2$d</string>
     <string name="player_start_giveup_message">This copy did not start within 30 seconds.</string>
     <string name="player_first_frame">Started in %1$s</string>
@@ -146,7 +147,8 @@
     <string name="player_sleep_note">Volume fades down over the last %1$ds, then playback pauses (MX behaviour).</string>
     <string name="player_external_subtitle">external subtitle</string>
     <string name="player_subtitles_title">Subtitles</string>
-    <string name="player_subtitle_none">No embedded subtitle tracks in this print — load an external file below.</string>
+    <string name="player_subtitle_none">No subtitle tracks for this title yet.</string>
+    <string name="player_subtitle_browse">Browse subtitle file</string>
     <string name="player_subtitle_turn_off">Turn subtitles off</string>
     <string name="player_subtitle_size">Size %1$d%%</string>
     <string name="player_subtitle_position">Bottom position %1$d%%</string>

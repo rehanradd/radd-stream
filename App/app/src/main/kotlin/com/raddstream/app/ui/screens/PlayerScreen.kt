@@ -84,6 +84,7 @@ import androidx.compose.material.icons.filled.VolumeUp
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material.icons.filled.WifiOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -170,7 +171,9 @@ import com.raddstream.app.player.PlayerGlass
 import com.raddstream.app.player.looksLikeQualityLabel
 import com.raddstream.app.player.PinchCommand
 import com.raddstream.app.player.PlayerOrientation
+import com.raddstream.app.player.PlayerStatusWord
 import com.raddstream.app.player.PlayerUiState
+import com.raddstream.app.player.playerStatusWord
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.ScrubPreviewPlayer
 import com.raddstream.app.player.ScrubThumbnails
@@ -801,6 +804,7 @@ private fun PlayerScreenContent(
                 } else {
                     null
                 },
+                onCancel = onBackClick,
             )
         }
 
@@ -1485,7 +1489,21 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
 private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        if (!state.isBuffering) {
+        // App-design audit #4: three distinct states, never a bare play
+        // triangle while nothing is playing and nothing is paused. While
+        // the start is in flight or the player is rebuffering, the centre
+        // is a spinner; while playing it is pause; while paused it is play.
+        if (state.startPhase != StartPhase.NONE || state.isBuffering) {
+            Surface(color = chrome.chip, shape = CircleShape) {
+                Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        color = Color.White,
+                        strokeWidth = 3.dp,
+                        modifier = Modifier.size(44.dp),
+                    )
+                }
+            }
+        } else {
             Surface(color = chrome.chip, shape = CircleShape) {
                 IconButton(onClick = { vm.togglePlayPause() }, modifier = Modifier.size(72.dp)) {
                     Icon(
@@ -1720,32 +1738,33 @@ private fun BottomControls(
                     .padding(horizontal = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                // Session 121 (P-11): a duration the player has not learned yet is not
-                // "0:00 / --:--" — while the start is still in flight the row says the
-                // wait out loud, and once playing with an unknown total it shows the
-                // position alone instead of a total that was never measured.
-                if (state.startPhase != StartPhase.NONE) {
-                    Text(
-                        stringResource(R.string.app_loading),
-                        // E-C3: 12sp white at 75% over the bar was ~3.3:1 over a
-                        // bright frame. Full white now, like the position beside it.
-                        color = Color.White,
-                        fontSize = brandSp(12),
-                    )
-                    Spacer(Modifier.weight(1f))
-                } else {
-                    Text(state.positionMs.formatTime(), color = Color.White, fontSize = brandSp(12))
-                    Spacer(Modifier.weight(1f))
-                    if (state.durationMs > 0) {
-                        Text(
-                            state.durationMs.formatTime(),
-                            // E-C3: the duration was 12sp white at 75% — full
-                            // white now.
-                            color = Color.White,
-                            fontSize = brandSp(12),
-                        )
-                    }
+                // App-design audit #3/#4: current time and total duration are
+                // always beside the scrubber — "--:--" until the total is
+                // known — plus one status word, so the viewer can tell
+                // loading, paused and buffering apart at a glance.
+                val statusWord = when (
+                    playerStatusWord(state.startPhase, state.isBuffering, state.isPlaying)
+                ) {
+                    PlayerStatusWord.LOADING -> stringResource(R.string.app_loading)
+                    PlayerStatusWord.BUFFERING -> stringResource(R.string.player_buffering)
+                    PlayerStatusWord.PAUSED -> stringResource(R.string.player_paused)
+                    PlayerStatusWord.NONE -> null
                 }
+                Text(
+                    text = state.positionMs.formatTime(),
+                    color = Color.White,
+                    fontSize = brandSp(12),
+                )
+                if (statusWord != null) {
+                    Spacer(Modifier.width(8.dp))
+                    Text(statusWord, color = Color.White.copy(alpha = 0.85f), fontSize = brandSp(12))
+                }
+                Spacer(Modifier.weight(1f))
+                Text(
+                    state.durationMs.takeIf { it > 0 }?.formatTime() ?: "--:--",
+                    color = Color.White,
+                    fontSize = brandSp(12),
+                )
             }
             Row(
                 Modifier
@@ -2490,11 +2509,14 @@ private fun StartNoticeCard(
     rungLabel: String? = null,
     attemptLabel: String? = null,
     // 26: the three-step progress story — the viewer always knows what the wait
-    // is for: finding the best print, warming the link, then buffering. When the
+    // is for: finding the best version, then finding the video, then buffering. When the
     // caller passes a step label it replaces the phase's generic label.
     stepLabel: String? = null,
     onRetry: (() -> Unit)? = null,
     onTryAnother: (() -> Unit)? = null,
+    // App-design audit #2: the wait is never a trap — Cancel returns to
+    // the detail screen at any point, even before the 8-second actions.
+    onCancel: (() -> Unit)? = null,
 ) {
     val label = stepLabel ?: phase.label
     val spoken = if (title.isNullOrBlank()) label else stringResource(R.string.player_notice_spaced, label, title)
@@ -2588,10 +2610,10 @@ private fun StartNoticeCard(
                 }
             }
             // The actions (§5 P5, past eight seconds): retry the same attempt, or jump to
-            // the next print now instead of waiting for the silent failover to get there.
+            // the next version now instead of waiting for the silent failover to get there.
             // D-40: real buttons, not plain green text links — a press target the
             // viewer can see is a press target the viewer will find.
-            if (onRetry != null || onTryAnother != null) {
+            if (onRetry != null || onTryAnother != null || onCancel != null) {
                 Spacer(Modifier.height(12.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
@@ -2604,6 +2626,11 @@ private fun StartNoticeCard(
                     onTryAnother?.let {
                         OutlinedButton(onClick = it) {
                             Text(stringResource(R.string.player_start_try_another), color = Color.White)
+                        }
+                    }
+                    onCancel?.let {
+                        TextButton(onClick = it) {
+                            Text(stringResource(R.string.player_cancel), color = Color.White)
                         }
                     }
                 }
@@ -2810,6 +2837,12 @@ private fun SubtitleColourSwatch(colour: SubtitleColor, selected: Boolean, onSel
 private fun KeepChip(state: PlayerUiState, vm: PlayerViewModel) {
     val keep = state.keep
     if (keep is KeepUiState.Unavailable) return
+    // App-design audit #7: pressing Play must never announce a background
+    // download. The "Keeping" state is the player's automatic ahead-window
+    // copy, not something the viewer asked for — it shows no chip here at
+    // all (its progress lives in Downloads). A finished keep (Stored) or a
+    // blocked one still says so, because those are facts about the title.
+    if (keep is KeepUiState.Keeping) return
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
     // E-C4: the chip sat on a 40%-alpha tint with no bar behind it — white
     // text on the Stored tint over a bright frame was 1.23:1. The surface is
@@ -3174,15 +3207,28 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 .padding(bottom = 24.dp),
         ) {
             SheetTitle(stringResource(R.string.player_subtitles_title))
-            if (state.subtitleTracks.isEmpty() && state.customSubtitleLoaded == null &&
-                state.nativeExternals.isEmpty()
-            ) {
+            // App-design audit #6: a subtitle sheet with no tracks is one
+            // clear action, not an empty panel with a size slider for a
+            // track that does not exist. The size/position/style controls
+            // below only appear once a track is loaded.
+            val hasTrack = state.subtitleTracks.isNotEmpty() ||
+                state.customSubtitleLoaded != null || state.nativeExternals.isNotEmpty()
+            if (!hasTrack) {
                 Text(
                     stringResource(R.string.player_subtitle_none),
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
+                Spacer(Modifier.height(12.dp))
+                Button(
+                    onClick = { picker.launch(arrayOf("*/*")) },
+                    modifier = Modifier.padding(horizontal = 16.dp).fillMaxWidth().heightIn(min = 48.dp),
+                ) {
+                    Text(stringResource(R.string.player_subtitle_browse))
+                }
+                Spacer(Modifier.height(8.dp))
+                return@Column
             }
             state.subtitleTracks.forEach { track ->
                 SheetRow(label = track.label, selected = track.id == state.selectedSubtitleId) {
