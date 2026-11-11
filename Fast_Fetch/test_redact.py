@@ -44,6 +44,7 @@ import catalog_v2           # noqa: E402
 import current_hosts        # noqa: E402
 import fast_fetch           # noqa: E402
 import redact               # noqa: E402
+import title_clean          # noqa: E402
 import viewer               # noqa: E402
 
 #: What we plant, and therefore what must never be found in a public body.
@@ -999,7 +1000,8 @@ class PublicEdgeHttpTests(FixtureMixin):
         self.assertEqual(status, 404, body)
         self.assertNotIn("Location", headers, "a stale URL must never be redirected to")
         self.assertEqual(json.loads(body),
-                         {"success": False, "error": "no_playable_source"})
+                         {"success": False, "error": "no_playable_source",
+                         "message": "That copy didn't play. Try another quality."})
         for needle in ("media.example.test", "token=old"):
             self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
 
@@ -1010,7 +1012,8 @@ class PublicEdgeHttpTests(FixtureMixin):
                                    self.public_port)
         self.assertEqual(status, 404, body)
         self.assertEqual(json.loads(body),
-                         {"success": False, "error": "no_playable_source"})
+                         {"success": False, "error": "no_playable_source",
+                         "message": "That copy didn't play. Try another quality."})
         status, _, body = self.get(f"/api/v1/stream?id={sid}", self.operator_port)
         self.assertEqual(status, 404, body)
         payload = json.loads(body)
@@ -1066,7 +1069,8 @@ class PublicEdgeHttpTests(FixtureMixin):
                 self.assertNotIn("Location", headers,
                                  f"a link the ledger retired as {verdict} was redirected to")
                 self.assertEqual(json.loads(body),
-                                 {"success": False, "error": "no_playable_source"})
+                                 {"success": False, "error": "no_playable_source",
+                                 "message": "That copy didn't play. Try another quality."})
                 for needle in ("media.example.test", "token=old"):
                     self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
 
@@ -1118,7 +1122,8 @@ class PublicEdgeHttpTests(FixtureMixin):
                              "the refusal must not redirect anywhere")
             self.assertEqual(json.loads(body),
                              {"success": False,
-                              "error": "premium_quality_requires_vip"})
+                              "error": "premium_quality_requires_vip",
+                              "message": "This quality needs VIP. A lower quality is included — try that instead."})
             for needle in SENTINELS:
                 self.assertNotIn(needle, body.lower(), body)
 
@@ -1132,7 +1137,8 @@ class PublicEdgeHttpTests(FixtureMixin):
             self.assertEqual(status, 402, f"{route}: {body}")
             self.assertEqual(json.loads(body),
                              {"success": False,
-                              "error": "premium_quality_requires_vip"})
+                              "error": "premium_quality_requires_vip",
+                              "message": "This quality needs VIP. A lower quality is included — try that instead."})
 
     def test_the_gate_lets_720p_and_a_signed_vip_pass_through(self):
         self.enable_quality_gate()
@@ -1693,6 +1699,144 @@ class ZeroDataLossTests(FixtureMixin):
         # A brand that is actually in the text still trips it.
         self.assertTrue(redact.is_clean({"label": "vegamovies Watch Online"},
                                         needles=["vegamovies"]))
+
+
+class DisplayTitleTests(unittest.TestCase):
+    """Audit #4/#26/#27/#6/#19/#16: clean display titles, ratings, /PLOT.
+
+    The ledger keeps the raw scraped text (Zero Data Loss); the projection
+    is what the app renders, so these assertions live on `project()`.
+    """
+
+    def _row(self, **overrides):
+        row = {"id": 79874,
+               "title": "Download Salaar - Part 1 (2023) Multi Audios "
+                        "[Tel + Tam + Mal + Kan] NF WeB-DL 480p [700MB]",
+               "clean_title": "Salaar - Part 1 (2023) Multi Audios "
+                              "[Tel + Tam + Mal + Kan] NF WeB-DL",
+               "year": 2023, "industry": "Hollywood",
+               "imdb_rating": "8.6", "synopsis": "A hero returns.",
+               "genres": "[\"Action\"]"}
+        row.update(overrides)
+        return redact.project(row, "post_brief")
+
+    def test_filename_becomes_clean_display_title(self):
+        out = self._row()
+        self.assertEqual(out["display_title"], "Salaar: Part 1")
+        # The stored columns are untouched — the app reads display_title.
+        self.assertIn("Multi Audios", out["clean_title"])
+
+    def test_part_number_folds_to_colon_form(self):
+        out = self._row(clean_title="Salaar – 1 – Ceasefire",
+                        title="Salaar – 1 – Ceasefire")
+        self.assertEqual(out["display_title"], "Salaar: Part 1 – Ceasefire")
+
+    def test_clean_title_survives_unchanged(self):
+        out = self._row(clean_title="Salaar: Part 1 – Ceasefire",
+                        title="Salaar: Part 1 – Ceasefire")
+        self.assertEqual(out["display_title"], "Salaar: Part 1 – Ceasefire")
+
+    def test_rating_100_becomes_10(self):
+        out = self._row(imdb_rating="100")
+        self.assertEqual(out["imdb_rating"], "10.0")
+
+    def test_rating_25_becomes_2_5(self):
+        out = self._row(imdb_rating="25")
+        self.assertEqual(out["imdb_rating"], "2.5")
+
+    def test_rating_over_100_clamps_to_10(self):
+        out = self._row(imdb_rating="1000")
+        self.assertEqual(out["imdb_rating"], "10.0")
+
+    def test_rating_missing_or_invalid_hides(self):
+        self.assertIsNone(self._row(imdb_rating=None)["imdb_rating"])
+        self.assertIsNone(self._row(imdb_rating="")["imdb_rating"])
+        self.assertIsNone(self._row(imdb_rating="abc")["imdb_rating"])
+        self.assertIsNone(self._row(imdb_rating="0")["imdb_rating"])
+
+    def test_rating_8_6_unchanged(self):
+        self.assertEqual(self._row(imdb_rating="8.6")["imdb_rating"], "8.6")
+
+    def test_unknown_industry_hides(self):
+        self.assertIsNone(self._row(industry="Unknown")["industry"])
+        self.assertIsNone(self._row(industry="unknown")["industry"])
+        self.assertEqual(self._row(industry="Hollywood")["industry"],
+                         "Hollywood")
+
+    def test_plot_marker_stripped_from_synopsis(self):
+        self.assertEqual(self._row(synopsis="/PLOT:")["synopsis"], "")
+        self.assertEqual(
+            self._row(synopsis="/PLOT:\nThe story of a hero.")["synopsis"],
+            "The story of a hero.")
+        self.assertEqual(
+            self._row(synopsis="A real plot.")["synopsis"], "A real plot.")
+
+    def test_no_served_string_starts_with_slash(self):
+        for synopsis in ("/PLOT:", "/PLOT: text", "/CAST\ntext"):
+            out = self._row(synopsis=synopsis)
+            self.assertFalse(out["synopsis"].startswith("/"),
+                             out["synopsis"])
+
+    def test_display_title_in_detail_view_too(self):
+        row = {"id": 79874,
+               "title": "Download Salaar - Part 1 (2023) Multi Audios [Tel + Tam + Mal + Kan] NF WeB-DL",
+               "clean_title": "Salaar - Part 1 (2023) Multi Audios [Tel + Tam + Mal + Kan] NF WeB-DL",
+               "year": 2023, "imdb_rating": "100", "synopsis": "/PLOT:",
+               "industry": "Unknown", "cast_names": "[]"}
+        out = redact.project(row, "post_detail")
+        self.assertEqual(out["display_title"], "Salaar: Part 1")
+        self.assertEqual(out["imdb_rating"], "10.0")
+        self.assertIsNone(out["industry"])
+
+
+class TitleCleanWorkGroupTests(unittest.TestCase):
+    """Audit #38: one work, filed eight ways, is one search group."""
+
+    _SALAAR = [
+        {"id": 143282, "clean_title": "Salaar Cease Fire", "year": 2023,
+         "content_type": "movie", "release_count": 1, "source_count": 3},
+        {"id": 131928, "clean_title": "Salaar – 1 – Ceasefire", "year": 2024,
+         "content_type": "movie", "release_count": 2, "source_count": 2},
+        {"id": 110224, "clean_title": "Salaar: Part 1 – Ceasefire",
+         "year": 2023, "content_type": "movie", "release_count": 3,
+         "source_count": 6},
+        {"id": 79881, "clean_title": "Salaar", "year": 2023,
+         "content_type": "movie", "release_count": 3, "source_count": 14},
+        {"id": 79874,
+         "clean_title": "Salaar - Part 1 (2023) Multi Audios "
+                        "[Tel + Tam + Mal + Kan] NF WeB-DL",
+         "year": 2023, "content_type": "movie", "release_count": 3,
+         "source_count": 14},
+        {"id": 48133, "clean_title": "Salaar Part 1 Ceasefire", "year": 2023,
+         "content_type": "movie", "release_count": 2, "source_count": 5},
+        {"id": 20207, "clean_title": "Salaar Cease Fire Part 1)",
+         "year": 2023, "content_type": "movie", "release_count": 1,
+         "source_count": 2},
+        {"id": 12924, "clean_title": "Salaar Part 1 Ceasefire", "year": 2023,
+         "content_type": "movie", "release_count": 2, "source_count": 4},
+    ]
+
+    def test_salaar_rows_are_one_group(self):
+        groups = title_clean.group_work_rows(list(self._SALAAR))
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(len(groups[0]), 8)
+        # Most prints+mirrors stands for the work.
+        self.assertEqual(title_clean.representative(groups[0])["id"], 79881)
+
+    def test_remakes_keep_their_own_groups(self):
+        rows = list(self._SALAAR) + [
+            {"id": 998, "clean_title": "Avatar", "year": 2009,
+             "content_type": "movie", "release_count": 5, "source_count": 9},
+            {"id": 999, "clean_title": "Avatar: The Way of Water",
+             "year": 2022, "content_type": "movie", "release_count": 5,
+             "source_count": 9},
+            {"id": 555, "clean_title": "Dune", "year": 2021,
+             "content_type": "movie", "release_count": 4, "source_count": 8},
+            {"id": 554, "clean_title": "Dune: Part Two", "year": 2024,
+             "content_type": "movie", "release_count": 4, "source_count": 8},
+        ]
+        groups = title_clean.group_work_rows(rows)
+        self.assertEqual(len(groups), 5)
 
 
 if __name__ == "__main__":

@@ -39,6 +39,7 @@ import panel_feed
 import contact_intake
 import search_fuzzy
 import did_you_mean
+import title_clean
 import mood_search
 import usage_stats
 
@@ -3228,6 +3229,94 @@ def _enrich_post_rows(conn, rows, base_url: str) -> list[dict]:
     return results
 
 
+#: A search that matches more than this many rows is too broad to dedupe
+#: exactly (a one-letter query matches the catalog); it keeps the row page
+#: and its row total instead of paying a full-catalog grouping. Real
+#: title searches match far fewer — "salaar" is 8 rows live.
+_SEARCH_DEDUPE_CAP = 1000
+
+
+def _dedupe_page_rows(rows):
+    """One row per work within a page, in the page's own order.
+
+    Audit #17: a rail must not show the same film twice. The page keeps
+    its order (a work sits where its earliest row sat) and its
+    representative is the best-printed row; `total` is untouched, so a
+    deduped page may simply be shorter than `limit` — the count counts
+    rows, the page shows works. Cross-page repeats are out of scope:
+    the trending order is a join, so a whole-catalog grouping would
+    cost the scan this avoids.
+    """
+    if len(rows) < 2:
+        return list(rows)
+    candidates = []
+    for r in rows:
+        try:
+            candidates.append({
+                "id": int(r["id"]),
+                "clean_title": r["clean_title"] or "",
+                "title": r["title"] or "",
+                "year": r["year"],
+                "content_type": r["content_type"] or "",
+                "release_count": int(r["release_count"] or 0),
+                "source_count": int(r["source_count"] or 0),
+            })
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    if not candidates:
+        return list(rows)
+    position = {int(c["id"]): i for i, c in enumerate(candidates)}
+    groups = title_clean.group_work_rows(candidates)
+    groups.sort(key=lambda g: min(position[int(c["id"])] for c in g))
+    keep = {int(title_clean.representative(g)["id"]) for g in groups}
+    return [r for r in rows if int(r["id"]) in keep]
+
+
+def _dedupe_search_page(conn, where_sql, params, step1_order, page, limit):
+    """(page_ids, deduped_total): one representative id per work.
+
+    Audit #38: the same film filed by eight sites is one search row, not
+    eight. The candidates are fetched id-only (bounded by the cap), grouped
+    by work in Python, and paginated over groups — so the page keeps the
+    search's own order (a group's position is its earliest member's) and
+    `total` counts works, not rows. The representative is the row with the
+    most prints, then mirrors, then the newest id.
+    """
+    rows = conn.execute(
+        "SELECT p.id, p.clean_title, p.title, p.year, p.content_type"
+        " FROM posts p "
+        f"WHERE {where_sql} ORDER BY {step1_order}",
+        params).fetchall()
+    if not rows:
+        return [], 0
+    ids = [int(r["id"]) for r in rows]
+    counts: dict[int, tuple[int, int]] = {}
+    marks = ",".join("?" * len(ids))
+    for row in conn.execute(
+            "SELECT r.post_id, COUNT(DISTINCT r.id), COUNT(DISTINCT s.id)"
+            " FROM releases r"
+            " LEFT JOIN download_sources s ON s.release_id = r.id"
+            f" WHERE r.post_id IN ({marks}) GROUP BY r.post_id",
+            ids).fetchall():
+        counts[int(row[0])] = (int(row[1]), int(row[2]))
+    position = {post_id: index for index, post_id in enumerate(ids)}
+    candidates = [{
+        "id": int(r["id"]), "clean_title": r["clean_title"],
+        "title": r["title"], "year": r["year"],
+        "content_type": r["content_type"],
+        "release_count": counts.get(int(r["id"]), (0, 0))[0],
+        "source_count": counts.get(int(r["id"]), (0, 0))[1],
+    } for r in rows]
+    groups = title_clean.group_work_rows(candidates)
+    # The search's own order, not popularity order: a work sits where its
+    # earliest row sat in the id scan.
+    groups.sort(key=lambda g: min(position[int(c["id"])] for c in g))
+    total = len(groups)
+    start = max(0, (page - 1) * limit)
+    page_groups = groups[start:start + limit]
+    return [int(title_clean.representative(g)["id"]) for g in page_groups], total
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -3273,6 +3362,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     "total_pages": 1,
                     "results": [],
                     "fuzzy": False,
+                    "suggestion": None,
                 }
             where_clauses.append("p.id = ?")
             params.append(post_id)
@@ -3453,13 +3543,18 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
                     params).fetchone()[0]
                 fuzzy = True
-        if exact_missed:
-            # Gap A4 — "Did you mean": the fuzzy machinery already knew
-            # the correction; it just never surfaced it. Offer the
-            # corrected query so the UI can show it (and the viewer can
-            # tap it) — whether the fuzzy fallback already served rows
-            # from it or the page is still empty.
-            correction = did_you_mean.suggest_correction(conn, query)
+        if query and not work_ref:
+            # Gap A4 — "Did you mean": the fuzzy machinery already knew the
+            # correction; it just never surfaced it. Offer the corrected
+            # query so the UI can show it (and the viewer can tap it) — not
+            # only when the exact search missed, but also when it hit on
+            # stale lookalikes ("avtar" finds old "Avtar" rows while the
+            # catalog holds "Avatar"). An interrupted correction scan is
+            # silence, never a failed search.
+            try:
+                correction = did_you_mean.suggest_correction(conn, query)
+            except sqlite3.OperationalError:
+                correction = None
             if correction is not None:
                 did_you_mean_query = correction["query"]
 
@@ -3480,7 +3575,29 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # covering releases(post_id, quality) index is the fix instead.
         page_ids = None
         two_step = order_sql is None or sort_key in ("title", "rating")
-        if two_step:
+        if query and not work_ref and two_step and 0 < total <= _SEARCH_DEDUPE_CAP:
+            # Audit #38: one row per film. The dedupe runs on the same
+            # where-clause the count above used (adult clause, hides, all
+            # filters), so the page and the total agree; the step-1 scan
+            # below is skipped and step 2 fetches exactly these ids.
+            step1_order = (f"{_NEWEST_YEAR_SQL} DESC, p.id DESC"
+                           if order_sql is None else order_sql)
+            page_ids, total = _dedupe_search_page(
+                conn, where_sql, params, step1_order, page, limit)
+            if not page_ids:
+                return {
+                    "page": page,
+                    "limit": limit,
+                    "total": total,
+                    "total_pages": max(1, (total + limit - 1) // limit),
+                    "results": [],
+                    "fuzzy": fuzzy,
+                    "moods": mood_words,
+                    "mood_genres": mood_genres,
+                    "did_you_mean": did_you_mean_query,
+                    "suggestion": did_you_mean_query,
+                }
+        if two_step and page_ids is None:
             step1_order = (f"{_NEWEST_YEAR_SQL} DESC, p.id DESC"
                            if order_sql is None else order_sql)
             # Step 1 — the page's ids, from `posts` alone. Every clause in
@@ -3504,6 +3621,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     "moods": mood_words,
                     "mood_genres": mood_genres,
                     "did_you_mean": did_you_mean_query,
+                    "suggestion": did_you_mean_query,
                 }
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
@@ -3532,6 +3650,12 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             sql = (select_sql + f" WHERE {where_sql} GROUP BY p.id"
                    f" ORDER BY {order_sql} LIMIT ? OFFSET ?")
             rows = conn.execute(sql, params + [limit, offset]).fetchall()
+        if sort_key == "trending":
+            # Audit #17: the trending rail is the one-query path, so the
+            # search dedupe above never runs on it — collapse the page
+            # to one row per work here instead. `total` still counts
+            # rows (see _dedupe_page_rows).
+            rows = _dedupe_page_rows(rows)
         if full:
             results = [dict(r) for r in rows]
         else:
@@ -3553,6 +3677,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "moods": mood_words,
             "mood_genres": mood_genres,
             "did_you_mean": did_you_mean_query,
+            "suggestion": did_you_mean_query,
         }
 
 
@@ -3681,6 +3806,9 @@ def api_v1_get_related(work_id, page: int = 1, limit: int = 20,
         rows = conn.execute(
             page_sql,
             score_params + where_params + [limit, offset]).fetchall()
+        # Audit #17: one row per work in the rail; `total` still counts
+        # rows (see _dedupe_page_rows).
+        rows = _dedupe_page_rows(rows)
         return {
             "page": page,
             "limit": limit,
@@ -3801,7 +3929,9 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
 
 
 def api_v1_get_post_detail(post_id: int, full: bool = False,
-                           base_url: str = "", ladder: bool = True) -> dict | None:
+                           base_url: str = "", ladder: bool = True,
+                           warm: bool = False, vip: bool = False,
+                           audio: str = "") -> dict | None:
     _ensure_schema()
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -3877,14 +4007,22 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
                 r_dict["sources"] = [link_view(s, base_url) for s in sources]
             rel_list.append(r_dict)
         if not full:
-            p_dict["option_groups"] = (_option_groups(releases, rel_list)
-                                       if ladder else [])
+            p_dict["option_groups"] = (
+                _option_groups(releases, rel_list, vip=vip,
+                               audio_languages=_split_audio_param(audio))
+                if ladder else [])
         p_dict["season_artwork"] = _season_artwork(conn, post_id)
         p_dict["releases"] = rel_list
+        if warm and not full:
+            # The detail screen opens long before Play is pressed: warming
+            # the auto tier now means the press answers from the resolved
+            # cache instead of paying a live 5–11 s resolve under the player.
+            p_dict["preresolve"] = _preresolve_for_detail(p_dict)
         return p_dict
 
 
-def _option_groups(releases, rel_list) -> list:
+def _option_groups(releases, rel_list, *, vip: bool = False,
+                   audio_languages=()) -> list:
     """One best and fastest copy per quality band, for the player and the card.
 
     The ledger holds up to six copies of the same print on six servers; a viewer
@@ -3894,10 +4032,24 @@ def _option_groups(releases, rel_list) -> list:
     and never a field, so the winner is chosen without publishing who serves it.
 
     Releases are grouped by their own season/episode scope: a series must not
-    offer S02E05's 1080p copy when the user is playing S01E01."""
+    offer S02E05's 1080p copy when the user is playing S01E01.
+
+    Audit #1/#32 — the ladder the app's Play button follows:
+    * ``gated``: a 1080p/2160p tier is premium. A free viewer who presses it
+      gets a 402 and a stuck spinner, so gated tiers sort AFTER every free
+      tier and ``auto`` never points at one — the player starts at the best
+      free copy it can actually play. The tier still travels (marked), so
+      the quality switch can offer the VIP upsell instead of hiding the band.
+    * ``preferred_audio``: when the caller names its preferred audio (the
+      ``?audio=`` detail parameter, from the region the user picked),
+      tiers carrying it sort first within their gate class and ``auto``
+      prefers them — a Desi viewer starts on a Hindi print, not a Telugu one.
+    """
     scopes: dict = {}
     for rel, r_dict in zip(releases, rel_list):
         scopes.setdefault((rel["season"], rel["episode"]), []).append(r_dict)
+    wanted_audio = {str(a).strip().lower()
+                    for a in (audio_languages or []) if str(a).strip()}
     groups = []
     for (season, episode), prints in scopes.items():
         ladders = []
@@ -3912,6 +4064,35 @@ def _option_groups(releases, rel_list) -> list:
         merged = tiers.merge(ladders)
         if merged["tiers"]:
             for tier in merged["tiers"]:
+                tier["gated"] = bool(
+                    tier["band"] in GATED_QUALITY_BANDS and not vip)
+                tier["preferred_audio"] = bool(
+                    wanted_audio and any(
+                        str(lang).strip().lower() in wanted_audio
+                        for lang in tier.get("audio_languages") or []))
+            # The switch order is what a naive "first tier" client presses:
+            # free before gated, preferred audio first inside each class,
+            # best band first inside that.
+            merged["tiers"].sort(key=lambda t: (
+                bool(t.get("gated")), not bool(t.get("preferred_audio")),
+                tiers.band_rank(t["band"])))
+            # `auto` is the tier the player should start at: the best
+            # playable tier the caller's plan actually lets through, in
+            # their preferred audio when one exists. Recomputed here, on
+            # the raw links, because the projection below drops the
+            # evidence keys `tiers.score` reads.
+            playable = [t for t in merged["tiers"]
+                        if t.get("playable") and not t.get("gated")]
+            if playable:
+                best = max(playable, key=lambda t: (
+                    bool(t.get("preferred_audio")),
+                    tiers.score(t["link"], t["band"]),
+                    -tiers.band_rank(t["band"])))
+                merged["auto"] = {"band": best["band"], "reason": "best",
+                                  "stream_id": (best["link"] or {}).get("stream_id")}
+            else:
+                merged["auto"] = None
+            for tier in merged["tiers"]:
                 backups = tier.pop("backups", None) or []
                 if tier["link"] is not None:
                     tier["link"] = redact.project(tier["link"], "ladder_link")
@@ -3925,6 +4106,95 @@ def _option_groups(releases, rel_list) -> list:
     groups.sort(key=lambda group: tiers.scope_sort_key(group["season"],
                                                        group["episode"]))
     return groups
+
+
+#: Plain-language words for the stream/download failures a player can hit.
+#: The error code stays machine-readable; the message is what the app shows
+#: instead of a raw HTTP status (audit #13/#14: never a bare code on screen).
+_STREAM_ERROR_MESSAGES = {
+    "premium_quality_requires_vip":
+        "This quality needs VIP. A lower quality is included — try that instead.",
+    "no_playable_source":
+        "That copy didn't play. Try another quality.",
+}
+
+
+def _plain_stream_error(error: str) -> dict:
+    return {"success": False, "error": error,
+            "message": _STREAM_ERROR_MESSAGES.get(
+                error, "That copy didn't play. Try another quality.")}
+
+
+def _preresolve_is_warm(source_id: int) -> bool:
+    """True when the resolved cache already holds a servable answer."""
+    try:
+        import resolved_cache
+        with get_db() as conn:
+            return resolved_cache.lookup_cache(conn, int(source_id),
+                                               want="watch") is not None
+    except Exception:      # noqa: BLE001 — a cache fault is "not warm", never an error
+        return False
+
+
+def _resolve_and_bank(source_id: int) -> None:
+    """Resolve one link and bank it, for the background pre-resolve.
+
+    Never raises: a warm-up that fails leaves the cache as it was, and the
+    Play press pays the live resolve exactly as it would have without one.
+    """
+    try:
+        import fast_fetch
+        import resolved_cache
+        res = fast_fetch.resolve_live_source(int(source_id), want="watch")
+        if res.get("success") and res.get("url") and not res.get("stale"):
+            with get_db() as conn:
+                resolved_cache.record_resolved_cache(conn, int(source_id), res)
+    except Exception:      # noqa: BLE001 — see _preresolve_is_warm
+        pass
+
+
+def _start_preresolve(source_id: int):
+    """Warm one link in a daemon thread; returns the thread for tests."""
+    import threading
+    thread = threading.Thread(target=_resolve_and_bank, args=(int(source_id),),
+                              daemon=True, name="preresolve")
+    thread.start()
+    return thread
+
+
+def _split_audio_param(value) -> tuple:
+    """``?audio=Hindi,English`` -> ``("Hindi", "English")`` (empty -> ())."""
+    if not value:
+        return ()
+    return tuple(part.strip() for part in str(value).split(",") if part.strip())
+
+
+def _preresolve_for_detail(p_dict: dict) -> dict:
+    """Warm the auto tier's link in the background; report warm/warming.
+
+    The detail screen opens long before the user presses Play: resolving
+    the top link now means the press answers from the resolved cache
+    (~0.02 s measured) instead of paying a 5–11 s live resolve while the
+    player spins (audit #1). One link only — the auto tier — so a detail
+    open costs at most one background resolve on a one-vCPU box.
+    """
+    for group in p_dict.get("option_groups") or []:
+        auto = (group or {}).get("auto") or {}
+        stream_id = auto.get("stream_id")
+        if not stream_id:
+            continue
+        try:
+            source_id = redact.parse_token(stream_id, signing_secret(),
+                                           signed_only=True)
+        except Exception:      # noqa: BLE001 — an unparseable handle is unavailable
+            return {"status": "unavailable"}
+        if not source_id:
+            return {"status": "unavailable"}
+        if _preresolve_is_warm(int(source_id)):
+            return {"status": "warm", "band": auto.get("band")}
+        _start_preresolve(int(source_id))
+        return {"status": "warming", "band": auto.get("band")}
+    return {"status": "unavailable"}
 
 
 def api_v1_rules() -> dict:
@@ -4836,7 +5106,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[3].isdigit():
                 detail = api_v1_get_post_detail(
                     int(parts[3]), full=full, base_url=base_url,
-                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"))
+                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"),
+                    # Audit #1: `?warm=1` resolves the auto tier while the
+                    # viewer reads the detail screen, so Play answers from
+                    # cache. `?audio=` orders the ladder by preferred audio.
+                    warm=query_params.get("warm", ["0"])[0] in ("1", "true"),
+                    vip=request_is_vip(self.headers, query_params),
+                    audio=query_params.get("audio", [""])[0])
                 if detail:
                     self.send_json({"success": True, "data": detail})
                 else:
@@ -4940,8 +5216,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # design, and unlike the adult rule a paywall boundary has no
                 # reason to blind the person who owns the ledger. 402 says
                 # "this is purchasable", which is what the app's VIP screen
-                # listens for; the body names no hoster and no URL.
-                self.send_json({"success": False, "error": blocked}, status=402)
+                # listens for; the body names no hoster and no URL. The
+                # message is plain language for the player (audit #14).
+                self.send_json(_plain_stream_error(blocked), status=402)
                 return
 
             import fast_fetch
@@ -5074,8 +5351,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     else:
                         self.send_json(res)
             else:
-                self.send_json(res if full else {
-                    "success": False, "error": "no_playable_source"}, status=404)
+                self.send_json(res if full else _plain_stream_error(
+                    "no_playable_source"), status=404)
 
         elif path == "/api/v1/download":
             source_ref = query_params.get("id", [""])[0]
@@ -5098,8 +5375,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if blocked:
                 # Audit critical 5, download half: the free cap that used to
                 # live only in the app. Same 402, same operator exemption as
-                # the stream route above.
-                self.send_json({"success": False, "error": blocked}, status=402)
+                # the stream route above — and the same plain-language
+                # message, so the app can fail over instead of spinning.
+                self.send_json(_plain_stream_error(blocked), status=402)
                 return
 
             import fast_fetch
@@ -5256,7 +5534,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     code = res.get("code") or res.get("error")
                     if code not in ("not_found", "no_playable_source"):
                         code = "no_playable_source"
-                    self.send_json({"success": False, "error": code}, status=404)
+                    self.send_json(
+                        _plain_stream_error(code)
+                        if code == "no_playable_source" else
+                        {"success": False, "error": code}, status=404)
 
         elif path == "/api/v1/art":
             self._serve_art(query_params, full=full)

@@ -466,5 +466,181 @@ class HttpTests(Fixture):
         self.assertEqual(genres["animation"], 0)
 
 
+class LadderGatingTests(unittest.TestCase):
+    """Audit #1/#32: the ladder Play follows — gated tiers last, audio first.
+
+    `_option_groups` is tested directly with projected link dicts, no DB:
+    the 1080p tier is premium, so a free viewer must never start on it.
+    """
+
+    def _link(self, stream_id, kind="direct"):
+        return {"stream_id": stream_id, "kind": kind, "playable": True,
+                "status": "active", "is_resumable": True,
+                "is_temporary": False, "file_size_bytes": 2_000_000_000,
+                "mime_type": "video/mp4"}
+
+    def _release(self, quality, languages, stream_id):
+        return ({"season": "", "episode": "", "quality": quality,
+                 "codec": "x264", "size": "1.5GB",
+                 "release_title": "Dune %s" % quality,
+                 "languages": languages},
+                {"season": "", "episode": "", "quality": quality,
+                 "codec": "x264", "size": "1.5GB",
+                 "release_title": "Dune %s" % quality,
+                 "languages": languages,
+                 "sources": [self._link(stream_id)]})
+
+    def _groups(self, **kwargs):
+        rels, projected = zip(*[
+            self._release("1080p", "Telugu", "h1080"),
+            self._release("720p", "Hindi", "h720"),
+            self._release("480p", "Telugu", "h480"),
+        ])
+        return viewer._option_groups(list(rels), list(projected), **kwargs)
+
+    def test_free_user_starts_on_720p_not_1080p(self):
+        groups = self._groups()
+        tiers_out = groups[0]["tiers"]
+        self.assertEqual([t["band"] for t in tiers_out],
+                         ["720p", "480p", "1080p"])
+        self.assertTrue(tiers_out[-1]["gated"])
+        self.assertFalse(tiers_out[0]["gated"])
+        self.assertEqual(groups[0]["auto"]["band"], "720p")
+        self.assertEqual(groups[0]["auto"]["stream_id"], "h720")
+
+    def test_vip_user_starts_on_1080p(self):
+        groups = self._groups(vip=True)
+        self.assertEqual([t["band"] for t in groups[0]["tiers"]],
+                         ["1080p", "720p", "480p"])
+        self.assertFalse(any(t["gated"] for t in groups[0]["tiers"]))
+        self.assertEqual(groups[0]["auto"]["band"], "1080p")
+
+    def test_preferred_audio_wins_within_free_tiers(self):
+        groups = self._groups(audio_languages=("Hindi",))
+        tiers_out = groups[0]["tiers"]
+        self.assertEqual(groups[0]["auto"]["band"], "720p")
+        self.assertTrue(tiers_out[0]["preferred_audio"])
+        self.assertFalse(tiers_out[1]["preferred_audio"])
+
+    def test_preferred_audio_wins_for_vip_too(self):
+        groups = self._groups(vip=True, audio_languages=("Hindi",))
+        self.assertEqual(groups[0]["auto"]["band"], "720p")
+        self.assertEqual([t["band"] for t in groups[0]["tiers"]],
+                         ["720p", "1080p", "480p"])
+
+    def test_audio_languages_travel_on_the_tier(self):
+        groups = self._groups()
+        by_band = {t["band"]: t for t in groups[0]["tiers"]}
+        self.assertEqual(by_band["720p"]["audio_languages"], ["Hindi"])
+        self.assertEqual(by_band["1080p"]["audio_languages"], ["Telugu"])
+
+
+class DetailWarmTests(Fixture):
+    """Audit #1: `?warm=1` reports warm/warming without slowing detail."""
+
+    def test_warm_reports_warming_and_starts_the_resolve(self):
+        with (mock.patch.object(viewer, "_preresolve_is_warm",
+                                return_value=False),
+              mock.patch.object(viewer, "_start_preresolve") as start):
+            detail = viewer.api_v1_get_post_detail(self.seed_id, warm=True)
+        self.assertEqual(detail["preresolve"]["status"], "warming")
+        self.assertEqual(detail["preresolve"]["band"], "720p")
+        start.assert_called_once()
+
+    def test_warm_reports_warm_when_the_cache_has_it(self):
+        with (mock.patch.object(viewer, "_preresolve_is_warm",
+                                return_value=True),
+              mock.patch.object(viewer, "_start_preresolve") as start):
+            detail = viewer.api_v1_get_post_detail(self.seed_id, warm=True)
+        self.assertEqual(detail["preresolve"]["status"], "warm")
+        start.assert_not_called()
+
+    def test_no_warm_flag_means_no_preresolve_key(self):
+        detail = viewer.api_v1_get_post_detail(self.seed_id)
+        self.assertNotIn("preresolve", detail)
+
+    def test_preresolve_thread_calls_the_resolver(self):
+        calls = []
+        with mock.patch.object(viewer, "_resolve_and_bank",
+                               side_effect=calls.append):
+            thread = viewer._start_preresolve(4242)
+            thread.join(timeout=5)
+        self.assertEqual(calls, [4242])
+
+    def test_stream_errors_carry_plain_language(self):
+        self.assertEqual(
+            viewer._plain_stream_error("no_playable_source")["message"],
+            "That copy didn't play. Try another quality.")
+        self.assertIn(
+            "VIP",
+            viewer._plain_stream_error(
+                "premium_quality_requires_vip")["message"])
+
+
+class RailDedupeTests(Fixture):
+    """Audit #17: a rail shows each film once, even filed by two sites."""
+
+    def setUp(self):
+        super().setUp()
+        self.salaar_a_id = self.ingest(
+            title="Salaar Cease Fire", year=2023, content_type="movie",
+            genres=["Action"], cast=["Prabhas"], industry="Bollywood",
+            language="Hindi", n_releases=5, n_sources=3)
+        self.salaar_b_id = self.ingest(
+            title="Salaar: Part 1 – Ceasefire", year=2023,
+            content_type="movie", genres=["Action"], cast=["Prabhas"],
+            industry="Bollywood", language="Hindi",
+            n_releases=4, n_sources=2)
+        # A legacy twin row for Wonka, filed under a per-site key the
+        # way the live catalog holds twins: `save_scraped_data` would
+        # merge a second "Wonka" 2023 ingest into the first (title+year
+        # identity), so the twin is written directly.
+        cur = self.conn.execute(
+            "INSERT INTO posts (url, slug, title, clean_title, year,"
+            " content_type, poster_url, genres, cast_names, industry,"
+            " country, language, is_18_plus, canonical_key)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("https://othersite.example/movie/wonka/", "wonka-legacy",
+             "Wonka (2023)", "Wonka", 2023, "movie",
+             "https://cdn/poster.jpg", '["Comedy", "Family"]',
+             '["Timothee Chalamet"]', "Hollywood", "India", "English", 0,
+             "wonka-2023-legacy"))
+        self.wonka_twin_id = cur.lastrowid
+        cur = self.conn.execute(
+            "INSERT INTO releases (post_id, release_title, quality, codec,"
+            " languages) VALUES (?,?,?,?,?)",
+            (self.wonka_twin_id, "Wonka 720p part0", "720p", "x264",
+             '["English"]'))
+        self.conn.execute(
+            "INSERT INTO download_sources (release_id, source_url, status)"
+            " VALUES (?,?,?)",
+            (cur.lastrowid, "https://cdn.example/wonka-twin-0-0.mp4",
+             "active"))
+        self.conn.commit()
+
+    def _titles(self, resp):
+        return [(item.get("clean_title") or item.get("title") or "")
+                for item in resp["results"]]
+
+    def test_trending_shows_one_salaar(self):
+        resp = viewer.api_v1_get_trending(limit=20)
+        salaar = [t for t in self._titles(resp) if "Salaar" in t]
+        self.assertEqual(len(salaar), 1)
+        wonka = [t for t in self._titles(resp) if t == "Wonka"]
+        self.assertEqual(len(wonka), 1)
+        # Total still counts rows (9: the six public fixture rows plus
+        # the two Salaar filings plus the Wonka twin); the page shows
+        # works, so it is two shorter — one Salaar filing and the twin
+        # both folded into their work.
+        self.assertEqual(resp["total"], 9)
+        self.assertEqual(len(resp["results"]), 7)
+
+    def test_related_shows_one_wonka(self):
+        resp = viewer.api_v1_get_related(self.seed_id, limit=20)
+        wonka = [t for t in self._titles(resp) if t == "Wonka"]
+        self.assertEqual(len(wonka), 1)
+        self.assertIn(self.wonka_id, self.ids(resp))
+
+
 if __name__ == "__main__":
     unittest.main()

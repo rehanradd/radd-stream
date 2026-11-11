@@ -462,5 +462,50 @@ class DeadLinkGateTests(unittest.TestCase):
         self.assertEqual(tiers.score(dead_direct, "1080p"), 0)
 
 
+class AudioTests(unittest.TestCase):
+    """Audit #32: a quality row carries the print's audio languages."""
+
+    def test_headline_languages_fill_an_empty_column(self):
+        # The Rogmovies shape: the languages live in the headline, not the
+        # column — the rung must still say Telugu + Tamil, canonically.
+        ladder = tiers.for_release(
+            {"quality": "480p",
+             "release_title": "Salaar - Part 1 (2023) Multi Audios "
+                              "[Tel + Tam + Mal + Kan] NF WeB-DL 480p [700MB]",
+             "languages": ""},
+            [link()])
+        self.assertEqual(ladder["tiers"][0]["audio_languages"],
+                         ["Telugu", "Tamil", "Malayalam", "Kannada"])
+
+    def test_stored_column_wins_over_the_headline(self):
+        ladder = tiers.for_release(
+            {"quality": "720p", "release_title": "X [Tel + Tam]",
+             "languages": "Hindi"},
+            [link()])
+        self.assertEqual(ladder["tiers"][0]["audio_languages"], ["Hindi"])
+
+    def test_json_array_column_parses(self):
+        ladder = tiers.for_release(
+            {"quality": "720p", "release_title": "X",
+             "languages": "[\"Hindi\", \"Tamil\"]"},
+            [link()])
+        self.assertEqual(ladder["tiers"][0]["audio_languages"],
+                         ["Hindi", "Tamil"])
+
+    def test_pipe_column_parses(self):
+        ladder = tiers.for_release(
+            {"quality": "720p", "release_title": "X",
+             "languages": "Hindi|Tamil"},
+            [link()])
+        self.assertEqual(ladder["tiers"][0]["audio_languages"],
+                         ["Hindi", "Tamil"])
+
+    def test_nothing_anywhere_means_no_audio_line(self):
+        ladder = tiers.for_release(
+            {"quality": "720p", "release_title": "X", "languages": ""},
+            [link()])
+        self.assertEqual(ladder["tiers"][0]["audio_languages"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

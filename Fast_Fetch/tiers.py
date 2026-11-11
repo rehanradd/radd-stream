@@ -29,6 +29,8 @@ leave the box — see ``redact.py`` for why nothing else can.
 
 from __future__ import annotations
 
+import json
+
 #: Canonical bands, best first. Anything a scraper wrote that does not resolve to
 #: one of these is ``UNSPECIFIED`` and sorts last within its own tier.
 BANDS = ("2160p", "1080p", "720p", "480p", "sd")
@@ -313,14 +315,31 @@ def for_release(release, links) -> dict:
         key=lambda item: (-item[0], item[1]))
     winner = scored[0]
     play_winner = next((item for item in scored if playable(item[2], band)), None)
+    # The print's stored audio languages — the rung's own words for what you
+    # will hear, never a title-guessed language. Empty when the column is
+    # empty: the row then shows no audio line rather than an invented one.
+    # Audit #32: the column IS empty on most scraped rows (Rogmovies writes
+    # the languages into the headline, not the column), so fall back to the
+    # label parser — `describe()` reads the same headline the scraper
+    # wrote ("Multi Audios [Tel + Tam + Mal + Kan]") and returns canonical
+    # names. A print with neither still reports [], never a guess.
+    audio = _split_languages(row.get("languages"))
+    if not audio:
+        try:
+            import release_descriptor
+            described = release_descriptor.describe(
+                release_title=row.get("release_title") or "",
+                quality=row.get("quality") or "",
+                codec=row.get("codec") or "",
+                languages=row.get("languages") or "")
+            audio = list((described.get("audio") or {}).get("languages") or [])
+        except Exception:      # noqa: BLE001 — a parser fault must not break the ladder
+            audio = []
     tier = {
         "band": band,
         "quality": band if band != UNSPECIFIED else (row.get("quality") or "Available"),
         "label": _tier_label(row, band),
-        # The print's stored audio languages — the rung's own words for what you
-        # will hear, never a title-guessed language. Empty when the column is
-        # empty: the row then shows no audio line rather than an invented one.
-        "audio_languages": _split_languages(row.get("languages")),
+        "audio_languages": audio,
         "mode": "play" if play_winner else "download_only",
         "playable": bool(play_winner),
         "link": None,
@@ -345,16 +364,32 @@ def for_release(release, links) -> dict:
 def _split_languages(value) -> list:
     """The print's stored audio languages, as a list — never a guess.
 
-    `releases.languages` is scraper-stored TEXT ("Hindi|Tamil", "English").
-    Splitting it here keeps the wire honest: a rung shows only the languages
-    its own print carries, and an empty column yields an empty list, so the row
-    shows no audio line rather than a title-guessed language.
+    `releases.languages` is scraper-stored TEXT ("Hindi|Tamil", "English",
+    or a JSON array like ``["Hindi", "Tamil"]`` — both shapes are in the
+    ledger). Splitting it here keeps the wire honest: a rung shows only the
+    languages its own print carries, and an empty column yields an empty
+    list, so the row shows no audio line rather than a title-guessed
+    language. (The label-parser fallback for an empty column lives in
+    `for_release`, not here.)
     """
     if not value:
         return []
+    text = str(value).strip()
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            seen = []
+            for part in parsed:
+                name = str(part).strip()
+                if name and name not in seen:
+                    seen.append(name)
+            return seen
     seen = []
-    for part in str(value).replace("|", ",").split(","):
-        name = part.strip()
+    for part in text.replace("|", ",").split(","):
+        name = part.strip().strip("\"'[]")
         if name and name not in seen:
             seen.append(name)
     return seen

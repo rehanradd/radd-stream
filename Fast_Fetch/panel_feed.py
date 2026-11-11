@@ -37,6 +37,7 @@ import time
 from pathlib import Path
 
 import redact
+import title_clean
 import db_pragmas  # serve-path SQLite pragmas (Session 125)
 
 try:
@@ -796,6 +797,113 @@ def read_disclaimer(panel_path=None):
         conn.close()
 
 
+#: The hero is a shop window, not an archive: only films from this year
+#: onward may headline it, and only with a real poster to show.
+_HERO_MIN_YEAR = 2000
+
+#: How many newest posts the hero scan reads. Bounded: the scan is one
+#: id-ordered read plus one join, never a full-catalog grouping.
+_HERO_CANDIDATE_SCAN = 2000
+
+
+def _hero_rows(catalog_conn, limit, hidden):
+    """Hero candidates: recent, well-posted, with a real poster.
+
+    Audit #16: the hero must never be a 1938 title with a blurry
+    credits-screen "poster". The newest 2000 posts are read once, then
+    filtered in Python — year >= 2000, a non-empty poster_url, adult-ok
+    and not hidden — and ordered by prints + mirrors, best first. The
+    same list backs the curated hero's fallback, so the top of Home
+    always has something worth showing.
+    """
+    try:
+        rows = catalog_conn.execute(
+            "SELECT p.*, COUNT(DISTINCT r.id) AS _rc,"
+            " COUNT(DISTINCT s.id) AS _sc"
+            " FROM (SELECT * FROM posts ORDER BY id DESC LIMIT ?) p"
+            " LEFT JOIN releases r ON r.post_id = p.id"
+            " LEFT JOIN download_sources s ON s.release_id = r.id"
+            " GROUP BY p.id",
+            (_HERO_CANDIDATE_SCAN,)).fetchall()
+    except sqlite3.Error:
+        return []
+    candidates = []
+    for r in rows:
+        if not _adult_ok(r):
+            continue
+        try:
+            if int(r["id"]) in hidden:
+                continue
+            year = int(r["year"]) if r["year"] is not None else None
+            poster = r["poster_url"]
+            prints = int(r["_rc"] or 0) + int(r["_sc"] or 0)
+        except (KeyError, IndexError, ValueError, TypeError):
+            continue
+        if year is None or year < _HERO_MIN_YEAR:
+            continue
+        if not str(poster or "").strip():
+            continue
+        candidates.append((prints, int(r["id"]), r))
+    candidates.sort(key=lambda c: (-c[0], -c[1]))
+    return [r for _prints, _post_id, r in candidates[:limit]]
+
+
+def _work_candidate(row):
+    """A row as `title_clean.group_work_rows` reads it."""
+    def _get(key, default=None):
+        try:
+            return row[key]
+        except (KeyError, IndexError):
+            return default
+    try:
+        post_id = int(_get("id") or 0)
+    except (TypeError, ValueError):
+        post_id = 0
+    return {
+        "id": post_id,
+        "clean_title": _get("clean_title") or "",
+        "title": _get("title") or "",
+        "year": _get("year"),
+        "content_type": _get("content_type") or "",
+        "release_count": int(_get("release_count") or _get("_rc") or 0),
+        "source_count": int(_get("source_count") or _get("_sc") or 0),
+    }
+
+
+def _drop_seen_works(rows, seen):
+    """Rows whose work is new, in the section's own order.
+
+    Audit #17: the same film must not repeat across rails on one
+    screen. `seen` is the candidate dicts of every row already served
+    (earlier sections); a row is dropped when its work group already
+    holds a seen row, and a work that appears twice inside this one
+    section is kept once, as its best representative. The caller's
+    `seen` is NOT extended here — it extends it with what it kept.
+    """
+    new_cands = [_work_candidate(r) for r in rows]
+    if not seen:
+        # Nothing to repeat against, but the section itself still
+        # collapses to one row per work.
+        groups = title_clean.group_work_rows(new_cands)
+        kept = [title_clean.representative(g) for g in groups]
+        order = {int(c["id"]): i for i, c in enumerate(new_cands)}
+        kept.sort(key=lambda c: order[int(c["id"])])
+        by_id = {int(r["id"]): r for r in rows}
+        return [by_id[int(c["id"])] for c in kept if int(c["id"]) in by_id]
+    groups = title_clean.group_work_rows(list(seen) + new_cands)
+    seen_ids = {int(c["id"]) for c in seen}
+    keep_ids: list[int] = []
+    for group in groups:
+        ids = {int(c["id"]) for c in group}
+        if ids & seen_ids:
+            continue
+        keep_ids.append(int(title_clean.representative(group)["id"]))
+    order = {int(c["id"]): i for i, c in enumerate(new_cands)}
+    keep_ids.sort(key=lambda post_id: order[post_id])
+    by_id = {int(r["id"]): r for r in rows}
+    return [by_id[post_id] for post_id in keep_ids if post_id in by_id]
+
+
 def _resolve_rows(catalog_conn, rule, category_key, curated_ids, limit, hidden):
     """Post rows for one section rule, adult-filtered and hide-filtered.
 
@@ -989,6 +1097,7 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
                 for sec in live_sections
             ]
         out_sections = []
+        seen_rows: list[dict] = []
         for sec in sections:
             try:
                 if int(sec["is_adult_only"] or 0):
@@ -1040,17 +1149,40 @@ def load_panel_feed(catalog_conn, panel_path=None, now=None):
                 for suffix in [tag[len(key) + 1:]]
                 if suffix.isdigit()
             }
-            rows = _resolve_rows(
-                catalog_conn, rule, category_key, curated_ids,
-                caps["section_cap"], hidden | section_hide)
-            # Hero fallback: a curated hero with no live cards must not
-            # leave the top of Home empty — fill it with the newest posts
-            # the operator did not hide, so the first rail always has
-            # something to show.
-            if key == "hero" and rule == "curated" and not rows:
+            if key == "hero" and rule != "curated":
+                # A hero on an automatic rule is a shop window, not the
+                # newest scrape: recent, posted, with a real poster. Only
+                # when nothing is eligible does it fall back to the
+                # rule's own rows, so the top of Home is never empty.
+                rows = _hero_rows(
+                    catalog_conn, caps["section_cap"], hidden | section_hide)
+                if not rows:
+                    rows = _resolve_rows(
+                        catalog_conn, rule, category_key, [],
+                        caps["section_cap"], hidden | section_hide)
+            else:
                 rows = _resolve_rows(
-                    catalog_conn, "latest", None, [], caps["section_cap"],
-                    hidden | section_hide)
+                    catalog_conn, rule, category_key, curated_ids,
+                    caps["section_cap"], hidden | section_hide)
+                # Hero fallback: a curated hero with no live cards must not
+                # leave the top of Home empty — fill it with hero
+                # candidates first, and only when none is eligible, with
+                # the newest posts.
+                if key == "hero" and rule == "curated" and not rows:
+                    rows = _hero_rows(
+                        catalog_conn, caps["section_cap"],
+                        hidden | section_hide)
+                    if not rows:
+                        rows = _resolve_rows(
+                            catalog_conn, "latest", None, [],
+                            caps["section_cap"], hidden | section_hide)
+            if rule != "curated":
+                # Audit #17: one film, one rail. A curated section keeps
+                # the operator's cards exactly as placed — even a repeat —
+                # but every served row still joins `seen`, so a later
+                # automatic rail never repeats a curated pick either.
+                rows = _drop_seen_works(rows, seen_rows)
+            seen_rows.extend(_work_candidate(r) for r in rows)
             out_sections.append({"key": key, "title": title, "rows": rows})
         return {"sections": out_sections,
                 "broadcasts": broadcasts,

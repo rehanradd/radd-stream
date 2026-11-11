@@ -164,6 +164,46 @@ class DatabaseSaveTests(unittest.TestCase):
             ],
         )
 
+    def test_ingest_files_clean_title_rating_and_synopsis(self):
+        """Audit #6/#27: a new row is filed with a normalised rating and
+        a marker-free synopsis — but its clean_title stays as scraped.
+
+        A 0–100 rating is filed on the 0–10 scale, a /PLOT marker
+        synopsis is filed empty of the marker, and the raw `title` and
+        `clean_title` columns keep the site's text: the stored
+        clean_title is identity (the canonical key derives from it, and
+        the API serves it verbatim), so it is never rewritten with the
+        display title — display cleaning stays serve-time.
+        """
+        data = self.media(
+            "site_a", "https://site-a.example/salaar/",
+            title="Download Salaar - Part 1 (2023) Multi Audios "
+                  "[Tel + Tam + Mal + Kan] NF WeB-DL 480p [700MB]",
+            clean_title="Salaar - Part 1 (2023) Multi Audios "
+                        "[Tel + Tam + Mal + Kan] NF WeB-DL 480p [700MB]",
+            year=2023)
+        data["imdb_rating"] = "100"
+        data["synopsis"] = "/PLOT:\nA rebel rises."
+        post_id = fast_fetch.save_scraped_data(data)
+        row = self.rows(
+            "SELECT title, clean_title, imdb_rating, synopsis, "
+            "canonical_key FROM posts WHERE id = ?", (post_id,))[0]
+        self.assertEqual(row[0], data["title"])
+        self.assertEqual(row[1], data["clean_title"])
+        self.assertEqual(row[2], "10.0")
+        self.assertEqual(row[3], "A rebel rises.")
+        self.assertEqual(
+            row[4],
+            fast_fetch.generate_canonical_key(data["clean_title"], 2023))
+
+    def test_ingest_drops_an_unshowable_rating(self):
+        data = self.media("site_a", "https://site-a.example/no-rating/")
+        data["imdb_rating"] = "abc"
+        post_id = fast_fetch.save_scraped_data(data)
+        row = self.rows(
+            "SELECT imdb_rating FROM posts WHERE id = ?", (post_id,))[0]
+        self.assertIsNone(row[0])
+
     def test_an_unprobed_source_is_stored_as_unverified_not_active(self):
         """
         `status` is a measurement, so the writer may not invent one.

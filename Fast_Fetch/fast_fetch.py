@@ -39,6 +39,7 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import db_pragmas  # serve-path SQLite pragmas (Session 125); stdlib-only
+import title_clean  # shared title/synopsis/rating rules (stdlib only)
 try:
     import panel_feed  # the operator's tuning knobs + pauses
 except Exception:  # pragma: no cover - panel_feed is always importable in-repo
@@ -5322,8 +5323,30 @@ def save_scraped_data(
             data.get("genres") or "",
         )
     )
+    _normalize_scraped_data(data)
     with _DB_WRITE_LOCK:
         return _save_scraped_data(data, ensure_db=ensure_db)
+
+
+def _normalize_scraped_data(data: dict) -> None:
+    """File a new row with a normalised rating and a marker-free synopsis.
+
+    Runs after enrich (so a Cinemeta rating is normalised too) and
+    after the adult/animation flags (so those still read the raw
+    title). Deliberately NOT a clean_title rewrite: the stored
+    clean_title is identity — the canonical key derives from it, and
+    the API serves it verbatim (pinned by
+    test_api_v1_list_reports_whether_a_work_has_a_subtitled_print and
+    test_api_v1_type_anime_answers_the_animation_flag, where "Later
+    Subbed" and "Animated Series" are real titles, not tag tails).
+    Rewriting it with the display title would corrupt both. The
+    display title stays a serve-time derivation (`display_title`).
+    """
+    if data.get("synopsis") is not None:
+        data["synopsis"] = title_clean.clean_synopsis(data.get("synopsis"))
+    if "imdb_rating" in data:
+        data["imdb_rating"] = title_clean.normalize_rating(
+            data.get("imdb_rating"))
 
 
 def _enrich_scraped_metadata(data: dict) -> None:
