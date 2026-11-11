@@ -55,7 +55,7 @@ class FailoverHumanMessageTest {
     @Test
     fun `an unknown code still never shows the code`() {
         val human = humanizeErrorSummary("ERROR_CODE_SOMETHING_NEW unexpected")
-        assertEquals("Playback failed. Retry, or try another print.", human)
+        assertEquals("Playback failed. Retry, or try another version.", human)
         assertFalse(human.contains("ERROR_CODE_"))
     }
 

@@ -63,6 +63,12 @@ data class DetailUiState(
     val actionMessage: String? = null,
     /** One row per quality band, as the server collapsed them. Empty until it has any. */
     val ladder: LadderForScope = LadderForScope.EMPTY,
+    /**
+     * The viewer's regional-dub preference ([UserRegion]), mirrored so the
+     * quality card can lead with the viewer's own audio (audit #32).
+     * [UserRegion.DEFAULT] until DataStore answers.
+     */
+    val region: String = UserRegion.DEFAULT,
     /** The scope [ladder] belongs to. Both null = the whole work; the card says which. */
     val ladderSeason: Int? = null,
     val ladderEpisode: Int? = null,
@@ -137,6 +143,18 @@ data class PendingKeep(
 /** The size line of the keep-confirm dialog: a real size, or an honest unknown. */
 fun keepSizeLabel(sizeBytes: Long?): String =
     sizeBytes?.takeIf { it > 0 }?.let { CacheAffordance.formatBytes(it) } ?: "Size unknown"
+
+/**
+ * The dialog's one primary action (audit #10/#11): the version and its
+ * size are named together, so the size is tied to the choice being made.
+ * "Download 480p · 730 MB"; a size the server never named says so
+ * instead of inventing one.
+ */
+fun downloadConfirmLabel(printLabel: String, sizeBytes: Long?): String {
+    val label = printLabel.trim().ifBlank { "this version" }
+    val size = sizeBytes?.takeIf { it > 0 }?.let { CacheAffordance.formatBytes(it) }
+    return if (size != null) "Download $label · $size" else "Download $label"
+}
 
 /**
  * What a keep request needs is a file. A page is not one: DownloadManager would fetch HTML and
@@ -280,6 +298,7 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.userRegion.collect { region ->
                 userRegion = region
+                _uiState.update { it.copy(region = region) }
                 publishViewerContent()
             }
         }

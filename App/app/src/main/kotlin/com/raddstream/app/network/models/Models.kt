@@ -14,7 +14,7 @@ import com.google.gson.annotations.SerializedName
  *                               each release with `sources[]` projected by the link view)
  *  GET /api/v1/stream           → [StreamResponse]           (our own redirector, `redirect=0`)
  *  GET /api/v1/stats            → [StatsResponse]            (scale only, no per-site rows)
- *  GET /api/v1/trending         → [PostsResponse]            (the "Most Sources" order,
+ *  GET /api/v1/trending         → [PostsResponse]            (the "Most watched" order,
  *                               `sort=trending` on /api/v1/posts, as its own route)
  *  GET /api/v1/related          → [PostsResponse]            ("Because you watch", scored
  *                               on the seed post's genres, cast, industry, type and year)
@@ -57,6 +57,14 @@ data class PostsResponse(
      * viewer who typed "Avngers" knows why "Avengers" is what came back.
      */
     val fuzzy: Boolean = false,
+    /**
+     * App-design audit #37: the server's "did you mean" spelling for the
+     * query ("avtar" → "Avatar"), or null when the query needs no
+     * correction. Added to the wire ahead of the backend (the backend
+     * worker is adding the field server-side); a server that does not
+     * send it simply shows no line.
+     */
+    val suggestion: String? = null,
 )
 
 /** One entry of GET /api/v1/facets — a jump-off chip with its honest count. */

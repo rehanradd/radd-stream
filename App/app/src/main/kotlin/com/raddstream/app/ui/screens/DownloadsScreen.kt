@@ -50,6 +50,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.R
 import com.raddstream.app.data.downloads.DeviceDownload
 import com.raddstream.app.data.downloads.DeviceDownloadState
+import com.raddstream.app.data.downloads.DownloadSpeed
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.viewmodel.DownloadRow
@@ -344,8 +345,17 @@ internal fun DeviceDownloadRow(
         ) {
             LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth())
             val total = if (item.bytesTotal > 0) formatMiB(item.bytesTotal) else "unknown size"
+            // Audit #12: % + MB + speed + ETA, from the same rolling rate the
+            // service reports — "calculating" until the second tick, never a
+            // guessed number.
+            val speedEta = if (item.bytesPerSec > 0) {
+                " · ${DownloadSpeed.formatSpeed(item.bytesPerSec)}" +
+                    (DownloadSpeed.formatEta(item.etaSeconds)?.let { " · $it" } ?: "")
+            } else {
+                " · calculating…"
+            }
             Text(
-                "${formatMiB(item.bytesDownloaded)} / $total",
+                "${formatMiB(item.bytesDownloaded)} / $total$speedEta",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

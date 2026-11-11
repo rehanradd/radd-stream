@@ -505,25 +505,30 @@ private fun effectiveDynamicColor(storedEnabled: Boolean, panelAllowed: Boolean)
  * is the tighter ceiling. A timeout reads as "did not answer" and the caller
  * opens Setup.
  */
-private const val SILENT_CONNECT_TIMEOUT_MS = 15_000L
+/**
+ * Audit #42: the branded loading screen (logo + "RADD Stream" + spinner,
+ * Session 120) must never wait on the network. The silent default-server
+ * probe used to get two 15 s attempts — up to 30 s of splash when the
+ * default answered slowly — before the first route appeared. One cheap
+ * GET /api/v1/stats either answers inside a second or the app goes to
+ * Setup, which re-probes with its own budget; a slow first connect must
+ * never hold the splash hostage.
+ */
+private const val SILENT_CONNECT_TIMEOUT_MS = 1_000L
 
 private suspend fun trySilentDefaultConnect(
     catalogRepository: CatalogRepository,
     url: String,
 ): Boolean {
-    repeat(2) {
-        val answered = try {
-            withTimeoutOrNull(SILENT_CONNECT_TIMEOUT_MS) {
-                catalogRepository.testAndSaveServer(url)
-            } != null
-        } catch (cancelled: CancellationException) {
-            throw cancelled
-        } catch (_: Exception) {
-            false
-        }
-        if (answered) return true
+    return try {
+        withTimeoutOrNull(SILENT_CONNECT_TIMEOUT_MS) {
+            catalogRepository.testAndSaveServer(url)
+        } != null
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
     }
-    return false
 }
 
 /**

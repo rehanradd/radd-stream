@@ -33,7 +33,7 @@
     <string name="player_tag_auto">Auto: %1$s</string>
     <string name="player_sleep_remaining">Sleep in %1$s</string>
     <string name="player_speed_short">%1$s×</string>
-    <string name="player_prints_tools">Prints &amp; tools</string>
+    <string name="player_prints_tools">Versions &amp; tools</string>
     <string name="player_pause">Pause</string>
     <!-- CL-5: the centre pause control announces this instead of bare "Pause",
          so it does not collide with the bottom-bar pause button. -->
@@ -44,6 +44,7 @@
          player_pause_centre ("Pause video"), which exists for the same reason. -->
     <string name="player_play_centre">Play video</string>
     <string name="player_buffering">Buffering…</string>
+    <string name="player_paused">Paused</string>
     <string name="player_leave_cinema">Leave cinema mode</string>
     <string name="player_lock">Lock controls</string>
     <string name="player_quality_label">Quality: %1$s</string>
@@ -75,9 +76,9 @@
     <string name="player_giveup_download_only">Download only</string>
     <string name="player_giveup_no_candidate">Nothing playable here right now</string>
     <string name="player_giveup_download_body">This quality can’t stream here. Go back to the title to keep it for offline, or open it in another player.</string>
-    <string name="player_giveup_no_candidate_body">Every option for this print failed. Retry, try another print, or open it in another player.</string>
+    <string name="player_giveup_no_candidate_body">Every version of this title failed. Retry, try another version, or open it in another player.</string>
     <string name="player_giveup_timeout">Taking too long to start</string>
-    <string name="player_giveup_timeout_body">The link is still being found. Retry, try another print, or open it in another player.</string>
+    <string name="player_giveup_timeout_body">The link is still being found. Retry, try another version, or open it in another player.</string>
     <!-- Session 126: offline card (PL-3), expired-link card (NAV-4), up-next preview (PL-12),
          share a moment (SC.24), data saver (26), auto-PiP (PL-10), progress story (26). -->
     <string name="player_offline_title">You’re offline</string>
@@ -90,8 +91,8 @@
     <string name="player_share_moment">Share a moment</string>
     <string name="player_data_saver">Data Saver</string>
     <string name="player_data_saver_detail">Cap Auto at 480p on mobile data</string>
-    <string name="player_step_finding">Finding the best print</string>
-    <string name="player_step_warming">Warming the link</string>
+    <string name="player_step_finding">Finding the best version</string>
+    <string name="player_step_warming">Finding your video</string>
     <string name="player_step_buffering">Buffering</string>
     <string name="player_volume_boost">Volume boost</string>
     <string name="player_seek">Seek: %1$s of %2$s</string>
@@ -103,8 +104,8 @@
     <!-- Session 126 (NAV-4/NAV-5): the catch-all deep-link destination. -->
     <string name="dead_link_title">This link didn’t lead anywhere</string>
     <string name="dead_link_body">The link doesn’t name a title this app knows. It may be mistyped, or from an older share. Go back home and find the title again.</string>
-    <string name="player_start_slow">Taking longer than usual — your link is being found</string>
-    <string name="player_start_try_another">Try another print</string>
+    <string name="player_start_slow">Taking longer than usual — finding your video</string>
+    <string name="player_start_try_another">Try another version</string>
     <string name="player_attempt_counter">Trying copy %1$d of %2$d</string>
     <string name="player_start_giveup_message">This copy did not start within 30 seconds.</string>
     <string name="player_first_frame">Started in %1$s</string>
@@ -116,7 +117,7 @@
     <string name="player_selected_suffix">, selected</string>
     <string name="player_resume_title">Resume playback?</string>
     <string name="player_resume_body">You stopped at %1$s on “%2$s”.</string>
-    <string name="player_this_print">this print</string>
+    <string name="player_this_print">this version</string>
     <string name="player_resume">Resume</string>
     <string name="player_start_over">Start over</string>
     <string name="player_calibration_title">Calibrate episode start</string>
@@ -146,7 +147,8 @@
     <string name="player_sleep_note">Volume fades down over the last %1$ds, then playback pauses (MX behaviour).</string>
     <string name="player_external_subtitle">external subtitle</string>
     <string name="player_subtitles_title">Subtitles</string>
-    <string name="player_subtitle_none">No embedded subtitle tracks in this print — load an external file below.</string>
+    <string name="player_subtitle_none">No subtitle tracks for this title yet.</string>
+    <string name="player_subtitle_browse">Browse subtitle file</string>
     <string name="player_subtitle_turn_off">Turn subtitles off</string>
     <string name="player_subtitle_size">Size %1$d%%</string>
     <string name="player_subtitle_position">Bottom position %1$d%%</string>
@@ -156,7 +158,7 @@
     <string name="player_subtitle_load">Load external subtitle file (SRT / VTT / ASS)…</string>
     <string name="player_subtitle_remove">Remove “%1$s”</string>
     <string name="player_subtitle_sync_note">Subtitle sync applies to this overlay and to every embedded track. Size, position and colour styling still come from the controls above.</string>
-    <string name="player_track_none">No track info for this print yet.</string>
+    <string name="player_track_none">No track info for this version yet.</string>
     <string name="player_track_with_language">%1$s · %2$s</string>
     <string name="player_cycle_audio">Cycle audio track</string>
     <string name="player_preferred_audio">Preferring %1$s — set on the Settings screen.</string>
@@ -166,11 +168,11 @@
     <string name="player_audio_only_on">Audio-only mode: ON (screen decoder off)</string>
     <string name="player_audio_only_off">Audio-only mode: off</string>
     <string name="player_audio_level">Audio level</string>
-    <string name="player_prints_title">Prints &amp; failover</string>
+    <string name="player_prints_title">Versions &amp; failover</string>
     <string name="player_chapters_title">Chapters</string>
     <string name="player_chapter_row">"%1$s  ·  %2$s"</string>
     <string name="player_failover_log">Failover log</string>
-    <string name="player_prints_note">Ranked candidates — the first playable one wins; switches happen automatically on playback errors, preserving position.</string>
+    <string name="player_prints_note">Versions, best first — the first playable one wins; switches happen automatically on playback errors, preserving position.</string>
     <string name="player_rune_playing">playing</string>
     <string name="player_failover_record">#%1$d %2$s: %3$s → %4$s</string>
     <string name="player_failover_policy">Policy: retry same ×%1$d, backoff %2$d ms, then next rank, max %3$d ranks.</string>

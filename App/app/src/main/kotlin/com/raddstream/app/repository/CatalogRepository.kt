@@ -72,7 +72,7 @@ class CatalogRepository @Inject constructor(
     )
 
     /**
-     * GET /api/v1/trending — the "Most Sources" rail's own route. Throws
+     * GET /api/v1/trending — the "Most watched" rail's own route. Throws
      * like [getPosts]; the caller ([HomeViewModel.loadSection]) falls back
      * to the `sort=trending` list when the route is unavailable, so an old
      * server never loses the rail.

@@ -52,7 +52,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -81,7 +83,6 @@ import com.raddstream.app.viewmodel.ImageQuality
 import com.raddstream.app.viewmodel.KeepTtl
 import com.raddstream.app.viewmodel.MembershipCardCopy
 import com.raddstream.app.viewmodel.SettingsViewModel
-import com.raddstream.app.viewmodel.UserPreferences
 
 /** The subtitle chips, in the order the row shows them. Readable by the region test, which
  * pins that a card can only ever seed a word this row can actually display. */
@@ -120,6 +121,10 @@ fun SettingsScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
+    // Audit #51: the server switcher lives behind Advanced — closed until
+    // the viewer asks for it, so a casual tap can never disconnect the app.
+    var showAdvanced by remember { mutableStateOf(false) }
+
     // A status line this screen used to print inside the About card as a button that did
     // nothing. It is a transient answer to an action, so it lives where every other screen
     // in this app puts one: a snack bar, shown once, then cleared back through the ViewModel
@@ -148,66 +153,8 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
         ) {
-            // ── Server Connection ──────────────────────────────────────
-            SettingsCard(title = "Catalog Server", icon = Icons.Default.Storage) {
-                // The address is never printed here: a saved server reads as
-                // "Connected", and the field opens only when the viewer asks
-                // to change it. The test still fetches the counts for its own
-                // message, which never includes the address either.
-                if (!state.showServerField) {
-                    Text(
-                        text = if (state.serverUrl.isNotBlank()) "Connected to your catalog." else "No catalog server set.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(10.dp))
-                    OutlinedButton(onClick = viewModel::revealServerField, modifier = Modifier.fillMaxWidth()) {
-                        Text("Change")
-                    }
-                } else {
-                    OutlinedTextField(
-                        value = state.serverUrl,
-                        onValueChange = viewModel::onServerUrlChanged,
-                        label = { Text("Server URL") },
-                        placeholder = { Text("http://<host> — one address, any catalog you may use") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    state.testMessage?.let { msg ->
-                        Text(
-                            text = msg,
-                            color = if (state.testIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
-                    Button(
-                        onClick = viewModel::testAndSaveServer,
-                        enabled = !state.isTesting && state.serverUrl.isNotBlank(),
-                        // Robo run 5: the disabled text on this button read
-                        // 2.98:1 — see DisabledButtonContentAlpha.
-                        colors = ButtonDefaults.buttonColors(
-                            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(
-                                alpha = DisabledButtonContentAlpha,
-                            ),
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        if (state.isTesting) {
-                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
-                        } else {
-                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text("Test & Save Connection")
-                        }
-                    }
-                }
-
-                // No counts here: works/releases/links are the operator's numbers,
-                // not something a viewer needs to see on their own Settings screen.
-                // The connection test above still fetches them for its own message.
-            }
-
-            // The region row lives in its own card at the top of Settings, not
+            SettingsSectionHeading("Watching")
+            // The region row lives in its own card under Watching, not
             // buried in Playback & Display: it is the one row the viewer needs
             // after every region change, and it must be findable without
             // scrolling past a dozen cards (Session 114).
@@ -228,6 +175,205 @@ fun SettingsScreen(
                 }
             }
 
+            // ── Languages ──────────────────────────────────────────────
+            // The ONE place that shows the languages in force. The Region
+            // card picks them, the player sheet changes them mid-title, and
+            // the Languages screen changes them here — all three write the
+            // same keys, and this card shows the effective values, so a
+            // viewer never has to guess which one won.
+            SettingsCard(title = "Languages") {
+                Text(
+                    "Audio: ${state.prefs.audioLanguage}. Subtitles: ${state.prefs.subtitleLang}.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                OutlinedButton(
+                    onClick = onOpenLanguages,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("Open Languages screen")
+                }
+                // Audit #49: the old helper was broken English ("the player
+                // sheet write"). The Languages screen is the one place these
+                // change (audit #50) — the chips that duplicated it are gone.
+                Text(
+                    "Audio, subtitles and subtitle size, in one place. Changes here apply everywhere, including the player.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SettingsCard(title = "Playback & Display") {
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Image quality")
+                ChipRow(ImageQuality.entries.toList().map { it.label }, ImageQuality.entries.indexOf(state.prefs.imageQuality)) { idx ->
+                    viewModel.setImageQuality(ImageQuality.entries.toList()[idx])
+                }
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Poster loading on mobile data")
+                SwitchRow(
+                    checked = state.prefs.downloadOnMobileData,
+                    onCheckedChange = viewModel::setDownloadOnMobileData,
+                    label = "Load poster images over mobile data",
+                )
+                // A keep is gated by the Wi-Fi-only switch in the Offline card above,
+                // not by this one — this switch only ever governed the thumbnails.
+                Text(
+                    "A title you keep follows the Wi-Fi-only switch in the Offline card; this only " +
+                        "governs the thumbnails on the screens you browse.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Data Saver")
+                SwitchRow(
+                    checked = state.prefs.dataSaver,
+                    onCheckedChange = viewModel::setDataSaver,
+                    label = "Save mobile data while watching",
+                )
+                Text(
+                    "On mobile data, titles start at 480p and the server is asked for its data-saving copy. Wi-Fi is untouched, and you can still switch a title up in the player.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Offline keep duration")
+                ChipRow(KeepTtl.entries.map { it.label }, KeepTtl.entries.indexOf(state.prefs.keepTtl)) { idx ->
+                    viewModel.setKeepTtl(KeepTtl.entries.toList()[idx])
+                }
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Audio level")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        AudioBoost.labelFor(state.prefs.audioBoost),
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Slider(
+                        value = state.prefs.audioBoost.coerceIn(0f, AudioBoostUi.MAX_OFFERED_LEVEL),
+                        onValueChange = viewModel::setAudioBoost,
+                        valueRange = 0f..AudioBoostUi.MAX_OFFERED_LEVEL,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                // Still worth saying: below the ceiling the boost is real, but it rides on the
+                // viewer's own system volume, so the caption states what is applied, not what
+                // was asked. The range above is already the range this build can honour.
+                Text(
+                    AudioBoostUi.honestSummary(state.prefs.audioBoost, 1f),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                // Wallpaper colour is a brand decision, not a user one: this brand file
+                // locks the palette (features.dynamic_color=false), and a switch that is
+                // overruled by the build it ships in is worse than no switch. It appears
+                // the moment a re-skin permits it.
+                if (Brand.dynamicColorAllowed) {
+                    Spacer(Modifier.height(10.dp))
+                    SwitchRow(
+                        checked = state.prefs.dynamicColor,
+                        onCheckedChange = viewModel::setDynamicColor,
+                        label = "Dynamic colour from wallpaper",
+                    )
+                }
+                Text(
+                    "Saved on this device, and applied the next time each one matters: image size " +
+                        "from the next poster, the keep duration from the next download.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // ── Player defaults ──────────────────────────────────────
+            // The switches the player itself obeys (plan §5 step 10, P36): autoplay-next
+            // gates the auto-advance, autoplay-previews gates the Home hero, default
+            // quality is the rung a new title starts on when Play was Auto, and subtitle
+            // size is the same number the player sheet's slider writes.
+            SettingsCard(title = "Player", icon = Icons.Default.PlayArrow) {
+                SwitchRow(
+                    checked = state.prefs.autoplayNext,
+                    onCheckedChange = viewModel::setAutoplayNext,
+                    label = "Play the next episode automatically",
+                )
+                Text(
+                    "When this is off, an episode ends on the Next Episode button instead of moving on by itself.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                SwitchRow(
+                    checked = state.prefs.autoplayPreviews,
+                    onCheckedChange = viewModel::setAutoplayPreviews,
+                    label = "Auto-play previews on Home",
+                )
+                Text(
+                    "When this is off, the Home hero stays on the first poster until you swipe it.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                // PL-10: opt-in auto-enter picture-in-picture. Off by default: a
+                // window the viewer did not open is a window they did not ask for.
+                SwitchRow(
+                    checked = state.prefs.autoPip,
+                    onCheckedChange = viewModel::setAutoPip,
+                    label = "Auto picture-in-picture",
+                )
+                Text(
+                    "When this is on, leaving the player while a title is playing keeps it playing in a small window.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Default quality")
+                val qualityBands = listOf("auto", "480p", "720p", "1080p", "2160p")
+                val qualityLabels = listOf("Auto", "480p", "720p", "1080p", "4K")
+                ChipRow(qualityLabels, qualityBands.indexOf(state.prefs.defaultQuality).coerceAtLeast(0)) { idx ->
+                    viewModel.setDefaultQuality(qualityBands[idx])
+                }
+                Text(
+                    "The quality a new title starts on. Auto lets the player pick; a fixed choice starts there and stays.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                Spacer(Modifier.height(10.dp))
+                PreferenceRowTitle("Subtitle size")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        "${state.prefs.subtitleSizePercent}%",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Slider(
+                        value = state.prefs.subtitleSizePercent.toFloat(),
+                        onValueChange = { viewModel.setSubtitleSize(it.toInt()) },
+                        valueRange = 50f..200f,
+                        modifier = Modifier.weight(1f),
+                    )
+                }
+                Text(
+                    "The same size the player sheet offers while watching; it applies from the next playback.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SettingsSectionHeading("Downloads")
             // ── Downloads entry ────────────────────────────────────────
             if (features.downloads) {
                 SettingsCard(title = "Offline", icon = Icons.Default.Download) {
@@ -265,6 +411,62 @@ fun SettingsScreen(
                 }
             }
 
+            // ── Share kept files on the local network ──────────────────
+            // Gone, not disabled, when the operator switched sharing off: the row would otherwise
+            // read "on" while LanShareRunner has already closed the socket it promises to open.
+            if (features.sharing) {
+                SettingsCard(title = "Share on your network") {
+                    SwitchRow(
+                        checked = state.lanShareEnabled,
+                        onCheckedChange = viewModel::setLanShareEnabled,
+                        label = "Let devices on this network play kept files",
+                    )
+                    Text(
+                        lanShareStatusLine(state.lanShareStatus),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        "While this is on, anything on your local network can read your kept files.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            // ── Cache ──────────────────────────────────────────────────
+            SettingsCard(title = "Storage & cache") {
+                // The poster-image cache as a bar: what it holds now against the
+                // loader's own cap. Nothing here is a guess at the device's free
+                // space, and the kept videos are not in this number at all — they
+                // are listed and removed on the Media Vault screen.
+                val cacheBytes = state.posterCacheBytes
+                val cacheMax = state.posterCacheMaxBytes
+                if (cacheBytes != null && cacheMax != null) {
+                    Text(
+                        "Poster images: ${viewModel.formatCacheSize(cacheBytes)} of " +
+                            viewModel.formatCacheSize(cacheMax),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LinearProgressIndicator(
+                        progress = { cacheBytes.toFloat() / cacheMax.toFloat().coerceAtLeast(1f) },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+                Button(onClick = viewModel::clearImageCache, modifier = Modifier.fillMaxWidth()) {
+                    Text("Clear poster images")
+                }
+                Text(
+                    "This clears only the poster images the app has fetched; they come back as you " +
+                        "browse. Videos you kept for offline are not touched here — they are removed " +
+                        "individually on the Media Vault screen.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            SettingsSectionHeading("Account")
             // ── VIP membership ─────────────────────────────────────────
             SettingsCard(title = "VIP Membership", icon = Icons.Default.Star) {
                 // The plan summary: what this install actually has (VIP with its
@@ -307,29 +509,6 @@ fun SettingsScreen(
                 )
                 Button(onClick = onOpenVipUpgrade, modifier = Modifier.fillMaxWidth()) {
                     Text(if (state.planIsVip) "View membership" else "Upgrade to VIP")
-                }
-            }
-
-            // ── Share kept files on the local network ──────────────────
-            // Gone, not disabled, when the operator switched sharing off: the row would otherwise
-            // read "on" while LanShareRunner has already closed the socket it promises to open.
-            if (features.sharing) {
-                SettingsCard(title = "Share on your network") {
-                    SwitchRow(
-                        checked = state.lanShareEnabled,
-                        onCheckedChange = viewModel::setLanShareEnabled,
-                        label = "Let devices on this network play kept files",
-                    )
-                    Text(
-                        lanShareStatusLine(state.lanShareStatus),
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        "While this is on, anything on your local network can read your kept files.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
 
@@ -574,6 +753,7 @@ fun SettingsScreen(
                 }
             }
 
+            SettingsSectionHeading("About")
             // ── Help ───────────────────────────────────────────────────────
             // Read help first, write to us second: most questions are answered on
             // the Help screen, and the Contact form is for a person's own problem.
@@ -668,255 +848,6 @@ fun SettingsScreen(
                 )
             }
 
-            // ── Playback & Display preferences ─────────────────────────
-            // ── Languages ──────────────────────────────────────────────
-            // The ONE place that shows the languages in force. The Region
-            // card picks them, the player sheet changes them mid-title, and
-            // these chips change them here — all three write the same keys,
-            // and this card shows the effective values, so a viewer never has
-            // to guess which one won.
-            SettingsCard(title = "Languages") {
-                Text(
-                    "Audio: ${state.prefs.audioLanguage}. Subtitles: ${state.prefs.subtitleLang}.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Preferred audio language")
-                val audioOptions = UserPreferences.AUDIO_LANGUAGE_OPTIONS
-                ChipRow(audioOptions, audioOptions.indexOf(state.prefs.audioLanguage).coerceAtLeast(0)) { idx ->
-                    viewModel.setAudioLanguage(audioOptions[idx])
-                }
-                Text(
-                    "Half this catalog is dual audio. The player picks the track that says so; " +
-                        "when nothing matches, its own choice is left alone rather than guessing. " +
-                        "Saved on this device.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Default subtitle language")
-                ChipRow(subtitleOptions, subtitleOptions.indexOf(state.prefs.subtitleLang).coerceAtLeast(0)) { idx ->
-                    viewModel.setSubtitleLang(subtitleOptions[idx])
-                }
-
-                Spacer(Modifier.height(10.dp))
-                OutlinedButton(
-                    onClick = onOpenLanguages,
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Text("Open Languages screen")
-                }
-                Text(
-                    "Audio, subtitles and subtitle size in one place — the same choices " +
-                        "the Region card, these chips and the player sheet write.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            SettingsCard(title = "Playback & Display") {
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Image quality")
-                ChipRow(ImageQuality.entries.toList().map { it.label }, ImageQuality.entries.indexOf(state.prefs.imageQuality)) { idx ->
-                    viewModel.setImageQuality(ImageQuality.entries.toList()[idx])
-                }
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Poster loading on mobile data")
-                SwitchRow(
-                    checked = state.prefs.downloadOnMobileData,
-                    onCheckedChange = viewModel::setDownloadOnMobileData,
-                    label = "Load poster images over mobile data",
-                )
-                // A keep is gated by the Wi-Fi-only switch in the Offline card above,
-                // not by this one — this switch only ever governed the thumbnails.
-                Text(
-                    "A title you keep follows the Wi-Fi-only switch in the Offline card; this only " +
-                        "governs the thumbnails on the screens you browse.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Data Saver")
-                SwitchRow(
-                    checked = state.prefs.dataSaver,
-                    onCheckedChange = viewModel::setDataSaver,
-                    label = "Save mobile data while watching",
-                )
-                Text(
-                    "On mobile data, titles start at 480p and the server is asked for its data-saving copy. Wi-Fi is untouched, and you can still switch a title up in the player.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Offline keep duration")
-                ChipRow(KeepTtl.entries.map { it.label }, KeepTtl.entries.indexOf(state.prefs.keepTtl)) { idx ->
-                    viewModel.setKeepTtl(KeepTtl.entries.toList()[idx])
-                }
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Audio level")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        AudioBoost.labelFor(state.prefs.audioBoost),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Slider(
-                        value = state.prefs.audioBoost.coerceIn(0f, AudioBoostUi.MAX_OFFERED_LEVEL),
-                        onValueChange = viewModel::setAudioBoost,
-                        valueRange = 0f..AudioBoostUi.MAX_OFFERED_LEVEL,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                // Still worth saying: below the ceiling the boost is real, but it rides on the
-                // viewer's own system volume, so the caption states what is applied, not what
-                // was asked. The range above is already the range this build can honour.
-                Text(
-                    AudioBoostUi.honestSummary(state.prefs.audioBoost, 1f),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                // Wallpaper colour is a brand decision, not a user one: this brand file
-                // locks the palette (features.dynamic_color=false), and a switch that is
-                // overruled by the build it ships in is worse than no switch. It appears
-                // the moment a re-skin permits it.
-                if (Brand.dynamicColorAllowed) {
-                    Spacer(Modifier.height(10.dp))
-                    SwitchRow(
-                        checked = state.prefs.dynamicColor,
-                        onCheckedChange = viewModel::setDynamicColor,
-                        label = "Dynamic colour from wallpaper",
-                    )
-                }
-                Text(
-                    "Saved on this device, and applied the next time each one matters: image size " +
-                        "from the next poster, the keep duration from the next download.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            // ── Player defaults ──────────────────────────────────────
-            // The switches the player itself obeys (plan §5 step 10, P36): autoplay-next
-            // gates the auto-advance, autoplay-previews gates the Home hero, default
-            // quality is the rung a new title starts on when Play was Auto, and subtitle
-            // size is the same number the player sheet's slider writes.
-            SettingsCard(title = "Player", icon = Icons.Default.PlayArrow) {
-                SwitchRow(
-                    checked = state.prefs.autoplayNext,
-                    onCheckedChange = viewModel::setAutoplayNext,
-                    label = "Play the next episode automatically",
-                )
-                Text(
-                    "When this is off, an episode ends on the Next Episode button instead of moving on by itself.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                SwitchRow(
-                    checked = state.prefs.autoplayPreviews,
-                    onCheckedChange = viewModel::setAutoplayPreviews,
-                    label = "Auto-play previews on Home",
-                )
-                Text(
-                    "When this is off, the Home hero stays on the first poster until you swipe it.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                // PL-10: opt-in auto-enter picture-in-picture. Off by default: a
-                // window the viewer did not open is a window they did not ask for.
-                SwitchRow(
-                    checked = state.prefs.autoPip,
-                    onCheckedChange = viewModel::setAutoPip,
-                    label = "Auto picture-in-picture",
-                )
-                Text(
-                    "When this is on, leaving the player while a title is playing keeps it playing in a small window.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Default quality")
-                val qualityBands = listOf("auto", "480p", "720p", "1080p", "2160p")
-                val qualityLabels = listOf("Auto", "480p", "720p", "1080p", "4K")
-                ChipRow(qualityLabels, qualityBands.indexOf(state.prefs.defaultQuality).coerceAtLeast(0)) { idx ->
-                    viewModel.setDefaultQuality(qualityBands[idx])
-                }
-                Text(
-                    "The quality a new title starts on. Auto lets the player pick; a fixed choice starts there and stays.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
-                Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Subtitle size")
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Text(
-                        "${state.prefs.subtitleSizePercent}%",
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Slider(
-                        value = state.prefs.subtitleSizePercent.toFloat(),
-                        onValueChange = { viewModel.setSubtitleSize(it.toInt()) },
-                        valueRange = 50f..200f,
-                        modifier = Modifier.weight(1f),
-                    )
-                }
-                Text(
-                    "The same size the player sheet offers while watching; it applies from the next playback.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            // ── Cache ──────────────────────────────────────────────────
-            SettingsCard(title = "Storage & cache") {
-                // The poster-image cache as a bar: what it holds now against the
-                // loader's own cap. Nothing here is a guess at the device's free
-                // space, and the kept videos are not in this number at all — they
-                // are listed and removed on the Media Vault screen.
-                val cacheBytes = state.posterCacheBytes
-                val cacheMax = state.posterCacheMaxBytes
-                if (cacheBytes != null && cacheMax != null) {
-                    Text(
-                        "Poster images: ${viewModel.formatCacheSize(cacheBytes)} of " +
-                            viewModel.formatCacheSize(cacheMax),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    LinearProgressIndicator(
-                        progress = { cacheBytes.toFloat() / cacheMax.toFloat().coerceAtLeast(1f) },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
-                Button(onClick = viewModel::clearImageCache, modifier = Modifier.fillMaxWidth()) {
-                    Text("Clear poster images")
-                }
-                Text(
-                    "This clears only the poster images the app has fetched; they come back as you " +
-                        "browse. Videos you kept for offline are not touched here — they are removed " +
-                        "individually on the Media Vault screen.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
             // ── About / Disclaimer (accurate, no misleading claims) ─────
             SettingsCard(
                 title = Brand.copy("settings_about_heading", "About ${Brand.name}"),
@@ -925,9 +856,7 @@ fun SettingsScreen(
                 Text(
                     Brand.copy(
                         "settings_about_body",
-                        "${Brand.name} is a metadata catalog browser and source-link resolver for a catalog server "
-                            + "you operate or are authorized to use. It aggregates public catalog metadata and resolves "
-                            + "source links; it is not a hosting service and it does not display 18+ content.",
+                        "Radd Stream finds movies and shows from public catalogs and plays them in one place.",
                     ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -945,8 +874,96 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
+
+            // ── Advanced ───────────────────────────────────────────────
+            // Audit #51: the server switcher lives behind Advanced, so a
+            // casual tap can never disconnect the app from its catalog.
+            SettingsSectionHeading("Advanced")
+            TextButton(
+                onClick = { showAdvanced = !showAdvanced },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(if (showAdvanced) "Hide advanced settings" else "Show advanced settings")
+            }
+            if (showAdvanced) {
+                            // ── Server Connection ──────────────────────────────────────
+                            SettingsCard(title = "Catalog Server", icon = Icons.Default.Storage) {
+                                // The address is never printed here: a saved server reads as
+                                // "Connected", and the field opens only when the viewer asks
+                                // to change it. The test still fetches the counts for its own
+                                // message, which never includes the address either.
+                                if (!state.showServerField) {
+                                    Text(
+                                        text = if (state.serverUrl.isNotBlank()) "Connected to your catalog." else "No catalog server set.",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    Spacer(Modifier.height(10.dp))
+                                    OutlinedButton(onClick = viewModel::revealServerField, modifier = Modifier.fillMaxWidth()) {
+                                        Text("Change")
+                                    }
+                                } else {
+                                    OutlinedTextField(
+                                        value = state.serverUrl,
+                                        onValueChange = viewModel::onServerUrlChanged,
+                                        label = { Text("Server URL") },
+                                        placeholder = { Text("http://<host> — one address, any catalog you may use") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    state.testMessage?.let { msg ->
+                                        Text(
+                                            text = msg,
+                                            color = if (state.testIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                    Button(
+                                        onClick = viewModel::testAndSaveServer,
+                                        enabled = !state.isTesting && state.serverUrl.isNotBlank(),
+                                        // Robo run 5: the disabled text on this button read
+                                        // 2.98:1 — see DisabledButtonContentAlpha.
+                                        colors = ButtonDefaults.buttonColors(
+                                            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(
+                                                alpha = DisabledButtonContentAlpha,
+                                            ),
+                                        ),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    ) {
+                                        if (state.isTesting) {
+                                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = MaterialTheme.colorScheme.onPrimary)
+                                        } else {
+                                            Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.size(18.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text("Test & Save Connection")
+                                        }
+                                    }
+                                }
+
+                                // No counts here: works/releases/links are the operator's numbers,
+                                // not something a viewer needs to see on their own Settings screen.
+                                // The connection test above still fetches them for its own message.
+                            }
+
+            }
         }
     }
+}
+
+/**
+ * Audit #50: Settings is four sections, not a junk drawer of ~15 cards.
+ * One heading per section — Watching, Downloads, Account, About — plus
+ * Advanced for the server switcher.
+ */
+@Composable
+private fun SettingsSectionHeading(text: String) {
+    Text(
+        text,
+        style = MaterialTheme.typography.titleMedium,
+        fontWeight = FontWeight.SemiBold,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.padding(top = 8.dp),
+    )
 }
 
 @Composable
@@ -1064,14 +1081,29 @@ internal fun SwitchRow(checked: Boolean, onCheckedChange: (Boolean) -> Unit, lab
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ChipRow(options: List<String>, selectedIndex: Int, onSelect: (Int) -> Unit) {
-    Row(
+    // Audit #46: a plain Row clipped the longest chip ("Battery saver") on a
+    // narrow phone — and a chip label must never break mid-word. A FlowRow
+    // wraps the group to a second line instead, each chip sizing to its
+    // own words (the contact categories below already wrap for the same
+    // reason).
+    FlowRow(
         modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
         horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         options.forEachIndexed { idx, label ->
-            FilterChip(colors = raddFilterChipColors(), selected = idx == selectedIndex, onClick = { onSelect(idx) }, label = { Text(label) })
+            FilterChip(
+                colors = raddFilterChipColors(),
+                selected = idx == selectedIndex,
+                onClick = { onSelect(idx) },
+                label = { Text(label, maxLines = 1) },
+                // Audit #54: a FilterChip is 32 dp tall — the touch-target
+                // floor is 48 dp, so the chip itself carries it.
+                modifier = Modifier.heightIn(min = 48.dp),
+            )
         }
     }
 }
@@ -1213,6 +1245,10 @@ internal fun ContactDialog(contact: ContactUiState, viewModel: SettingsViewModel
                             selected = ContactUiState.CATEGORY_IDS[idx] == contact.category,
                             onClick = { viewModel.onContactCategoryChanged(ContactUiState.CATEGORY_IDS[idx]) },
                             label = { Text(label) },
+                            // Audit #54: a FilterChip is 32 dp tall — the
+                            // touch-target floor is 48 dp, so the chip itself
+                            // carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                 }

@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -80,6 +81,11 @@ fun RegionSelectionScreen(
         modifier = modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
+            // Audit #28: the one scrolling screen without a Scaffold — the
+            // bottom Skip sat behind the system nav bar on gesture
+            // navigation. The 28 dp vertical padding stays; the nav bar
+            // gets its own room on top of it.
+            .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 28.dp),
         // Session 121 (P-23): on a tall phone the content ended mid-screen and the
         // bottom ~40% sat empty and black. Short content is centred; tall content
@@ -98,7 +104,8 @@ fun RegionSelectionScreen(
         )
         Spacer(Modifier.height(6.dp))
         Text(
-            text = "Pick one — or skip and keep Desi. This only sets which audio and subtitle tracks the app prefers; the catalog is the same either way. You can change it later in Settings.",
+            // Audit #40: one line — what picking does, nothing else.
+            text = "Pick what you love. It only sets your audio and subtitles.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -169,16 +176,9 @@ fun RegionSelectionScreen(
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             )
         }
-        Spacer(Modifier.height(8.dp))
-        TextButton(
-            onClick = { viewModel.skipAndContinue(onContinue) },
-            enabled = !state.isSaving,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(48.dp),
-        ) {
-            Text("Skip for now")
-        }
+        // Audit #39: ONE Skip. There used to be a second "Skip for now" below
+        // this one; both did the same thing (save Desi, continue), so the
+        // second is deleted, not hidden.
         Spacer(Modifier.height(16.dp))
     }
 }

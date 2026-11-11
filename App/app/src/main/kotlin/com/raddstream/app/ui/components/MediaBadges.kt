@@ -334,7 +334,7 @@ fun LinkHealthChip(
     }
 }
 
-/** Generic capability chip (4K / HDR / audio languages / Streamable). */
+/** Generic capability chip (4K / HDR / audio languages / Available to watch). */
 @Composable
 fun CapabilityChip(text: String, modifier: Modifier = Modifier) {
     Pill(

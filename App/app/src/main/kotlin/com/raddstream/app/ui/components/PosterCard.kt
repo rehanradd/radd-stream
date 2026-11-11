@@ -91,7 +91,9 @@ fun PosterCard(
     val a11y = buildString {
         append(title)
         if (details.isNotBlank()) append(", ").append(details)
-        post.imdbRating?.takeIf { it.isNotBlank() }?.let { append(", rating ").append(it).append(" out of 10") }
+        post.imdbRating?.let { UserWords.displayRating(it) }?.let { rating ->
+            append(", rating ").append(rating).append(" out of 10")
+        }
         if (tileBadges.isNotEmpty()) append(", ").append(tileBadges.joinToString(", ") { it.a11y })
         if (progressLabel != null) append(", ").append(progressLabel)
     }
@@ -198,7 +200,7 @@ fun PosterCard(
                     }
                 }
 
-                post.imdbRating?.takeIf { it.isNotBlank() }?.let { rating ->
+                UserWords.displayRating(post.imdbRating)?.let { rating ->
                     // E-C1: the rating sat in tertiary directly on the artwork —
                     // 2.28:1 on white art, 1.73:1 on mid-grey. It now sits on a
                     // RaddArtScrim plate, like every other badge over artwork.
@@ -235,7 +237,7 @@ fun PosterCard(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 Text(
-                    text = title,
+                    text = UserWords.breakableTitle(title),
                     color = MaterialTheme.colorScheme.onSurface,
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,

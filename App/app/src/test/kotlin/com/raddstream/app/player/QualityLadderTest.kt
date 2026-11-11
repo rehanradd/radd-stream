@@ -237,4 +237,45 @@ class QualityLadderTest {
         // A season that shipped episode files has no season-level ladder to show.
         assertTrue(QualityLadder.forNumberedScope(groups.drop(0), 2, null).isEmpty)
     }
+
+    // Audit #32: the quality card leads with the viewer's own audio.
+
+    private fun option(band: String, audio: List<String>) = QualityOption(
+        band = band,
+        title = band,
+        streamId = "h-$band",
+        playUrl = null,
+        sizeBytes = null,
+        backupHandles = emptyList(),
+        playsHere = true,
+        resumable = false,
+        copies = 1,
+        audioLanguages = audio,
+    )
+
+    @Test
+    fun `desi region leads with hindi and urdu`() {
+        assertEquals(setOf("Hindi", "Urdu"), preferredAudioLanguages("desi_dubs"))
+        assertEquals(setOf("Hindi", "Urdu"), preferredAudioLanguages("  DESI_DUBS "))
+        assertEquals(emptySet<String>(), preferredAudioLanguages("international"))
+        assertEquals(emptySet<String>(), preferredAudioLanguages("east_asian"))
+        assertEquals(emptySet<String>(), preferredAudioLanguages(null))
+    }
+
+    @Test
+    fun `preferred audio rows lead and the rest keep their order`() {
+        val options = listOf(
+            option("2160p", listOf("English")),
+            option("1080p", listOf("Hindi", "English")),
+            option("720p", listOf("English")),
+            option("480p", listOf("Urdu")),
+        )
+        val ordered = preferredAudioFirst(options, preferredAudioLanguages("desi_dubs"))
+        assertEquals(listOf("1080p", "480p", "2160p", "720p"), ordered.map { it.band })
+        // No preferred audio on the wire: the server order stands.
+        assertEquals(options, preferredAudioFirst(options, emptySet()))
+        // Case is the catalog's, not the viewer's: "hindi" still counts.
+        assertTrue(carriesPreferredAudio(option("720p", listOf("hindi")), setOf("Hindi")))
+        assertFalse(carriesPreferredAudio(option("720p", listOf("English")), setOf("Hindi", "Urdu")))
+    }
 }

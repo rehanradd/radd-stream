@@ -27,6 +27,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
+import com.raddstream.app.player.carriesPreferredAudio
+import com.raddstream.app.player.preferredAudioFirst
 
 /**
  * The quality switch and the download card, in one row per rung — exactly one option
@@ -49,9 +51,19 @@ fun QualityRungCard(
     scopeTitle: String? = null,
     /** The tier each rung requires ("VIP" / "Standard"), from the ViewModel. */
     tierLabel: (QualityOption) -> String = { "Standard" },
+    /**
+     * The viewer's preferred audio languages (audit #32). The card leads
+     * with rows carrying them, and the first such row is labelled
+     * "your pick". Empty orders nothing.
+     */
+    preferredAudio: Set<String> = emptySet(),
     modifier: Modifier = Modifier,
 ) {
     if (ladder.isEmpty) return
+    // Display order only — the ladder's own order (and Auto's pointer)
+    // never moves; only the rows the viewer reads are re-led.
+    val ordered = preferredAudioFirst(ladder.options, preferredAudio)
+    var pickGiven = false
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -68,13 +80,16 @@ fun QualityRungCard(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        ladder.options.forEach { option ->
+        ordered.forEach { option ->
+            val isPick = !pickGiven && carriesPreferredAudio(option, preferredAudio)
+            if (isPick) pickGiven = true
             RungRow(
                 option = option,
                 isAuto = option.band == ladder.autoBand,
                 selected = selectedBand == option.band ||
                     (selectedBand == LadderForScope.AUTO && option.band == ladder.autoBand),
                 tier = tierLabel(option),
+                isPick = isPick,
                 onPlay = { onPlayRung(option) },
                 onKeep = { onKeepRung(option) },
             )
@@ -89,6 +104,8 @@ private fun RungRow(
     selected: Boolean,
     /** "VIP" or "Standard" — the tier this rung requires, never the viewer's. */
     tier: String,
+    /** Audit #32: the lead preferred-audio row — its facts line says "your pick". */
+    isPick: Boolean = false,
     onPlay: () -> Unit,
     onKeep: () -> Unit,
 ) {
@@ -143,13 +160,22 @@ private fun RungRow(
                     },
                 )
                 // The honest facts, each only when measured: the print's audio
-                // languages, the copy's stream shape, and resumability. A rung
-                // whose copy was never probed shows no category rather than a
-                // guessed one, and a rung with no stored languages shows no audio.
+                // languages, the copy's stream shape, and what an hour of it
+                // costs in data. A rung whose copy was never probed shows no
+                // category rather than a guessed one, and a rung with no stored
+                // languages shows no audio.
+                // Audit #31: "Resumable" is dropped — it is a server word, and
+                // the detail screen's capability chips no longer carry it either.
+                // Audit #11: the data estimate surfaces Data Saver's promise
+                // here on the detail screen, in the same words the player
+                // quality picker already uses.
                 val facts = listOfNotNull(
                     audioBadgeText(dualAudio = false, languages = option.audioLanguages),
                     option.streamCategory?.label,
-                    "Resumable".takeIf { option.resumable },
+                    UserWords.dataEstimateForQuality(option.band),
+                    // Audit #32: the lead preferred-audio row says so, in the
+                    // same line as its audio — "Hindi audio · your pick".
+                    "your pick".takeIf { isPick },
                 ).joinToString(" · ")
                 if (facts.isNotEmpty()) {
                     Text(

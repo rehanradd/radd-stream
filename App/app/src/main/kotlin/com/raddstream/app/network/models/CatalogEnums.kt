@@ -111,7 +111,7 @@ object WorkTypeLabel {
         if (WorkType.fromContentType(contentType, isAnimated) == WorkType.ANIME) return "Anime"
         val trimmed = contentType?.trim().orEmpty()
         return when (trimmed.lowercase()) {
-            "" -> null
+            "", "unknown" -> null
             "complete_season", "ongoing_season" -> "Season"
             "sport_event", "sports_event", "sport" -> "Sport event"
             "music_video" -> "Music video"

@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
@@ -27,6 +28,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -79,10 +81,13 @@ fun LiveTvScreen(
         },
     ) { contentPadding ->
         when {
-            state.isLoading -> PosterGridSkeleton(
+            state.isLoading && state.channels.isEmpty() -> PosterGridSkeleton(
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
-            state.error != null -> ErrorState(
+            // Audit #13: a down server with a saved list still shows the
+            // list (with a notice, below) — the error owns the screen only
+            // when there is nothing at all to show.
+            state.error != null && state.channels.isEmpty() -> ErrorState(
                 message = state.error ?: "Could not load live channels.",
                 onRetry = { viewModel.refresh() },
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
@@ -93,12 +98,34 @@ fun LiveTvScreen(
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
             else -> Column(Modifier.fillMaxSize().padding(contentPadding)) {
+                // Audit #13/#14: the cached list says so, in plain words,
+                // with one tap to retry — never a raw code, never a dead tab.
+                if (state.error != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = if (state.showingCached) {
+                                "Showing the last channel list — it may be out of date. ${state.error}"
+                            } else {
+                                state.error ?: "Could not load live channels."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { viewModel.refresh() }) { Text("Retry") }
+                    }
+                }
                 OutlinedTextField(
                     value = state.query,
                     onValueChange = viewModel::onQueryChanged,
-                    // E-L2: the label is the field's accessible name — a placeholder
-                    // alone does not label it.
-                    label = { Text("Search channels") },
+                    // Audit #33: a label AND a placeholder with the same text
+                    // leaves the hint floating above the typed text. The
+                    // placeholder alone vanishes on the first character; the
+                    // accessible name rides on semantics instead.
                     placeholder = { Text("Search channels") },
                     leadingIcon = {
                         Icon(
@@ -109,7 +136,8 @@ fun LiveTvScreen(
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                        .semantics { contentDescription = "Search channels" },
                 )
                 LazyRow(
                     modifier = Modifier
@@ -123,6 +151,8 @@ fun LiveTvScreen(
                             selected = state.selectedCategory == null,
                             onClick = { viewModel.onCategorySelected(null) },
                             label = { Text("All") },
+                            // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                     items(state.categories) { category ->
@@ -130,6 +160,8 @@ fun LiveTvScreen(
                             selected = state.selectedCategory == category,
                             onClick = { viewModel.onCategorySelected(category) },
                             label = { Text(categoryLabel(category)) },
+                            // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                 }

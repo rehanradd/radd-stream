@@ -97,7 +97,7 @@ internal fun humanizeErrorSummary(raw: String): String {
             "This device could not play this video."
         raw.contains("ERROR_CODE_IO_") ->
             "The video could not be loaded. Check your connection and try again."
-        else -> "Playback failed. Retry, or try another print."
+        else -> "Playback failed. Retry, or try another version."
     }
 }
 
