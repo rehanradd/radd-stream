@@ -221,6 +221,13 @@ fun VipUpgradeScreen(
                     message = state.loadError.orEmpty(),
                     onRetry = viewModel::loadConfig,
                 )
+                // Audit #8/#47: no payment account, no purchase flow. The
+                // screen says so honestly instead of showing a form that
+                // leads nowhere — no prices to pick, no accounts to copy,
+                // no transaction ID to submit. The loading and error states
+                // above are the only other branches, so this never fires
+                // while the config is still being read.
+                !state.hasPaymentHandle -> ComingSoonCard()
                 else -> {
                     PricingSection(state = state, onSelect = viewModel::selectPlan)
                     PaymentSection(
@@ -241,16 +248,15 @@ fun VipUpgradeScreen(
                     } else {
                         VerificationSection(state = state, viewModel = viewModel)
                     }
+                    Text(
+                        "Payment accounts are published by the operator of the connected catalog. " +
+                            "This app never sees your transfer: it sends only the reference you type " +
+                            "here, to that operator's verification queue.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
-
-            Text(
-                "Payment accounts are published by the operator of the connected catalog. " +
-                    "This app never sees your transfer: it sends only the reference you type " +
-                    "here, to that operator's verification queue.",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
         }
     }
 }
@@ -998,6 +1004,28 @@ private fun PlanCard(
 }
 
 @Composable
+internal fun ComingSoonCard() {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            SectionLabel("VIP is coming soon")
+            Text(
+                "There's no way to pay yet — the operator hasn't published a payment " +
+                    "account, so there's nowhere to send a payment. Check back later.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
 internal fun PaymentSection(state: VipUiState, onCopy: (label: String, value: String) -> Unit) {
     val amount = amountLabel(state.currency, state.priceFor(state.selectedPlan))
     Surface(
@@ -1058,7 +1086,7 @@ internal fun PaymentSection(state: VipUiState, onCopy: (label: String, value: St
 }
 
 @Composable
-private fun PaymentHandleRow(
+internal fun PaymentHandleRow(
     label: String,
     value: String,
     onCopy: (label: String, value: String) -> Unit,
@@ -1084,19 +1112,17 @@ private fun PaymentHandleRow(
                 },
             )
         }
-        IconButton(
-            onClick = { onCopy(label, value) },
-            enabled = value.isNotBlank(),
-        ) {
-            Icon(
-                Icons.Default.ContentCopy,
-                contentDescription = "Copy $label",
-                tint = if (value.isBlank()) {
-                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                } else {
-                    RaddSignalGold
-                },
-            )
+        // Audit #47: a row with no account shows no copy icon at all — a
+        // greyed-out icon next to "Not configured yet" reads as a broken
+        // button, and copying an empty value would paste nothing.
+        if (value.isNotBlank()) {
+            IconButton(onClick = { onCopy(label, value) }) {
+                Icon(
+                    Icons.Default.ContentCopy,
+                    contentDescription = "Copy $label",
+                    tint = RaddSignalGold,
+                )
+            }
         }
     }
 }
