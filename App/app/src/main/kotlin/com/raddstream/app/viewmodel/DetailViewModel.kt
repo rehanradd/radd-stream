@@ -482,7 +482,15 @@ class DetailViewModel @Inject constructor(
                 val detail = if (workId >= 0) {
                     catalogRepository.getWorkDetailV2(workId)
                 } else {
-                    catalogRepository.getPostDetail(postId)
+                    // Audit #1: warm the auto tier on detail open and name
+                    // the preferred audio, so the Play press answers from
+                    // the resolved cache and the ladder leads with the
+                    // viewer's language.
+                    catalogRepository.getPostDetail(
+                        postId,
+                        warm = true,
+                        audio = detailWarmAudio(userRegion),
+                    )
                 }
                 if (detail != null) {
                     // Wide art only: a portrait poster cropped into a 16:9 still looks broken,

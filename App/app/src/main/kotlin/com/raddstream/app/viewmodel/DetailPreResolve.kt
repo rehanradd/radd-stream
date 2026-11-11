@@ -1,5 +1,18 @@
 package com.raddstream.app.viewmodel
 
+import com.raddstream.app.data.RegionChoices
+
+/**
+ * Audit #1 — the audio word the detail load sends with `?warm=1`: the
+ * region card's own promise, or null when the region has no stance (an
+ * East Asian viewer wants the original track — naming another language
+ * would demote the track they asked for). A null is omitted from the
+ * query, never sent as an empty value; an unknown region falls back to
+ * the default card, never to a guess.
+ */
+internal fun detailWarmAudio(region: String): String? =
+    RegionChoices.byId(region).audioLanguage
+
 /**
  * Gap A2 — pre-resolve the top link on detail open, so pressing Play does not
  * pay the `playV2` round trip first.

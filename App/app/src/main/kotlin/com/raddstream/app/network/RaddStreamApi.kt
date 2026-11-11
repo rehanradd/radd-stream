@@ -229,10 +229,23 @@ interface RaddStreamApi {
         @Query("redirect") redirect: String = "0",
     ): WireResolveResponse
 
-    /** GET /api/v1/posts/{id} — post details with all releases and sources. */
+    /**
+     * GET /api/v1/posts/{id} — post details with all releases and sources.
+     *
+     * `warm=1` asks the server to pre-resolve the auto tier's link in the
+     * background while the viewer is still on the detail screen, so the Play
+     * press answers from the resolved cache (~0.02 s) instead of paying a
+     * 5–11 s live resolve (audit #1). `audio` names the viewer's preferred
+     * audio language (from the region they picked); the server orders the
+     * ladder's preferred-audio tiers first. Both are optional — a null is
+     * omitted from the query, so callers that do not warm (the compliance
+     * probe) send exactly the old request.
+     */
     @GET("api/v1/posts/{id}")
     suspend fun getPostDetail(
         @Path("id") id: Int,
+        @Query("warm") warm: String? = null,
+        @Query("audio") audio: String? = null,
     ): PostDetailResponse
 
     /**

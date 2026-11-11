@@ -136,8 +136,22 @@ class CatalogRepository @Inject constructor(
         }.getOrNull()
     }
 
-    suspend fun getPostDetail(postId: Int): PostDetail? {
-        val response = apiProvider.current().getPostDetail(postId)
+    /**
+     * GET /api/v1/posts/{id} — one title's detail. Null on ANY failure.
+     *
+     * `warm` asks the server to pre-resolve the auto tier's link while the
+     * viewer is still on the detail screen (audit #1: the Play press then
+     * answers from the resolved cache instead of paying a 5–11 s live
+     * resolve). `audio` names the preferred audio language; the server
+     * orders preferred-audio tiers first. Both default off, so the
+     * compliance probe and the player-side re-read send the old request.
+     */
+    suspend fun getPostDetail(postId: Int, warm: Boolean = false, audio: String? = null): PostDetail? {
+        val response = apiProvider.current().getPostDetail(
+            postId,
+            warm = if (warm) "1" else null,
+            audio = audio?.takeIf { it.isNotBlank() },
+        )
         if (response.success && response.data != null) {
             return response.data
         }
@@ -248,7 +262,11 @@ class CatalogRepository @Inject constructor(
                     .results.firstOrNull()
                 if (post != null && post.id > 0) {
                     v1PostId = post.id
-                    val detail = apiProvider.current().getPostDetail(post.id)
+                    // Warm the auto tier too: a v2 title's Play press pays
+                    // the same live resolve, and this is the only v1 detail
+                    // call on this path. Audio is not sent — the tiers from
+                    // this call are never shown, only cast + season art.
+                    val detail = apiProvider.current().getPostDetail(post.id, warm = "1")
                     if (detail.success && detail.data != null) {
                         castNames = detail.data.castNames
                         seasonArtwork = detail.data.seasonArtwork
