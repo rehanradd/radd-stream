@@ -5,6 +5,14 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-11 — Muse [A3-SUBTITLE-TRACKS]: subtitle tracks in the v2 bundle
+  (gap A3 / G-1). The 125,686 live subtitle rows projected into `cat_links`
+  as cloud_page rows and polluted the play ladder; now they project into
+  `cat_subtitles` and every link view carries `tracks` (audio from the
+  release descriptor, subtitles via our own `GET /api/v2/subtitle/{handle}`
+  302). Tests: subtitle_tracks 12 (new, in CI), api_v2 75, docs_invariants 22,
+  ci_manifest 10 — all OK solo. App follow-up (WirePlayCandidate mapping)
+  and the nginx allow-list entry are still open; no live write made here.
 - 2026-11-11 — Muse [A1-POSTER-RERESOLVE]: `--poster-url` scope for
   `backfill_tmdb.py` so a `--force` run re-resolves only the 13,234 posts
   stuck on the Masterplan poster (one 2026-10-24 bad-import window, not an
