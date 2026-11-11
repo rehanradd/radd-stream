@@ -99,6 +99,7 @@ import com.raddstream.app.ui.components.HdrBadge
 import com.raddstream.app.ui.components.ImageFallbackCard
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.Pill
+import com.raddstream.app.ui.components.UserWords
 import com.raddstream.app.ui.components.PrintQualityBadge
 import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.QualityRungCard
@@ -575,7 +576,7 @@ private fun DetailContent(
 
         val synopsis = post.synopsis?.takeIf { it.isNotBlank() }
         if (synopsis != null) {
-            item { ExpandableSynopsis(text = synopsis) }
+            item { ExpandableSynopsis(text = UserWords.stripSectionMarkers(synopsis)) }
         }
 
         // Cast, from the catalog's own scraped list — only what the server
@@ -708,7 +709,7 @@ private fun PosterHeader(
             // it, so the big title carries its own spoken name.
             val titleText = post.cleanTitle?.takeIf(String::isNotBlank) ?: post.title
             Text(
-                text = titleText,
+                text = UserWords.breakableTitle(titleText),
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
@@ -732,7 +733,7 @@ private fun PosterHeader(
             includedLine?.let { line ->
                 Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
-            post.imdbRating?.takeIf(String::isNotBlank)?.let { rating ->
+            UserWords.displayRating(post.imdbRating)?.let { rating ->
                 Pill(text = "★ $rating IMDb", backgroundColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer)
             }
             val genres = post.genreList
