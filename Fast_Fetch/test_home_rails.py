@@ -466,5 +466,116 @@ class HttpTests(Fixture):
         self.assertEqual(genres["animation"], 0)
 
 
+class LadderGatingTests(unittest.TestCase):
+    """Audit #1/#32: the ladder Play follows — gated tiers last, audio first.
+
+    `_option_groups` is tested directly with projected link dicts, no DB:
+    the 1080p tier is premium, so a free viewer must never start on it.
+    """
+
+    def _link(self, stream_id, kind="direct"):
+        return {"stream_id": stream_id, "kind": kind, "playable": True,
+                "status": "active", "is_resumable": True,
+                "is_temporary": False, "file_size_bytes": 2_000_000_000,
+                "mime_type": "video/mp4"}
+
+    def _release(self, quality, languages, stream_id):
+        return ({"season": "", "episode": "", "quality": quality,
+                 "codec": "x264", "size": "1.5GB",
+                 "release_title": "Dune %s" % quality,
+                 "languages": languages},
+                {"season": "", "episode": "", "quality": quality,
+                 "codec": "x264", "size": "1.5GB",
+                 "release_title": "Dune %s" % quality,
+                 "languages": languages,
+                 "sources": [self._link(stream_id)]})
+
+    def _groups(self, **kwargs):
+        rels, projected = zip(*[
+            self._release("1080p", "Telugu", "h1080"),
+            self._release("720p", "Hindi", "h720"),
+            self._release("480p", "Telugu", "h480"),
+        ])
+        return viewer._option_groups(list(rels), list(projected), **kwargs)
+
+    def test_free_user_starts_on_720p_not_1080p(self):
+        groups = self._groups()
+        tiers_out = groups[0]["tiers"]
+        self.assertEqual([t["band"] for t in tiers_out],
+                         ["720p", "480p", "1080p"])
+        self.assertTrue(tiers_out[-1]["gated"])
+        self.assertFalse(tiers_out[0]["gated"])
+        self.assertEqual(groups[0]["auto"]["band"], "720p")
+        self.assertEqual(groups[0]["auto"]["stream_id"], "h720")
+
+    def test_vip_user_starts_on_1080p(self):
+        groups = self._groups(vip=True)
+        self.assertEqual([t["band"] for t in groups[0]["tiers"]],
+                         ["1080p", "720p", "480p"])
+        self.assertFalse(any(t["gated"] for t in groups[0]["tiers"]))
+        self.assertEqual(groups[0]["auto"]["band"], "1080p")
+
+    def test_preferred_audio_wins_within_free_tiers(self):
+        groups = self._groups(audio_languages=("Hindi",))
+        tiers_out = groups[0]["tiers"]
+        self.assertEqual(groups[0]["auto"]["band"], "720p")
+        self.assertTrue(tiers_out[0]["preferred_audio"])
+        self.assertFalse(tiers_out[1]["preferred_audio"])
+
+    def test_preferred_audio_wins_for_vip_too(self):
+        groups = self._groups(vip=True, audio_languages=("Hindi",))
+        self.assertEqual(groups[0]["auto"]["band"], "720p")
+        self.assertEqual([t["band"] for t in groups[0]["tiers"]],
+                         ["720p", "1080p", "480p"])
+
+    def test_audio_languages_travel_on_the_tier(self):
+        groups = self._groups()
+        by_band = {t["band"]: t for t in groups[0]["tiers"]}
+        self.assertEqual(by_band["720p"]["audio_languages"], ["Hindi"])
+        self.assertEqual(by_band["1080p"]["audio_languages"], ["Telugu"])
+
+
+class DetailWarmTests(Fixture):
+    """Audit #1: `?warm=1` reports warm/warming without slowing detail."""
+
+    def test_warm_reports_warming_and_starts_the_resolve(self):
+        with (mock.patch.object(viewer, "_preresolve_is_warm",
+                                return_value=False),
+              mock.patch.object(viewer, "_start_preresolve") as start):
+            detail = viewer.api_v1_get_post_detail(self.seed_id, warm=True)
+        self.assertEqual(detail["preresolve"]["status"], "warming")
+        self.assertEqual(detail["preresolve"]["band"], "720p")
+        start.assert_called_once()
+
+    def test_warm_reports_warm_when_the_cache_has_it(self):
+        with (mock.patch.object(viewer, "_preresolve_is_warm",
+                                return_value=True),
+              mock.patch.object(viewer, "_start_preresolve") as start):
+            detail = viewer.api_v1_get_post_detail(self.seed_id, warm=True)
+        self.assertEqual(detail["preresolve"]["status"], "warm")
+        start.assert_not_called()
+
+    def test_no_warm_flag_means_no_preresolve_key(self):
+        detail = viewer.api_v1_get_post_detail(self.seed_id)
+        self.assertNotIn("preresolve", detail)
+
+    def test_preresolve_thread_calls_the_resolver(self):
+        calls = []
+        with mock.patch.object(viewer, "_resolve_and_bank",
+                               side_effect=calls.append):
+            thread = viewer._start_preresolve(4242)
+            thread.join(timeout=5)
+        self.assertEqual(calls, [4242])
+
+    def test_stream_errors_carry_plain_language(self):
+        self.assertEqual(
+            viewer._plain_stream_error("no_playable_source")["message"],
+            "That copy didn't play. Try another quality.")
+        self.assertIn(
+            "VIP",
+            viewer._plain_stream_error(
+                "premium_quality_requires_vip")["message"])
+
+
 if __name__ == "__main__":
     unittest.main()

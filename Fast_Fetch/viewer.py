@@ -3801,7 +3801,9 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
 
 
 def api_v1_get_post_detail(post_id: int, full: bool = False,
-                           base_url: str = "", ladder: bool = True) -> dict | None:
+                           base_url: str = "", ladder: bool = True,
+                           warm: bool = False, vip: bool = False,
+                           audio: str = "") -> dict | None:
     _ensure_schema()
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -3877,14 +3879,22 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
                 r_dict["sources"] = [link_view(s, base_url) for s in sources]
             rel_list.append(r_dict)
         if not full:
-            p_dict["option_groups"] = (_option_groups(releases, rel_list)
-                                       if ladder else [])
+            p_dict["option_groups"] = (
+                _option_groups(releases, rel_list, vip=vip,
+                               audio_languages=_split_audio_param(audio))
+                if ladder else [])
         p_dict["season_artwork"] = _season_artwork(conn, post_id)
         p_dict["releases"] = rel_list
+        if warm and not full:
+            # The detail screen opens long before Play is pressed: warming
+            # the auto tier now means the press answers from the resolved
+            # cache instead of paying a live 5–11 s resolve under the player.
+            p_dict["preresolve"] = _preresolve_for_detail(p_dict)
         return p_dict
 
 
-def _option_groups(releases, rel_list) -> list:
+def _option_groups(releases, rel_list, *, vip: bool = False,
+                   audio_languages=()) -> list:
     """One best and fastest copy per quality band, for the player and the card.
 
     The ledger holds up to six copies of the same print on six servers; a viewer
@@ -3894,10 +3904,24 @@ def _option_groups(releases, rel_list) -> list:
     and never a field, so the winner is chosen without publishing who serves it.
 
     Releases are grouped by their own season/episode scope: a series must not
-    offer S02E05's 1080p copy when the user is playing S01E01."""
+    offer S02E05's 1080p copy when the user is playing S01E01.
+
+    Audit #1/#32 — the ladder the app's Play button follows:
+    * ``gated``: a 1080p/2160p tier is premium. A free viewer who presses it
+      gets a 402 and a stuck spinner, so gated tiers sort AFTER every free
+      tier and ``auto`` never points at one — the player starts at the best
+      free copy it can actually play. The tier still travels (marked), so
+      the quality switch can offer the VIP upsell instead of hiding the band.
+    * ``preferred_audio``: when the caller names its preferred audio (the
+      ``?audio=`` detail parameter, from the region the user picked),
+      tiers carrying it sort first within their gate class and ``auto``
+      prefers them — a Desi viewer starts on a Hindi print, not a Telugu one.
+    """
     scopes: dict = {}
     for rel, r_dict in zip(releases, rel_list):
         scopes.setdefault((rel["season"], rel["episode"]), []).append(r_dict)
+    wanted_audio = {str(a).strip().lower()
+                    for a in (audio_languages or []) if str(a).strip()}
     groups = []
     for (season, episode), prints in scopes.items():
         ladders = []
@@ -3912,6 +3936,35 @@ def _option_groups(releases, rel_list) -> list:
         merged = tiers.merge(ladders)
         if merged["tiers"]:
             for tier in merged["tiers"]:
+                tier["gated"] = bool(
+                    tier["band"] in GATED_QUALITY_BANDS and not vip)
+                tier["preferred_audio"] = bool(
+                    wanted_audio and any(
+                        str(lang).strip().lower() in wanted_audio
+                        for lang in tier.get("audio_languages") or []))
+            # The switch order is what a naive "first tier" client presses:
+            # free before gated, preferred audio first inside each class,
+            # best band first inside that.
+            merged["tiers"].sort(key=lambda t: (
+                bool(t.get("gated")), not bool(t.get("preferred_audio")),
+                tiers.band_rank(t["band"])))
+            # `auto` is the tier the player should start at: the best
+            # playable tier the caller's plan actually lets through, in
+            # their preferred audio when one exists. Recomputed here, on
+            # the raw links, because the projection below drops the
+            # evidence keys `tiers.score` reads.
+            playable = [t for t in merged["tiers"]
+                        if t.get("playable") and not t.get("gated")]
+            if playable:
+                best = max(playable, key=lambda t: (
+                    bool(t.get("preferred_audio")),
+                    tiers.score(t["link"], t["band"]),
+                    -tiers.band_rank(t["band"])))
+                merged["auto"] = {"band": best["band"], "reason": "best",
+                                  "stream_id": (best["link"] or {}).get("stream_id")}
+            else:
+                merged["auto"] = None
+            for tier in merged["tiers"]:
                 backups = tier.pop("backups", None) or []
                 if tier["link"] is not None:
                     tier["link"] = redact.project(tier["link"], "ladder_link")
@@ -3925,6 +3978,95 @@ def _option_groups(releases, rel_list) -> list:
     groups.sort(key=lambda group: tiers.scope_sort_key(group["season"],
                                                        group["episode"]))
     return groups
+
+
+#: Plain-language words for the stream/download failures a player can hit.
+#: The error code stays machine-readable; the message is what the app shows
+#: instead of a raw HTTP status (audit #13/#14: never a bare code on screen).
+_STREAM_ERROR_MESSAGES = {
+    "premium_quality_requires_vip":
+        "This quality needs VIP. A lower quality is included — try that instead.",
+    "no_playable_source":
+        "That copy didn't play. Try another quality.",
+}
+
+
+def _plain_stream_error(error: str) -> dict:
+    return {"success": False, "error": error,
+            "message": _STREAM_ERROR_MESSAGES.get(
+                error, "That copy didn't play. Try another quality.")}
+
+
+def _preresolve_is_warm(source_id: int) -> bool:
+    """True when the resolved cache already holds a servable answer."""
+    try:
+        import resolved_cache
+        with get_db() as conn:
+            return resolved_cache.lookup_cache(conn, int(source_id),
+                                               want="watch") is not None
+    except Exception:      # noqa: BLE001 — a cache fault is "not warm", never an error
+        return False
+
+
+def _resolve_and_bank(source_id: int) -> None:
+    """Resolve one link and bank it, for the background pre-resolve.
+
+    Never raises: a warm-up that fails leaves the cache as it was, and the
+    Play press pays the live resolve exactly as it would have without one.
+    """
+    try:
+        import fast_fetch
+        import resolved_cache
+        res = fast_fetch.resolve_live_source(int(source_id), want="watch")
+        if res.get("success") and res.get("url") and not res.get("stale"):
+            with get_db() as conn:
+                resolved_cache.record_resolved_cache(conn, int(source_id), res)
+    except Exception:      # noqa: BLE001 — see _preresolve_is_warm
+        pass
+
+
+def _start_preresolve(source_id: int):
+    """Warm one link in a daemon thread; returns the thread for tests."""
+    import threading
+    thread = threading.Thread(target=_resolve_and_bank, args=(int(source_id),),
+                              daemon=True, name="preresolve")
+    thread.start()
+    return thread
+
+
+def _split_audio_param(value) -> tuple:
+    """``?audio=Hindi,English`` -> ``("Hindi", "English")`` (empty -> ())."""
+    if not value:
+        return ()
+    return tuple(part.strip() for part in str(value).split(",") if part.strip())
+
+
+def _preresolve_for_detail(p_dict: dict) -> dict:
+    """Warm the auto tier's link in the background; report warm/warming.
+
+    The detail screen opens long before the user presses Play: resolving
+    the top link now means the press answers from the resolved cache
+    (~0.02 s measured) instead of paying a 5–11 s live resolve while the
+    player spins (audit #1). One link only — the auto tier — so a detail
+    open costs at most one background resolve on a one-vCPU box.
+    """
+    for group in p_dict.get("option_groups") or []:
+        auto = (group or {}).get("auto") or {}
+        stream_id = auto.get("stream_id")
+        if not stream_id:
+            continue
+        try:
+            source_id = redact.parse_token(stream_id, signing_secret(),
+                                           signed_only=True)
+        except Exception:      # noqa: BLE001 — an unparseable handle is unavailable
+            return {"status": "unavailable"}
+        if not source_id:
+            return {"status": "unavailable"}
+        if _preresolve_is_warm(int(source_id)):
+            return {"status": "warm", "band": auto.get("band")}
+        _start_preresolve(int(source_id))
+        return {"status": "warming", "band": auto.get("band")}
+    return {"status": "unavailable"}
 
 
 def api_v1_rules() -> dict:
@@ -4836,7 +4978,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[3].isdigit():
                 detail = api_v1_get_post_detail(
                     int(parts[3]), full=full, base_url=base_url,
-                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"))
+                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"),
+                    # Audit #1: `?warm=1` resolves the auto tier while the
+                    # viewer reads the detail screen, so Play answers from
+                    # cache. `?audio=` orders the ladder by preferred audio.
+                    warm=query_params.get("warm", ["0"])[0] in ("1", "true"),
+                    vip=request_is_vip(self.headers, query_params),
+                    audio=query_params.get("audio", [""])[0])
                 if detail:
                     self.send_json({"success": True, "data": detail})
                 else:
@@ -4940,8 +5088,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # design, and unlike the adult rule a paywall boundary has no
                 # reason to blind the person who owns the ledger. 402 says
                 # "this is purchasable", which is what the app's VIP screen
-                # listens for; the body names no hoster and no URL.
-                self.send_json({"success": False, "error": blocked}, status=402)
+                # listens for; the body names no hoster and no URL. The
+                # message is plain language for the player (audit #14).
+                self.send_json(_plain_stream_error(blocked), status=402)
                 return
 
             import fast_fetch
@@ -5074,8 +5223,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     else:
                         self.send_json(res)
             else:
-                self.send_json(res if full else {
-                    "success": False, "error": "no_playable_source"}, status=404)
+                self.send_json(res if full else _plain_stream_error(
+                    "no_playable_source"), status=404)
 
         elif path == "/api/v1/download":
             source_ref = query_params.get("id", [""])[0]
@@ -5256,7 +5405,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     code = res.get("code") or res.get("error")
                     if code not in ("not_found", "no_playable_source"):
                         code = "no_playable_source"
-                    self.send_json({"success": False, "error": code}, status=404)
+                    self.send_json(
+                        _plain_stream_error(code)
+                        if code == "no_playable_source" else
+                        {"success": False, "error": code}, status=404)
 
         elif path == "/api/v1/art":
             self._serve_art(query_params, full=full)
