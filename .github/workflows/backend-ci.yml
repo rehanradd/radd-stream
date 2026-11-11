@@ -192,6 +192,7 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #     EXCLUDED: importers/test_filmyhit_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_filmywap_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_import_humtv.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
+#     EXCLUDED: importers/test_import_fzmovies.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_import_wp_family.py  — per-site parser family (captured Dooplay/WP page shapes, offline fixtures)
 #     EXCLUDED: importers/test_kisskh_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
 #     EXCLUDED: importers/test_kuttymovies_import.py  — per-site parser; fixture layout follows the site, run by that site's own agent at edit time
