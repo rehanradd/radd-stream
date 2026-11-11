@@ -2939,6 +2939,22 @@ def _subtitled_posts(conn, post_ids) -> dict:
             languages=row["languages"],
         )
         flags[pid] = bool((described.get("subtitles") or {}).get("available"))
+    # Gap A3: a print with stored subtitle tracks is subtitled even when
+    # no label claims it — the tracks are the ground truth, the label is
+    # the fallback. One indexed join; a missing table (a database that
+    # never stored a track) is not an error.
+    try:
+        tracked = conn.execute(
+            "SELECT DISTINCT r.post_id FROM releases r"
+            " JOIN download_sources s ON s.release_id = r.id"
+            " JOIN subtitle_tracks t ON t.link_id = s.id"
+            f" WHERE r.post_id IN ({marks})",
+            list(post_ids),
+        ).fetchall()
+    except sqlite3.OperationalError:
+        tracked = []
+    for row in tracked:
+        flags[int(row["post_id"])] = True
     return flags
 
 

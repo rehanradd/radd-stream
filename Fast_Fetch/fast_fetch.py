@@ -59,6 +59,15 @@ try:
 except ImportError:  # pragma: no cover - legacy tree without the classifier
     _hc = None
 
+# Subtitle tracks (Gap A3): the resolver's subtitle URLs, persisted per
+# ledger link so the next bundle carries them as `tracks[]`. Same guarded
+# import as the classifier: if the module is absent the engine still
+# runs, and the resolve hook below simply stores nothing.
+try:
+    import subtitle_tracks as _subtitle_tracks
+except ImportError:  # pragma: no cover - legacy tree without subtitle_tracks
+    _subtitle_tracks = None
+
 
 def _tls_context(*targets):
     """Every HTTPS request in this module asks the ONE TLS policy about its peer.
@@ -7532,6 +7541,14 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 WHERE id = ?
             """, (fresh_url, fresh_temp, *(value for _column, value in measured),
                   src["id"]))
+            # Gap A3: persist the subtitles the resolver just unwrapped,
+            # keyed by this ledger link — the next bundle for the release
+            # then carries them as `tracks[]`. Same transaction as the URL
+            # update, and best-effort: a subtitle write never changes the
+            # resolve answer (`record_resolver_subtitles` never raises).
+            if _subtitle_tracks is not None and embed_verdict is not None:
+                _subtitle_tracks.record_resolver_subtitles(
+                    conn, int(src["id"]), embed_verdict)
         # Ask the URL itself how long it lives, instead of assuming. A fresh token
         # whose host declares no freshness window keeps `expires_at` NULL, and the
         # next call then falls back to the documented 6-hour temporary-link

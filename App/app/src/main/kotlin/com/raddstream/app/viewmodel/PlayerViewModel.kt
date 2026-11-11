@@ -22,6 +22,7 @@ import com.raddstream.app.player.AbRepeat
 import com.raddstream.app.player.AspectMode
 import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.player.AudioTrackPolicy
+import com.raddstream.app.player.AudioTrackRow
 import com.raddstream.app.player.AutoplayCountdown
 import com.raddstream.app.player.BingePrefetchPlanner
 import com.raddstream.app.player.BingePreloadDecision
@@ -68,6 +69,7 @@ import com.raddstream.app.player.SubtitleTrackDecision
 import com.raddstream.app.player.SubtitleTrackPolicy
 import com.raddstream.app.player.SubtitleUiSettings
 import com.raddstream.app.player.TrackUiOption
+import com.raddstream.app.player.TracksInfo
 import com.raddstream.app.player.ViewMode
 import com.raddstream.app.player.abRepeatWithA
 import com.raddstream.app.player.abRepeatWithB
@@ -311,6 +313,8 @@ class PlayerViewModel @Inject constructor(
 
     /** Externally parsed subtitle (custom-render path). Null → native rendering only. */
     private var customSubtitleFile: SubtitleFile? = null
+    /** True when the loaded overlay file came from the bundle (Gap A3), not from the viewer. */
+    private var customSubtitleFromBundle: Boolean = false
 
     init {
         connectController()
@@ -555,6 +559,7 @@ class PlayerViewModel @Inject constructor(
             // at the same moment, for the same reason, through its own fire-once gate.
             applyPreferredAudioTrack()
             applyPreferredSubtitleTrack()
+            applyBundleCustomSubtitle()
         }
 
         override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) {
@@ -810,6 +815,7 @@ class PlayerViewModel @Inject constructor(
                                                        backupHandles = store.peekFailover(streamId))
                 .withStagedTarget(streamId)
                 .withStagedCoverage(streamId)
+                .withStagedTracks(streamId)
             beginBundle(bundle, title, resumeKey = streamId, overrideMs = startOverrideMs)
         }
     }
@@ -846,6 +852,19 @@ class PlayerViewModel @Inject constructor(
         val coverage = store.peekCoverage(streamId) ?: return this
         val first = renditions.firstOrNull() ?: return this
         return copy(renditions = listOf(first.copy(coverage = coverage)) + renditions.drop(1))
+    }
+
+    /**
+     * The subtitle tracks the detail screen staged for this handle (Gap A3).
+     * A handle launched the old way has none staged, so the rendition keeps
+     * the default empty tracks — the subtitle sheet simply offers nothing
+     * extra, exactly as before.
+     */
+    private fun PlaybackBundle.withStagedTracks(streamId: String): PlaybackBundle {
+        val tracks = store.peekTracks(streamId)
+        if (tracks.isEmpty()) return this
+        val first = renditions.firstOrNull() ?: return this
+        return copy(renditions = listOf(first.copy(tracks = TracksInfo(subtitles = tracks))) + renditions.drop(1))
     }
 
     /**
@@ -1135,6 +1154,11 @@ class PlayerViewModel @Inject constructor(
         }
         store.installBundle(bundle)
         activeResumeKey = resumeKey
+        // Gap A3: the bundle's own SRT/VTT subtitle loads into the overlay
+        // here (and again when the tracks report, below) — the preference
+        // may not be in state yet at install time, and the fire-once gate
+        // makes the second call a no-op when the first already ran.
+        applyBundleCustomSubtitle()
         // D-35 / PL-11: publish the title's display metadata and the series scope for
         // this bundle — the loading state shows the staged poster, the More sheet
         // shows its series rows only for a series scope. A deep link or a local file
@@ -1968,6 +1992,15 @@ class PlayerViewModel @Inject constructor(
     private var subtitleHonouredFor: Pair<String, String?>? = null
 
     /**
+     * The (playback, preference) pair the bundle's own custom subtitle
+     * already honoured — the same fire-once discipline as
+     * [subtitleHonouredFor], on its own gate, so loading the overlay file
+     * never spends the native row's gate and a sheet selection never
+     * re-fetches under the viewer.
+     */
+    private var bundleCustomSubtitleHonouredFor: Pair<String, String?>? = null
+
+    /**
      * Apply the Settings subtitle language to the text tracks the player just reported.
      *
      * [SubtitleTrackPolicy.decide] makes the three-way call and goes through the same
@@ -1992,6 +2025,60 @@ class PlayerViewModel @Inject constructor(
                 val option = state.subtitleTracks.firstOrNull { it.id == decision.id } ?: return
                 selectSubtitleTrack(option)
             }
+        }
+    }
+
+    /**
+     * Load the bundle's own custom-rendered (SRT/VTT) subtitle track into
+     * the overlay (Gap A3). Native tracks reach the Media3 picker through
+     * the factory; SRT/VTT are filtered out there by design — the overlay
+     * renders them — so without this the bundle's most common subtitle
+     * format would arrive and then never display. The pick follows the
+     * same policy as the native row ([SubtitleTrackPolicy.decide]): the
+     * viewer's language, and nothing when it matches none — never a
+     * guess, and Off loads nothing. Fire-once per bundle + preference on
+     * its own gate, so a failover hop or a sheet selection never
+     * re-fetches under the viewer. A new bundle retires the previous
+     * bundle's file; a viewer-picked SAF file is theirs and stays.
+     */
+    private fun applyBundleCustomSubtitle() {
+        val bundle = store.bundle.value ?: return
+        val rendition = store.activeRendition() ?: bundle.renditions.firstOrNull() ?: return
+        val custom = rendition.tracks.subtitles.filter {
+            PlaybackMediaItemFactory.isCustomRenderable(it.format) && !it.url.isNullOrBlank()
+        }
+        val state = _ui.value
+        val key = bingeBundleKey(bundle).orEmpty() to state.preferredSubtitleLanguage
+        if (key == bundleCustomSubtitleHonouredFor) return
+        bundleCustomSubtitleHonouredFor = key
+        if (customSubtitleFromBundle) {
+            customSubtitleFile = null
+            customSubtitleFromBundle = false
+            _ui.update { it.copy(customSubtitleLoaded = null) }
+        }
+        if (custom.isEmpty()) return
+        val rows = custom.mapIndexed { index, track ->
+            AudioTrackRow(
+                id = "bundle-sub-$index",
+                language = track.language,
+                label = track.language,
+                selected = false,
+                supported = true,
+            )
+        }
+        val picked = when (val decision = SubtitleTrackPolicy.decide(rows, state.preferredSubtitleLanguage)) {
+            is SubtitleTrackDecision.Select -> custom.getOrNull(rows.indexOfFirst { it.id == decision.id })
+            else -> null
+        } ?: return
+        val url = picked.url ?: return
+        viewModelScope.launch {
+            val text = fetchSubtitleText(url)
+            if (text == null) return@launch
+            customSubtitleFile = SubtitleParser.parse(text, SubtitleFormat.fromFileNameOrMime(picked.format ?: ""))
+            customSubtitleFromBundle = true
+            val label = AudioTrackPolicy.nameFor(picked.language)
+                ?: picked.language?.takeIf { it.isNotBlank() } ?: "Subtitles"
+            _ui.update { it.copy(customSubtitleLoaded = label) }
         }
     }
 
@@ -2082,6 +2169,7 @@ class PlayerViewModel @Inject constructor(
                     return@launch
                 }
                 customSubtitleFile = SubtitleParser.parse(text, SubtitleFormat.fromFileNameOrMime(formatHint))
+                customSubtitleFromBundle = false
                 _ui.update { it.copy(customSubtitleLoaded = label) }
             } else {
                 val bundle = store.bundle.value
@@ -2106,6 +2194,7 @@ class PlayerViewModel @Inject constructor(
 
     fun removeCustomSubtitle() {
         customSubtitleFile = null
+        customSubtitleFromBundle = false
         _ui.update { it.copy(customSubtitleLoaded = null) }
     }
 

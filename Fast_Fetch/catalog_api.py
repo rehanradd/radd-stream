@@ -57,6 +57,7 @@ import unicodedata
 
 import catalog_v2
 import redact
+import subtitle_tracks
 import tiers
 
 DEFAULT_LIMIT = 24
@@ -822,10 +823,25 @@ def _ordered_links(conn, release_ids: list[int]) -> dict[int, list[dict]]:
         f"SELECT * FROM cat_links WHERE release_id IN ({marks}) ORDER BY id", tuple()).fetchall()
     evidence = _latest_evidence(conn, [row["id"] for row in rows])
     secret = signing_secret(conn)
+    # Gap A3: subtitle tracks are keyed by the ledger link id — one
+    # batched read for the whole page, attached to the link view that
+    # carries the stream handle for that ledger row. A link with no
+    # stored tracks carries `tracks: []`, never a missing key, so the
+    # app can read it unconditionally. A subtitle read must never break
+    # the bundle: any failure here degrades to no tracks.
+    try:
+        tracks_by_ledger = subtitle_tracks.tracks_for_links(
+            conn, [int(row["ledger_link_id"]) for row in rows
+                   if row["ledger_link_id"] is not None])
+    except Exception:  # noqa: BLE001 - subtitle read is best-effort
+        tracks_by_ledger = {}
     views: dict[int, list[dict]] = {}
     for row in rows:
-        views.setdefault(row["release_id"], []).append(
-            _link_view(row, evidence.get(row["id"]), secret))
+        view = _link_view(row, evidence.get(row["id"]), secret)
+        ledger_id = row["ledger_link_id"]
+        view["tracks"] = (tracks_by_ledger.get(int(ledger_id), [])
+                          if ledger_id is not None else [])
+        views.setdefault(row["release_id"], []).append(view)
     for items in views.values():
         items[:] = sorted(items, key=lambda link: (-(link["rank_score"] or 0), link["link_id"]))
     return views

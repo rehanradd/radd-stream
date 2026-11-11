@@ -265,6 +265,29 @@ class PlayerSessionStore(
     fun peekCoverage(streamId: String): Coverage? = stagedCoverages[streamId]
 
     /**
+     * The subtitle tracks the server harvested for a rendition (Gap A3),
+     * staged by the detail screen next to the coverage of the launched
+     * rung and read by the player when it opens the handle.
+     *
+     * Same discipline as [stageCoverage]: in memory only, nothing survives
+     * a process death. Only the v2 bundle carries this data, so a playback
+     * launched the old way simply has no tracks, exactly as before.
+     */
+    private val stagedTracks = LinkedHashMap<String, List<SubtitleTrackInfo>>()
+
+    fun stageTracks(streamId: String, tracks: List<SubtitleTrackInfo>) {
+        if (streamId.isBlank()) return
+        stagedTracks.remove(streamId)
+        if (tracks.isNotEmpty()) stagedTracks[streamId] = tracks
+        while (stagedTracks.size > MAX_STAGED_FAILOVERS) {
+            stagedTracks.remove(stagedTracks.keys.first())
+        }
+    }
+
+    /** Read without consuming: re-opening the same rung still gets its tracks. */
+    fun peekTracks(streamId: String): List<SubtitleTrackInfo> = stagedTracks[streamId].orEmpty()
+
+    /**
      * The rung list Auto may move along, staged by the detail screen next to the runner-ups
      * of the launched rung and read by the service when it arms [autoQuality].
      *

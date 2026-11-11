@@ -752,6 +752,14 @@ jobs:
       - name: 🧪 test_panel_feed.py
         run: python3 -S Fast_Fetch/test_panel_feed.py
 
+      # Gap A3/A4 (subtitles + forgiving search): the subtitle-track store
+      # (harvested server-side, served as `tracks[]` on the v2 bundle) and
+      # the forgiving search (mood/descriptive queries, "Did you mean",
+      # typo-tolerant suggest) on both the v2 read model and the v1 list
+      # route. Offline, stdlib, in-memory/temp fixtures, no network.
+      - name: 🧪 test_subtitle_tracks.py
+        run: python3 -S Fast_Fetch/test_subtitle_tracks.py
+
       # Typo-tolerant search and the free-only filter on /api/v1/posts: the
       # edit-distance-1 fallback (3-gram candidates, Python check) runs only
       # when exact search finds nothing, and free_only mirrors the client's

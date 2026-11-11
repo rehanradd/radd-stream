@@ -542,6 +542,35 @@ data class WirePlayTier(
 )
 
 /**
+ * One subtitle track, exactly as `catalog_api` serves it in a candidate's
+ * `tracks[]` (Gap A3): the subtitle file's language and URL, harvested
+ * server-side from the resolver verdict or the importer's staging notes.
+ * `url` is the subtitle file itself.
+ */
+data class WireSubtitleTrack(
+    @SerializedName("lang")
+    val language: String? = null,
+    val kind: String? = "subtitles",
+    // Wire key is `subtitle_url`, not `url`: `url` is a PROVENANCE key on
+    // the server and its public-edge scrub drops it from the bundle.
+    @SerializedName("subtitle_url")
+    val url: String? = null,
+    val format: String? = null, // srt | vtt | ass | ssa | ttml
+    @SerializedName("default")
+    val isDefault: Boolean = false,
+    val forced: Boolean = false,
+) {
+    fun toDomain(): SubtitleTrack = SubtitleTrack(
+        language = language,
+        kind = kind,
+        url = url,
+        format = format,
+        isDefault = isDefault,
+        forced = forced,
+    )
+}
+
+/**
  * One candidate link, exactly as `catalog_api._link_view` shapes it: our opaque
  * handle, the measured facts, and no upstream address of any kind. `playable` is
  * the server's own verdict (streamable group and not dead); `dead` is the same
@@ -588,6 +617,8 @@ data class WirePlayCandidate(
     val scoreScale: String? = null,
     @SerializedName("last_evidence_at")
     val lastEvidenceAt: String? = null,
+    /** Subtitle tracks the server harvested for this link (Gap A3); empty when none were. */
+    val tracks: List<WireSubtitleTrack> = emptyList(),
 ) {
     fun toDomain(baseUrl: String, qualityLabel: String): Rendition = Rendition(
         linkId = linkId,
@@ -607,6 +638,7 @@ data class WirePlayCandidate(
         offsetSeconds = 0,
         resumable = resumable == true,
         headers = emptyMap(),
+        tracks = tracks.map { it.toDomain() },
     )
 }
 

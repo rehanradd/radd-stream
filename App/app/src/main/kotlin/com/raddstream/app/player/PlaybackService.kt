@@ -379,7 +379,13 @@ class PlaybackService : MediaSessionService() {
         // caller passes false). An expired link counts nothing, because the
         // early return above already left before any play was attempted.
         if (countAsAttempt) Telemetry.recordPlaybackAttempt()
-        val item = PlaybackMediaItemFactory.build(rendition, bundle.target, titleHint)
+        // Gap A3: the bundle's subtitle tracks ride the rendition, so a
+        // failover hop rebuilds with the same tracks — they are not
+        // ViewModel state, which a hop would lose.
+        val item = PlaybackMediaItemFactory.build(
+            rendition, bundle.target, titleHint,
+            externalSubtitles = PlaybackMediaItemFactory.externalsFromTracks(rendition.tracks),
+        )
         exo.setMediaItem(item)
         exo.prepare()
         exo.playWhenReady = true

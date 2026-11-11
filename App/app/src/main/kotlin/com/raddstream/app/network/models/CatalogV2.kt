@@ -264,6 +264,23 @@ data class PlayBundle(
     val primary: Rendition? get() = renditions.firstOrNull()
 }
 
+/**
+ * One subtitle track the server harvested for a rendition (Gap A3): the
+ * subtitle file's language and URL, as stored server-side in
+ * `subtitle_tracks`. The player fetches the URL itself — it is a subtitle
+ * file, not a video host, so it carries no provenance the bundle must hide.
+ * Lives here (not in `player`) because `player` already imports this
+ * package — the reverse import would be a cycle.
+ */
+data class SubtitleTrack(
+    val language: String? = null,
+    val kind: String? = "subtitles",
+    val url: String? = null,
+    val format: String? = null, // srt | vtt | ass | ssa | ttml
+    val isDefault: Boolean = false,
+    val forced: Boolean = false,
+)
+
 /** One playable option inside a bundle: our own address plus how to reach it. */
 data class Rendition(
     val linkId: Long? = null,
@@ -282,6 +299,8 @@ data class Rendition(
     /** The server's own verdict: this copy resumes after an interruption. */
     val resumable: Boolean = false,
     val headers: Map<String, String> = emptyMap(),
+    /** Subtitle tracks the server harvested for this rendition (Gap A3). */
+    val tracks: List<SubtitleTrack> = emptyList(),
 )
 
 /** What the player should do with a rendition (§8.5). There is exactly one presentation. */

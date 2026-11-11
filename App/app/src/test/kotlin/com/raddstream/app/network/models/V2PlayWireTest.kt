@@ -108,6 +108,43 @@ class V2PlayWireTest {
     }
 
     @Test
+    fun `candidate subtitle tracks decode and map to the rendition`() {
+        val response = gson.fromJson(
+            """
+            {"release_id": 555, "playable": true, "available": true,
+             "stream_candidates": [
+               {"link_id": 11, "stream_id": "tok1", "label": "Fast direct", "kind": "direct",
+                "playability": "stream", "playable": true, "group": 0, "state": "active",
+                "dead": false, "tier": 1, "protocol": "hls", "resumable": true,
+                "tracks": [
+                  {"lang": "en", "kind": "subtitles", "subtitle_url": "https://cdn.example.com/en.srt",
+                   "format": "srt", "default": true, "forced": false},
+                  {"lang": "hi", "kind": "subtitles", "subtitle_url": "https://cdn.example.com/hi.vtt",
+                   "format": "vtt", "default": false, "forced": false}]},
+               {"link_id": 12, "stream_id": "tok2", "label": "Standard", "kind": "direct",
+                "playability": "stream", "playable": true, "group": 0, "state": "active",
+                "dead": false, "tier": 1, "protocol": "progressive", "resumable": false}],
+             "candidates": [], "download_options": [], "tiers": []}
+            """.trimIndent(),
+            WirePlayResponse::class.java,
+        )
+        val bundle = response.toDomain(baseUrl)
+
+        assertEquals(2, bundle.renditions.size)
+        val winner = bundle.renditions[0]
+        assertEquals(2, winner.tracks.size)
+        assertEquals("en", winner.tracks[0].language)
+        assertEquals("https://cdn.example.com/en.srt", winner.tracks[0].url)
+        assertEquals("srt", winner.tracks[0].format)
+        assertTrue(winner.tracks[0].isDefault)
+        assertFalse(winner.tracks[0].forced)
+        assertEquals("hi", winner.tracks[1].language)
+        assertEquals("vtt", winner.tracks[1].format)
+        assertFalse(winner.tracks[1].isDefault)
+        assertTrue(bundle.renditions[1].tracks.isEmpty())
+    }
+
+    @Test
     fun `maps the coverage block to chapter data`() {
         val response = gson.fromJson(responseJson, WirePlayResponse::class.java)
         val coverage = response.coverage!!.toPlayerCoverage()

@@ -33,6 +33,7 @@ import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.player.PreviewRequest
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
+import com.raddstream.app.player.SubtitleTrackInfo
 import com.raddstream.app.player.webDownloadUrl
 import com.raddstream.app.player.webDownloadUrlWithCredit
 import com.raddstream.app.repository.CatalogRepository
@@ -1169,6 +1170,24 @@ class DetailViewModel @Inject constructor(
             result.bundle.renditions.drop(1).mapNotNull { it.streamId },
         )
         PlayerSessionStore.Instance.stageCoverage(streamId, result.coverage)
+        // Gap A3: the winner's subtitle tracks ride the handle the same way
+        // its coverage does — the player stamps them onto the rendition
+        // when it opens the handle. A track with no URL can never be
+        // fetched, so it is dropped here rather than staged to fail on.
+        PlayerSessionStore.Instance.stageTracks(
+            streamId,
+            winner.tracks.mapNotNull { track ->
+                val url = track.url?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+                SubtitleTrackInfo(
+                    language = track.language,
+                    kind = track.kind,
+                    url = url,
+                    format = track.format,
+                    isDefault = track.isDefault,
+                    forced = track.forced,
+                )
+            },
+        )
         val link = RankedLink(
             streamId = streamId,
             linkId = winner.linkId?.toInt(),

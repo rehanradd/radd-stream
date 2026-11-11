@@ -233,7 +233,17 @@ _RELEASE = {
 # `kind`/`playability`/`tier` describe *our* classification of a link and are the
 # axes the player ranks on; they say nothing about who hosts it. `stream_id` is
 # the opaque handle the client keys on: our own row id (`link_id`, v2) is ours to
-# publish, but no v1 response carries a raw ledger id any more.
+# publish, but no v1 response carries a raw ledger id any more. `tracks` is the
+# subtitle-track list for the link (Gap A3): each entry is a subtitle file's
+# language + URL, harvested server-side from the resolver verdict or the
+# importer's staging notes — the player needs the URL to fetch the file, the
+# same way it needs the stream handle to start the video. The URL key is
+# `subtitle_url`, NOT `url`: `url` is a PROVENANCE key and the `public_edge`
+# scrub drops every PROVENANCE key from a v2 response, so a track filed
+# under `url` would arrive with no file to fetch (same convention as the
+# link's `play_url`). Serving a raw subtitle CDN URL is the first upstream
+# URL in a bundle — a handle-based subtitle route is the follow-up if the
+# parent wants the tracks addressed by token instead.
 _LINK = {
     "stream_id", "play_url", "link_id", "release_id", "work_id",
     "status", "state", "kind", "playability", "group", "tier",
@@ -241,7 +251,7 @@ _LINK = {
     "ephemeral", "expires_at", "protocol", "container", "content_type",
     "mime_type", "http_status", "file_size_bytes", "size_bytes",
     "rank_score", "quality_score", "latency_ms", "speed_mbps", "measured",
-    "last_evidence_at", "dead",
+    "last_evidence_at", "dead", "tracks",
 }
 VIEWS: dict[str, frozenset[str]] = {
     # GET /api/v1/posts — one list row.

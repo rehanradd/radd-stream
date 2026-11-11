@@ -443,6 +443,7 @@ data class PlaybackBundle(
                             protocol = cls.protocol.wire,
                             score = candidate.score,
                         ),
+                        tracks = TracksInfo(subtitles = candidate.tracks),
                     )
                 }
             return PlaybackBundle(
@@ -477,4 +478,6 @@ data class StreamCandidate(
     val score: Int = 0,
     val resumable: Boolean = false,
     val ephemeral: Boolean = false,
+    /** Subtitle tracks the server harvested for this link (Gap A3). */
+    val tracks: List<SubtitleTrackInfo> = emptyList(),
 )
