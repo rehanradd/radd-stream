@@ -160,14 +160,19 @@ private fun RungRow(
                     },
                 )
                 // The honest facts, each only when measured: the print's audio
-                // languages and the copy's stream shape. A rung whose copy was
-                // never probed shows no category rather than a guessed one,
-                // and a rung with no stored languages shows no audio.
+                // languages, the copy's stream shape, and what an hour of it
+                // costs in data. A rung whose copy was never probed shows no
+                // category rather than a guessed one, and a rung with no stored
+                // languages shows no audio.
                 // Audit #31: "Resumable" is dropped — it is a server word, and
                 // the detail screen's capability chips no longer carry it either.
+                // Audit #11: the data estimate surfaces Data Saver's promise
+                // here on the detail screen, in the same words the player
+                // quality picker already uses.
                 val facts = listOfNotNull(
                     audioBadgeText(dualAudio = false, languages = option.audioLanguages),
                     option.streamCategory?.label,
+                    UserWords.dataEstimateForQuality(option.band),
                     // Audit #32: the lead preferred-audio row says so, in the
                     // same line as its audio — "Hindi audio · your pick".
                     "your pick".takeIf { isPick },

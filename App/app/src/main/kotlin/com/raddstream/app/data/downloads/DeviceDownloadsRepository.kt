@@ -196,7 +196,7 @@ class DeviceDownloadsRepository @Inject constructor(
         val meta = runCatching { apiProvider.current().resolveStream(handle, "0") }.getOrNull()
         if (meta == null || !meta.success || meta.streamId == null) {
             return@withContext DeviceDownloadResult.Refused(
-                "The server could not verify this copy just now. Try another print.",
+                "The server could not verify this copy just now. Try another version.",
             )
         }
         val mime = videoMime(meta.mimeType, meta.kind)

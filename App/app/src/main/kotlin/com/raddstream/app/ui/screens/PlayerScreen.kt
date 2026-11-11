@@ -1705,6 +1705,8 @@ private fun BottomControls(
                             onClick = { onActorClick(actor) },
                             label = { Text(actor, maxLines = 1) },
                             colors = raddFilterChipColors(),
+                            // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                 }

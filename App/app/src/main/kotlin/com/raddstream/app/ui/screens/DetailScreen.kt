@@ -593,7 +593,7 @@ private fun DetailContent(
             item { CastSection(cast = cast, onActorClick = onActorClick) }
         }
 
-        // Print-first summary line (owner brief: "4 official prints available").
+        // Version-first summary line (owner brief: "4 official prints available").
         item {
             PrintSummary(officialPrintCount = officialPrintCount, camPrintCount = camPrintCount)
         }
@@ -1089,9 +1089,9 @@ private fun CastSection(cast: List<String>, onActorClick: (String) -> Unit) {
 private fun PrintSummary(officialPrintCount: Int, camPrintCount: Int) {
     val total = officialPrintCount + camPrintCount
     val officialText = when {
-        total == 0 -> "No prints available on the connected server"
-        officialPrintCount > 0 -> "$officialPrintCount official print${if (officialPrintCount == 1) "" else "s"} available"
-        else -> "No official prints"
+        total == 0 -> "No versions available on the connected server"
+        officialPrintCount > 0 -> "$officialPrintCount official version${if (officialPrintCount == 1) "" else "s"} available"
+        else -> "No official versions"
     }
     Column {
         Text(
@@ -1102,7 +1102,7 @@ private fun PrintSummary(officialPrintCount: Int, camPrintCount: Int) {
         )
         if (camPrintCount > 0) {
             Text(
-                text = "$camPrintCount cam/bootleg print${if (camPrintCount == 1) "" else "s"} — low quality, shown last and labelled.",
+                text = "$camPrintCount cam/bootleg version${if (camPrintCount == 1) "" else "s"} — low quality, shown last and labelled.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -1329,7 +1329,7 @@ private fun EpisodeRow(
                     overflow = TextOverflow.Ellipsis,
                 )
                 val suffix = if (episode.onlyPacked) " · packed in season file" else
-                    if (episode.prints.size > 1) " · ${episode.prints.size} prints" else ""
+                    if (episode.prints.size > 1) " · ${episode.prints.size} versions" else ""
                 if (best != null) {
                     // The same three axes the print card leads with, condensed for the row:
                     // quality, HDR and audio. Subtitles stay on the expanded print card.
@@ -1437,7 +1437,7 @@ private fun EpisodeRow(
         // best copy per band; a ledger that cannot is still shown as before, not hidden.
         if (episode.prints.size > 1 && !canChooseQuality) {
             TextButton(onClick = { expanded = !expanded }) {
-                Text(if (expanded) "Hide prints" else "Show ${episode.prints.size} prints")
+                Text(if (expanded) "Hide versions" else "Show ${episode.prints.size} versions")
             }
         }
         if (expanded) {
@@ -1563,7 +1563,7 @@ private fun PrintCard(
 
         if (print.isCam) {
             Text(
-                "This is a cam/bootleg recording. Pick an official print above when one exists.",
+                "This is a cam/bootleg recording. Pick an official version above when one exists.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )

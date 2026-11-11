@@ -7,6 +7,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -186,6 +187,8 @@ private fun LanguageChipRow(
                 selected = idx == selectedIndex,
                 onClick = { onSelect(idx) },
                 label = { Text(label) },
+                // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                modifier = Modifier.heightIn(min = 48.dp),
             )
         }
     }

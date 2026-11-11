@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyRow
@@ -150,6 +151,8 @@ fun LiveTvScreen(
                             selected = state.selectedCategory == null,
                             onClick = { viewModel.onCategorySelected(null) },
                             label = { Text("All") },
+                            // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                     items(state.categories) { category ->
@@ -157,6 +160,8 @@ fun LiveTvScreen(
                             selected = state.selectedCategory == category,
                             onClick = { viewModel.onCategorySelected(category) },
                             label = { Text(categoryLabel(category)) },
+                            // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                 }

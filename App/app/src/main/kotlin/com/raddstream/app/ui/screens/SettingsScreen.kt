@@ -1088,7 +1088,15 @@ private fun ChipRow(options: List<String>, selectedIndex: Int, onSelect: (Int) -
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         options.forEachIndexed { idx, label ->
-            FilterChip(colors = raddFilterChipColors(), selected = idx == selectedIndex, onClick = { onSelect(idx) }, label = { Text(label) })
+            FilterChip(
+                colors = raddFilterChipColors(),
+                selected = idx == selectedIndex,
+                onClick = { onSelect(idx) },
+                label = { Text(label) },
+                // Audit #54: a FilterChip is 32 dp tall — the touch-target
+                // floor is 48 dp, so the chip itself carries it.
+                modifier = Modifier.heightIn(min = 48.dp),
+            )
         }
     }
 }
@@ -1230,6 +1238,10 @@ internal fun ContactDialog(contact: ContactUiState, viewModel: SettingsViewModel
                             selected = ContactUiState.CATEGORY_IDS[idx] == contact.category,
                             onClick = { viewModel.onContactCategoryChanged(ContactUiState.CATEGORY_IDS[idx]) },
                             label = { Text(label) },
+                            // Audit #54: a FilterChip is 32 dp tall — the
+                            // touch-target floor is 48 dp, so the chip itself
+                            // carries it.
+                            modifier = Modifier.heightIn(min = 48.dp),
                         )
                     }
                 }

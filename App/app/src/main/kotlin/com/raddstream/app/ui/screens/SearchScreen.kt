@@ -279,6 +279,8 @@ fun SearchScreen(
                                         },
                                     )
                                 },
+                                // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                                modifier = Modifier.heightIn(min = 48.dp),
                             )
                         }
                     }
@@ -493,10 +495,11 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel, onOpenF
                 label = { Text(label) },
                 // CL-3, same as the sheet: the rail's "All" chip is the Type
                 // group's "All", and it must say so — bare "All" is the bug.
+                // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
                 modifier = if (label == "All") {
-                    Modifier.semantics { contentDescription = "All types" }
+                    Modifier.heightIn(min = 48.dp).semantics { contentDescription = "All types" }
                 } else {
-                    Modifier
+                    Modifier.heightIn(min = 48.dp)
                 },
             )
         }
@@ -514,6 +517,8 @@ private fun FilterRail(state: SearchUiState, viewModel: SearchViewModel, onOpenF
                         Text("Filters")
                     }
                 },
+                // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                modifier = Modifier.heightIn(min = 48.dp),
             )
         }
     }
@@ -545,6 +550,8 @@ private fun RecentsSection(state: SearchUiState, viewModel: SearchViewModel) {
                     selected = false,
                     onClick = { viewModel.runRecent(recent) },
                     label = { Text(recent) },
+                    // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                    modifier = Modifier.heightIn(min = 48.dp),
                 )
             }
         }
@@ -763,6 +770,8 @@ private fun FilterSheetContent(
                     selected = state.filters.includedOnly,
                     onClick = { viewModel.setIncludedOnly(!state.filters.includedOnly) },
                     label = { Text("Included in my plan") },
+                    // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                    modifier = Modifier.heightIn(min = 48.dp),
                 )
             }
         }
@@ -874,10 +883,11 @@ private fun <T> FacetChips(
                 selected = isSelected(option),
                 onClick = { onSelect(option) },
                 label = { Text(label(option)) },
+                // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
                 modifier = if (label(option) == "All") {
-                    Modifier.semantics { contentDescription = allDescription }
+                    Modifier.heightIn(min = 48.dp).semantics { contentDescription = allDescription }
                 } else {
-                    Modifier.semantics { contentDescription = "$title: ${label(option)}" }
+                    Modifier.heightIn(min = 48.dp).semantics { contentDescription = "$title: ${label(option)}" }
                 },
             )
         }
