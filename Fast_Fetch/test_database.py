@@ -4385,17 +4385,21 @@ class AdultPatternSplitDecisionTests(unittest.TestCase):
     def test_two_independent_suggestions_corroborate(self):
         self.assertEqual(fast_fetch.is_adult_title("Vixen Blacked Diaries"), 1)
 
-    def test_adult_source_site_authority_is_xprimehub_and_missav(self):
+    def test_adult_source_site_authority_is_xprimehub_missav_and_javmost(self):
         # Owner-approved 2026-11-08 (Session 104): xprimehub.pics brands its whole
         # catalog 18+ in its own site title, the owner verified it live, and the VM
         # probe found every sampled post adult — the first host to reach whole-catalog
         # adult authority (previous max measured 36.25% on 10xflix). Missav joined
-        # 2026-11-11 (owner-approved): a JAV-only tube, 100% adult by catalog. The
-        # pin is exact: provenance alone hides nothing from any other site.
+        # 2026-11-11 (owner-approved): a JAV-only tube, 100% adult by catalog.
+        # Javmost joined 2026-11-11 (owner-approved): a JAV-only tube, the one
+        # JAV site that loads from a real browser (MissAV and SupJav are
+        # Cloudflare-walled even there). The pin is exact: provenance alone
+        # hides nothing from any other site.
         self.assertEqual(fast_fetch.ADULT_SOURCE_SITES,
-                         frozenset({"xprimehub", "missav"}))
+                         frozenset({"xprimehub", "missav", "javmost"}))
         self.assertEqual(fast_fetch.site_implies_adult("xprimehub"), 1)
         self.assertEqual(fast_fetch.site_implies_adult("missav"), 1)
+        self.assertEqual(fast_fetch.site_implies_adult("javmost"), 1)
         self.assertEqual(fast_fetch.site_implies_adult("10xflix"), 0)
         self.assertEqual(fast_fetch.site_implies_adult(None), 0)
 

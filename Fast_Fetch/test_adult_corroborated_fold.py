@@ -124,21 +124,25 @@ class RuleAgreementTests(unittest.TestCase):
     def test_distribution_words_alone_do_not_reproduce(self):
         self.assertFalse(fast_fetch.adult_rule_agrees(self.row(*SUGGESTION_ONLY)))
 
-    def test_site_evidence_is_xprimehub_and_missav(self):
+    def test_site_evidence_is_xprimehub_missav_and_javmost(self):
         """Characterization (Session 104, owner-approved 2026-11-08; missav added
-        owner-approved 2026-11-11): `ADULT_SOURCE_SITES` holds exactly two members,
-        xprimehub and missav, whose whole catalogs are 18+ by the sites' own nature.
+        owner-approved 2026-11-11; javmost added owner-approved 2026-11-11):
+        `ADULT_SOURCE_SITES` holds exactly three members, xprimehub, missav and
+        javmost, whose whole catalogs are 18+ by the sites' own nature.
         `source_site` is therefore a witness only for those rows. The live
-        provenance numbers in the module docstring are unaffected: neither site
-        has rows in the live catalog yet, so no existing row gains a new witness."""
+        provenance numbers in the module docstring are unaffected: none of the
+        sites has rows in the live catalog yet, so no existing row gains a new
+        witness."""
         self.assertEqual(fast_fetch.ADULT_SOURCE_SITES,
-                         frozenset({"xprimehub", "missav"}))
+                         frozenset({"xprimehub", "missav", "javmost"}))
         self.assertFalse(fast_fetch.adult_rule_agrees(
             self.row("Some Plain Film", slug="some-plain-film")))
         self.assertTrue(fast_fetch.adult_rule_agrees(
             self.row("Some Plain Film", slug="some-plain-film", site="xprimehub")))
         self.assertTrue(fast_fetch.adult_rule_agrees(
             self.row("Some Plain Film", slug="some-plain-film", site="missav")))
+        self.assertTrue(fast_fetch.adult_rule_agrees(
+            self.row("Some Plain Film", slug="some-plain-film", site="javmost")))
 
 
 class WorkIdentityTests(unittest.TestCase):
