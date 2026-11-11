@@ -336,6 +336,12 @@ jobs:
       - name: 🧪 test_resolved_cache.py
         run: python3 -S Fast_Fetch/test_resolved_cache.py
 
+      # Gap A7 (prefetch run mode): the worker + its systemd timer/service +
+      # runbook, tested offline against a scratch DB with a stubbed resolver.
+      # Offline, stdlib, in-memory/scratch fixtures, no network.
+      - name: 🧪 test_prefetch_worker.py
+        run: python3 -S Fast_Fetch/test_prefetch_worker.py
+
       - name: 🧪 test_catalog_exporter.py
         run: python3 -S Fast_Fetch/test_catalog_exporter.py
 

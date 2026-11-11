@@ -37,14 +37,22 @@ catalog warm so the stream route answers from cache:
 Politeness is part of the contract: one resolve at a time, a fixed delay
 between resolves, and a `/proc/loadavg` gate before every single one — this
 box also serves the API, and a warm-up that slows down live playback has
-failed at its own job. Measured 2026-11-04: this host idles at load 6–8, so
-the default ceiling of 2.0 parks the worker permanently; run it with
-`--load-ceiling` tuned for the box (or let it fire only in quiet windows).
+failed at its own job. The gate waits at most `--max-wait-seconds` (300 s)
+for a quiet slot, then yields the sweep instead of hanging a scheduled run.
 
-CODE-ONLY LANDING: this file ships the worker; no daemon, cron, or systemd
-unit is created or started by the landing, and nothing schedules it. The run
-mode (tuned ceiling / quiet window / unit) is a separate ops decision — until
-then the pool does not run and the request path is the only resolver.
+RUN MODE (gap A7, 2026-11-11): a systemd timer + oneshot service, shipped
+beside this file as `radd-prefetch.timer` / `radd-prefetch.service` and
+installed by the landing (see `PREFETCH_RUNBOOK.md`). The timer fires a
+`--once` sweep every 6 hours (00:30, 06:30, 12:30, 18:30 PKT) — the shortest
+cache horizon — so rows are re-warmed before they go cold. The ceiling is
+4.0: measured 2026-11-11 the box idles at load ~0.1 (the 6–8 idle of
+2026-11-04 was the five qoder/agy agent lanes, retired since), so 4.0 parks
+the worker only under genuine saturation on this 1-vCPU box, and the timer
+re-fires a yielded sweep six hours later. The service also runs at Nice=19
+with idle IO class, the same deprioritisation as the backup unit. Cron is
+not installed on this box; systemd timers are the scheduler here. Until the
+units are installed the pool does not run and the request path is the only
+resolver — the live `resolved_cache` proves it: 1 JIT row, 0 pool rows.
 
 Adult law applies here before anywhere else: the priority query excludes
 `is_18_plus=1` posts *and* any post sharing a `canonical_key` with a flagged
@@ -79,8 +87,18 @@ if str(BASE_DIR) not in sys.path:
 #: The pool this worker keeps warm, and the rhythm it keeps it warm with.
 TOP_N = 200
 RESOLVE_DELAY_SECONDS = 2.0      # between two resolves, never between skips
-LOAD_CEILING = 2.0               # 1-minute /proc/loadavg above which we wait
+LOAD_CEILING = 4.0               # 1-minute /proc/loadavg above which we wait
+                                 # (gap A7, measured 2026-11-11: the box idles
+                                 # at ~0.1 since the agent lanes retired, so
+                                 # 4.0 parks the worker only under genuine
+                                 # saturation of this 1-vCPU box; the 2.0 it
+                                 # replaces parked it permanently while the
+                                 # lanes held idle load at 6-8)
 LOAD_POLL_SECONDS = 15.0         # how often we re-read loadavg while gated
+MAX_WAIT_SECONDS = 300.0         # longest a sweep waits for a quiet slot,
+                                 # then it yields and the next timer firing
+                                 # retries (a timer-driven oneshot must never
+                                 # hang until systemd kills it)
 MIN_FRESH_WINDOW_SECONDS = 3600.0  # "warm" = horizon at least this far ahead
 SCAN_INTERVAL_SECONDS = 900.0    # pause between full sweeps
 FAILURE_BACKOFF_SECONDS = 15 * 60.0  # in-process retry delay for cold links
@@ -124,15 +142,34 @@ def current_load() -> float:
         return 0.0
 
 
-def wait_for_quiet_machine(load_ceiling: float) -> tuple[bool, bool]:
-    """Returns (did_block, stopping). Blocks until 1-minute loadavg drops to the ceiling."""
+def wait_for_quiet_machine(load_ceiling: float,
+                           max_wait_seconds: float | None = None) -> tuple[bool, bool, bool]:
+    """Returns (did_block, stopping, timed_out).
+
+    Blocks until 1-minute loadavg drops to the ceiling. With max_wait_seconds
+    set, gives up after that long and reports timed_out — a timer-driven sweep
+    must yield and let the next firing retry, not hang the oneshot service
+    until systemd kills it. With max_wait_seconds None it waits forever (the
+    old behaviour, kept for a hand-run daemon). The sleep never overshoots
+    the deadline: it sleeps min(poll, remaining) each round.
+    """
     blocked = False
-    while not _STOP and current_load() > load_ceiling:
+    started = time.time()
+    while not _STOP:
+        load = current_load()
+        if load <= load_ceiling:
+            break
         if not blocked:
-            log(f"load {current_load():.2f} > {load_ceiling:.1f}; waiting")
+            log(f"load {load:.2f} > {load_ceiling:.1f}; waiting")
             blocked = True
-        sleep_chunks(LOAD_POLL_SECONDS)
-    return blocked, _STOP
+        if max_wait_seconds is not None:
+            remaining = max_wait_seconds - (time.time() - started)
+            if remaining <= 0:
+                return blocked, False, True
+            sleep_chunks(min(LOAD_POLL_SECONDS, remaining))
+        else:
+            sleep_chunks(LOAD_POLL_SECONDS)
+    return blocked, _STOP, False
 
 
 def select_priority_posts(conn: sqlite3.Connection, limit: int) -> list[sqlite3.Row]:
@@ -205,6 +242,7 @@ def horizon_seconds_left(row: dict, now: float) -> float:
 
 def prefetch_once(*, limit: int, min_fresh: float, load_ceiling: float,
                   fail_backoff: float, dry_run: bool, verbose: bool,
+                  max_wait_seconds: float = MAX_WAIT_SECONDS,
                   _failure_backoff: dict[int, float]) -> dict:
     import fast_fetch
     import resolved_cache
@@ -239,8 +277,16 @@ def prefetch_once(*, limit: int, min_fresh: float, load_ceiling: float,
                 log(f"would resolve source #{source_id} for '{post['title']}'")
                 stats["resolved"] += 1
                 continue
-            blocked, stopping = wait_for_quiet_machine(load_ceiling)
+            blocked, stopping, timed_out = wait_for_quiet_machine(
+                load_ceiling, max_wait_seconds)
             if stopping:
+                break
+            if timed_out:
+                # The box stayed busy: yield this sweep rather than
+                # resolving under load. The timer re-fires in 6h.
+                log(f"load still above {load_ceiling:.1f} after "
+                    f"{max_wait_seconds:.0f}s; yielding sweep")
+                stats["gated"] += 1
                 break
             if blocked:
                 stats["gated"] += 1
@@ -291,7 +337,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-fresh", type=float, default=MIN_FRESH_WINDOW_SECONDS,
                         help="cache horizon must outlive this many seconds (3600)")
     parser.add_argument("--load-ceiling", type=float, default=LOAD_CEILING,
-                        help="max 1-minute loadavg before resolving (2.0)")
+                        help="max 1-minute loadavg before resolving (4.0)")
+    parser.add_argument("--max-wait-seconds", type=float, default=MAX_WAIT_SECONDS,
+                        help="longest a sweep waits for a quiet slot, then yields (300)")
     parser.add_argument("--fail-backoff", type=float, default=FAILURE_BACKOFF_SECONDS,
                         help="seconds before retrying a failed link (900)")
     parser.add_argument("--once", action="store_true", help="single sweep, then exit")
@@ -319,6 +367,7 @@ def main(argv: list[str] | None = None) -> int:
                                   load_ceiling=args.load_ceiling,
                                   fail_backoff=args.fail_backoff,
                                   dry_run=args.dry_run, verbose=args.verbose,
+                                  max_wait_seconds=args.max_wait_seconds,
                                   _failure_backoff=failure_backoff)
             log("sweep: " + " ".join(f"{k}={v}" for k, v in stats.items()) +
                 f" in {time.time() - started:.1f}s")

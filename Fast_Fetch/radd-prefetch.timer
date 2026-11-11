@@ -1,0 +1,14 @@
+[Unit]
+Description=Warm the resolved-link cache every 6 hours (gap A7)
+
+[Timer]
+# Every 6 hours at :30 past — the shortest cache horizon (6h for temporary
+# rows), so each sweep re-warms rows before they go cold. Offset from the
+# daily catalog backup and the autocrawl slots so no two heavy jobs share
+# a slot.
+OnCalendar=*-*-* 00,06,12,18:30:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

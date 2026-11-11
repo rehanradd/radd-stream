@@ -1,0 +1,31 @@
+[Unit]
+Description=Prefetch Tier-1 stream links into the resolved-link cache (gap A7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/radd-stream
+# The live catalog path, the same value radd-stream.service carries. The
+# worker reads it through RADD_DB_PATH at import (config.py freezes DB_PATH),
+# so it must be set here rather than left to a --db flag.
+Environment=RADD_DB_PATH=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# One --once sweep of the top 200 priority titles. The worker's own load gate
+# (--load-ceiling 4.0, --max-wait-seconds 300) pauses or yields the sweep
+# while the box is busy; Nice=19 + idle IO class (the same deprioritisation
+# as the backup unit) keeps it from stealing CPU or disk from the live API
+# either way. A full cold sweep can take a while (one slow unwrap per link),
+# hence the 2h start timeout, matching the backup unit.
+ExecStart=/usr/bin/python3 -S /opt/radd-stream/Fast_Fetch/prefetch_worker.py --once --limit 200 --load-ceiling 4.0 --max-wait-seconds 300
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=7200
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
