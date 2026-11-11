@@ -1,5 +1,6 @@
 package com.raddstream.app.player
 
+import com.raddstream.app.data.UserRegion
 import com.raddstream.app.network.models.LadderTier
 import com.raddstream.app.network.models.LinkClassification
 import com.raddstream.app.network.models.OptionGroup
@@ -163,6 +164,33 @@ fun qualityCostPerHour(band: String): String? = when (band.trim().lowercase()) {
     "sd" -> "≈ 300 MB/hour"
     else -> null
 }
+
+/**
+ * The audio languages a region leads with. Only DESI_DUBS orders anything
+ * today — Hindi and Urdu, the same pair the release selector already uses
+ * to lead its prints — so every other region gets an empty set and the
+ * ladder keeps its server order.
+ *
+ * Audit #32: the quality rows lead with the viewer's own audio, and the
+ * lead row is labelled "your pick" on the card.
+ */
+fun preferredAudioLanguages(region: String?): Set<String> =
+    if (UserRegion.normalize(region) == UserRegion.DESI_DUBS) setOf("Hindi", "Urdu") else emptySet()
+
+/** True when this rung's winner carries one of the preferred languages. */
+fun carriesPreferredAudio(option: QualityOption, preferred: Set<String>): Boolean =
+    preferred.isNotEmpty() && option.audioLanguages.any { lang ->
+        preferred.any { it.equals(lang, ignoreCase = true) }
+    }
+
+/**
+ * Display order only: preferred-audio rows lead, the rest keep their old
+ * order (stable sort). The ladder itself is NOT reordered — Auto still
+ * starts at the best picture — only the card the viewer reads is.
+ */
+fun preferredAudioFirst(options: List<QualityOption>, preferred: Set<String>): List<QualityOption> =
+    if (preferred.isEmpty()) options
+    else options.sortedWith(compareByDescending { carriesPreferredAudio(it, preferred) })
 
 /** Everything the detail screen needs from one scope's ladder. */
 data class LadderForScope(

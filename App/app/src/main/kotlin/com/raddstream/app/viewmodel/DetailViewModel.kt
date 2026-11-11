@@ -63,6 +63,12 @@ data class DetailUiState(
     val actionMessage: String? = null,
     /** One row per quality band, as the server collapsed them. Empty until it has any. */
     val ladder: LadderForScope = LadderForScope.EMPTY,
+    /**
+     * The viewer's regional-dub preference ([UserRegion]), mirrored so the
+     * quality card can lead with the viewer's own audio (audit #32).
+     * [UserRegion.DEFAULT] until DataStore answers.
+     */
+    val region: String = UserRegion.DEFAULT,
     /** The scope [ladder] belongs to. Both null = the whole work; the card says which. */
     val ladderSeason: Int? = null,
     val ladderEpisode: Int? = null,
@@ -292,6 +298,7 @@ class DetailViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.userRegion.collect { region ->
                 userRegion = region
+                _uiState.update { it.copy(region = region) }
                 publishViewerContent()
             }
         }

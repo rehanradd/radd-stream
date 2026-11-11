@@ -449,9 +449,11 @@ object ReleaseLayoutBuilder {
         if (prints.any { it.resolution == Resolution.R2160 }) out.add("4K")
         if (prints.any { it.hasHdr }) out.add("HDR")
         if (prints.any { it.resolution == Resolution.R1080 }) out.add("1080p")
-        if (prints.any { it.isOfficialPrint }) out.add("Official prints")
-        if (prints.any { p -> p.links.any { it.resumable } }) out.add("Resumable")
-        if (prints.any { p -> p.links.any { it.playableHere } }) out.add("Streamable")
+        // Audit #31: user words only. "Official prints" is dropped (the
+        // count already rides in the PrintSummary line below the poster);
+        // "Resumable" is dropped entirely — nobody resumes from a chip;
+        // "Streamable" is "Available to watch".
+        if (prints.any { p -> p.links.any { it.playableHere } }) out.add("Available to watch")
         if (prints.any { p -> p.links.any { it.keepable } }) out.add("Downloadable")
         val langs = prints.flatMap { it.languages }.distinct()
         if (langs.isNotEmpty()) out.add(langs.joinToString("/") + " audio")

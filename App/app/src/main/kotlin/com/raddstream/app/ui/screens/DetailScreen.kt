@@ -114,6 +114,7 @@ import com.raddstream.app.ui.components.subtitleBadgeText
 import com.raddstream.app.ui.layout.CardGeometry
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
+import com.raddstream.app.player.preferredAudioLanguages
 import com.raddstream.app.ui.navigation.DeepLinks
 import com.raddstream.app.ui.theme.rememberArtworkAccent
 import com.raddstream.app.viewmodel.DetailNavigationEvent
@@ -244,21 +245,11 @@ fun DetailScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
-                title = {
-                    // Session 121 (P-32): one line truncated long titles to a stub;
-                    // two lines at titleMedium still fit the 64 dp bar.
-                    // Robo run 3: this title text is identical to the big title
-                    // below it, so the bar title carries its screen context.
-                    val barTitle = state.post?.cleanTitle ?: state.post?.title ?: "Details"
-                    val barDescription = if (state.post == null) "Details" else "Details for $barTitle"
-                    Text(
-                        barTitle,
-                        style = MaterialTheme.typography.titleMedium,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.semantics { contentDescription = barDescription },
-                    )
-                },
+                // Audit #25: the bar carries only the back arrow (and
+                // actions). The title appears ONCE, next to the poster
+                // below — the bar used to repeat it, so the screen read
+                // its own name twice.
+                title = {},
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -302,6 +293,8 @@ fun DetailScreen(
                     onPlay = viewModel::playLadder,
                     onKeep = { option -> downloadWithStoragePermission { viewModel.keepRung(option) } },
                     tierLabel = viewModel::tierLabelFor,
+                    // Audit #32: the card leads with the viewer's own audio.
+                    preferredAudio = preferredAudioLanguages(state.region),
                 ),
                 ladderScope = rungScopeLabel(state.ladderSeason, state.ladderEpisode),
                 adFree = state.adFree,
@@ -442,6 +435,8 @@ private data class RungActions(
     val onKeep: (QualityOption) -> Unit,
     /** The tier each rung requires ("VIP" / "Standard"), from the ViewModel. */
     val tierLabel: (QualityOption) -> String,
+    /** The viewer's preferred audio languages (audit #32) — empty orders nothing. */
+    val preferredAudio: Set<String> = emptySet(),
 )
 
 /** Which scope a ladder belongs to, in the viewer's words. Null means the whole work. */
@@ -548,24 +543,16 @@ private fun DetailContent(
             )
         }
 
-        // Prints exist but none can start: the grey Play button above says
-        // nothing on its own, so the reason rides right under it instead of
-        // a snackbar a tap never earns (a disabled button fires no tap).
-        if (resume == null && allPrints.isNotEmpty() && bestPrint?.canStart != true) {
-            item {
-                Text(
-                    text = "No playable copy for this title yet — downloads are available.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-        }
-
+        // The "No playable copy" sentence now rides inside PrimaryActions,
+        // above the Download hero — this item used to repeat it below.
         // A first-party VIP house card: no third-party SDK, no hidden network call.
         // It is our own membership, not a sponsored slot, so it carries no
         // "Sponsored" label — and it is shown only when the VIP-sources card is
         // not, so the two upsells never stack (Session 121, P-10).
-        if (!adFree && !premiumSourcesLocked) {
+        // Audit #30: neither upsell shows on a title with no playable copy —
+        // selling VIP on a title the viewer cannot watch is the wrong pitch.
+        val playable = resume != null || bestPrint?.canStart == true
+        if (!adFree && !premiumSourcesLocked && playable) {
             item { SponsorCard(onOpenVipUpgrade = onOpenVipUpgrade) }
         }
 
@@ -580,13 +567,15 @@ private fun DetailContent(
                     onPlayRung = rungs.onPlay,
                     onKeepRung = rungs.onKeep,
                     tierLabel = rungs.tierLabel,
+                    preferredAudio = rungs.preferredAudio,
                 )
             }
         }
 
         // The gate is not a silent removal: a viewer who came for the 4K copy is told where
         // it went and given the same upgrade door the sponsor card uses.
-        if (premiumSourcesLocked) {
+        // Audit #30: like the sponsor card, never on a title with no playable copy.
+        if (premiumSourcesLocked && playable) {
             item { VipSourcesCard(onOpenVipUpgrade = onOpenVipUpgrade) }
         }
 
@@ -792,10 +781,13 @@ private fun PrimaryActions(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        // Hero Play Button (full width)
+        // Audit #29: whether anything here can start. A resume is playable
+        // by definition (only a playable resume is ever passed in).
+        val playable = resume != null || bestPrint?.canStart == true
+        if (playable) {
+            // Hero Play Button (full width)
             Button(
                 onClick = if (resume != null) onPlayResume else onPlay,
-                enabled = if (resume != null) true else bestPrint?.canStart == true,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(52.dp),
@@ -805,8 +797,6 @@ private fun PrimaryActions(
                 // is never mistaken for a working one.
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
-                    disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
-                    disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
                 ),
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
@@ -817,8 +807,45 @@ private fun PrimaryActions(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        } else {
+            // No playable copy: Play is hidden, never a dead button — and
+            // Download becomes the primary, full-width and green, with the
+            // reason in plain words. When no print exists at all there is
+            // nothing to download either, so the button stays disabled and
+            // the sentence stays out (it would promise a download that
+            // does not exist).
+            if (hasAnyPrint) {
+                Text(
+                    text = "Not available to stream yet — download it instead.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Button(
+                onClick = onKeep,
+                enabled = hasAnyPrint,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,
+                    disabledContentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                ),
+            ) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Download",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
 
-        // Three plain buttons under Play: Add to My List, Download, Share
+        // Three plain buttons under Play: Add to My List, Download, Share.
+        // When Download is already the hero above, it leaves this row —
+        // the same action must never appear twice on one screen.
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -845,22 +872,24 @@ private fun PrimaryActions(
                 )
             }
 
-            OutlinedButton(
-                onClick = onKeep,
-                enabled = hasAnyPrint,
-                modifier = Modifier
-                    .weight(1f)
-                    .height(48.dp),
-                contentPadding = PaddingValues(horizontal = 4.dp),
-            ) {
-                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(4.dp))
-                Text(
-                    text = "Download",
-                    style = MaterialTheme.typography.labelMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            if (playable) {
+                OutlinedButton(
+                    onClick = onKeep,
+                    enabled = hasAnyPrint,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    contentPadding = PaddingValues(horizontal = 4.dp),
+                ) {
+                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(
+                        text = "Download",
+                        style = MaterialTheme.typography.labelMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
 
             OutlinedButton(
@@ -1432,6 +1461,7 @@ private fun EpisodeRow(
                 onKeepRung = rungs.onKeep,
                 scopeTitle = scopeLabel,
                 tierLabel = rungs.tierLabel,
+                preferredAudio = rungs.preferredAudio,
             )
         }
     }
