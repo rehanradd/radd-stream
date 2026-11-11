@@ -336,6 +336,36 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
+     * Gap A5: the last good Home as one JSON string (see
+     * [com.raddstream.app.viewmodel.encodeHomeCache]). Written only after a
+     * network load actually returned rows; a missing or corrupt value is
+     * simply "no cache", never an error.
+     */
+    val homeCacheJson: Flow<String?> = dataStore.data.map { preferences ->
+        preferences[HOME_CACHE_JSON_KEY]
+    }
+
+    suspend fun saveHomeCacheJson(json: String) {
+        dataStore.edit { preferences -> preferences[HOME_CACHE_JSON_KEY] = json }
+    }
+
+    /**
+     * Gap A6: true once the first-run "Pick 3 you like" card is done — three
+     * picks made, or the viewer dismissed it. Persisted, so a finished card
+     * never returns on the next launch.
+     */
+    val pickThreeDone: Flow<Boolean> = dataStore.data.map { preferences ->
+        preferences[PICK_THREE_DONE_KEY] ?: false
+    }
+
+    suspend fun setPickThreeDone(done: Boolean) {
+        dataStore.edit { preferences ->
+            if (done) preferences[PICK_THREE_DONE_KEY] = true
+            else preferences.remove(PICK_THREE_DONE_KEY)
+        }
+    }
+
+    /**
      * The login streak (plan §5 step 19): consecutive days this device opened the app, counted
      * locally because no server route carries a per-user progress count. The last day is a local
      * epoch day (-1 means never opened); the count is how many in a row that is. The two move
@@ -1056,6 +1086,8 @@ class ServerSettingsRepository @Inject constructor(
         private val TRIAL_RECORDED_AT_MS_KEY = longPreferencesKey("trial_recorded_at_ms")
         private val TRIAL_KEY_UNSEEN_KEY = booleanPreferencesKey("trial_key_unseen")
         private val TRIAL_NOTE_DISMISSED_KEY = booleanPreferencesKey("trial_note_dismissed")
+        private val HOME_CACHE_JSON_KEY = stringPreferencesKey("home_cache_json")
+        private val PICK_THREE_DONE_KEY = booleanPreferencesKey("pick_three_done")
         private val LOGIN_STREAK_LAST_DAY_KEY = longPreferencesKey("login_streak_last_day")
         private val LOGIN_STREAK_COUNT_KEY = intPreferencesKey("login_streak_count")
         private val COACH_SEEN_VERSION_KEY = stringPreferencesKey("player_coach_seen_version")

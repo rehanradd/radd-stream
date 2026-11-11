@@ -30,6 +30,7 @@ import com.raddstream.app.player.KeepResult
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.LadderRung
 import com.raddstream.app.player.PlayerSessionStore
+import com.raddstream.app.player.PreviewRequest
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.player.webDownloadUrl
@@ -41,6 +42,7 @@ import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.Screen
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -486,6 +488,10 @@ class DetailViewModel @Inject constructor(
                     // The catalog answer is ungated; what the viewer may SEE is decided here,
                     // from the entitlement the repository already holds.
                     publishViewerContent()
+                    // Gap A2: pre-resolve the top link now, while the viewer
+                    // is still reading the page, so Play does not pay the
+                    // `playV2` round trip first.
+                    preresolveTopLink()
                     // A row saved before this app had a handle becomes syncable the moment the
                     // catalog finally names its work. Nothing here fabricates a handle: an absent
                     // key is a no-op, and a present one is the server's own. On the v2 path the
@@ -901,6 +907,75 @@ class DetailViewModel @Inject constructor(
     private var lastDownload: Pair<String, String>? = null
 
     /**
+     * Gap A2 — the pre-resolved top link: the `playV2` bundle for the best
+     * print, resolved when the detail opened, so Play reuses it instead of
+     * calling the server again. A failed pre-resolve leaves all three null
+     * and Play falls back to its own call — a warm-up that fails is silent,
+     * never an error the viewer sees.
+     */
+    private var preresolvedReleaseId: Int? = null
+    private var preresolvedResult: V2PlayResult? = null
+    private var preresolvedAtMs: Long? = null
+    private var preresolveJob: Job? = null
+
+    /**
+     * Gap A2: resolve the best print's `playV2` bundle while the viewer is
+     * still on the detail page. Same 2 s ceiling and same quality
+     * preference as the Play-press call, same print Play would pick, and a
+     * locked print is never warmed — warming a rung the viewer may not
+     * play would spend the server's answer on nothing.
+     *
+     * On Wi-Fi the winner's first bytes are also pre-buffered through the
+     * engine's preview seed (the same bounded, silent seed the player uses
+     * for the next episode): the budget there decides whether the bytes are
+     * affordable, and a preview that fails is silent — Play still works, it
+     * just waits on the first bytes again. Mobile data never pre-buffers.
+     */
+    private fun preresolveTopLink() {
+        preresolveJob?.cancel()
+        preresolvedReleaseId = null
+        preresolvedResult = null
+        preresolvedAtMs = null
+        val best = bestPrintOf(_uiState.value.layout) ?: return
+        if (!VipQualityGate.allowsResolution(best.resolution, premiumAccess)) return
+        preresolveJob = viewModelScope.launch {
+            val result = runCatching {
+                withTimeout(2_000) {
+                    catalogRepository.playV2(
+                        best.releaseId,
+                        prefer = DataSaver.playPrefer(dataSaver, onWifi),
+                    )
+                }
+            }.getOrNull() ?: return@launch
+            if (result.bundle.renditions.isEmpty()) return@launch
+            preresolvedReleaseId = best.releaseId
+            preresolvedResult = result
+            preresolvedAtMs = System.currentTimeMillis()
+            if (onWifi) seedPreviewTopLink(best, result)
+        }
+    }
+
+    /** Gap A2: the Wi-Fi pre-buffer for the pre-resolved winner. Silent by contract. */
+    private suspend fun seedPreviewTopLink(best: RankedPrint, result: V2PlayResult) {
+        val winner = result.bundle.renditions.firstOrNull() ?: return
+        val playUrl = winner.playUrl?.takeIf { it.isNotBlank() } ?: return
+        val handle = winner.streamId?.takeIf { it.isNotBlank() } ?: return
+        val engine = CacheEngineHolder.engine ?: return
+        val url = withVipPass(playUrl, runCatching { syncAccountRepository.currentVipPass() }.getOrNull())
+        runCatching {
+            engine.seedPreview(
+                PreviewRequest(
+                    key = CacheSessionKey(renditionKey = handle, url = url),
+                    url = url,
+                    expectedTotalBytes = best.sizeBytes?.takeIf { it > 0L },
+                    resumable = winner.resumable,
+                    printLabel = winner.label ?: best.rawTitle ?: "Top link",
+                ),
+            )
+        }
+    }
+
+    /**
      * Play one rung of the ladder. The rung's runner-ups and the ladder itself are staged
      * for the player first, so a CDN that refuses mid-play costs a silent hop instead of a
      * dialog, and a viewer who chose Auto can be moved along these same rungs by the
@@ -1035,6 +1110,13 @@ class DetailViewModel @Inject constructor(
         // than it was. Two seconds is the ceiling: the server is on the same host,
         // so a healthy call answers in milliseconds.
         viewModelScope.launch {
+            // Gap A2: the detail-open pre-resolve, when it is fresh and for
+            // this very print — Play then starts on the bundle that is
+            // already here instead of paying for the same call again.
+            val cached = preresolvedResult.takeIf {
+                isPreresolveFresh(preresolvedReleaseId, preresolvedAtMs, print.releaseId, System.currentTimeMillis())
+            }
+            if (cached != null && playV2Bundle(cached, print, external)) return@launch
             val v2 = runCatching {
                 withTimeout(2_000) {
                     catalogRepository.playV2(
@@ -1061,13 +1143,7 @@ class DetailViewModel @Inject constructor(
      * `playPrint` says so instead of navigating anywhere.
      */
     fun playBest() {
-        val layout = _uiState.value.layout
-        val best = layout?.let {
-            (it.workPrints +
-                it.seasons.flatMap { season -> season.episodes.flatMap { e -> e.prints } } +
-                it.seasons.flatMap { season -> season.packedPrints })
-                .maxByOrNull { print -> print.rankKey }
-        }
+        val best = bestPrintOf(_uiState.value.layout)
         if (best == null) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this title yet.") }
             return

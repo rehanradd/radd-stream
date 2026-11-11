@@ -158,7 +158,32 @@ data class HomeUiState(
     val favoriteWorkRefs: Set<String> = emptySet(),
     /** Phase 7 (D1): the title of the Continue Watching tile just removed, until Undo or dismiss. */
     val removedResumeTitle: String? = null,
-)
+    /**
+     * Gap A5: when the cached Home on screen was last refreshed from the
+     * server (null until Home has ever loaded). The screen dates the rows
+     * from this, never from a hardcoded "just now".
+     */
+    val lastHomeSyncMs: Long? = null,
+    /** Gap A6: true once the first-run "Pick 3 you like" card is done (picked 3 or dismissed). */
+    val pickThreeDone: Boolean = false,
+) {
+    /**
+     * Gap A6: the three titles the first-run card offers — the first rail
+     * with at least three rows, first three only. Empty when no rail can
+     * offer three yet, so the card waits instead of inventing titles.
+     */
+    val pickThreeCandidates: List<Post>
+        get() = sections.firstOrNull { it.items.size >= 3 }?.items?.take(3).orEmpty()
+
+    /**
+     * Gap A6: the card shows only to a brand-new viewer — nothing
+     * continued, nothing saved, card not done — and only once a rail can
+     * offer three real titles to pick from.
+     */
+    val showPickThree: Boolean
+        get() = !pickThreeDone && continueWatching.isEmpty() && favoriteIds.isEmpty() &&
+            pickThreeCandidates.size >= 3
+}
 
 /**
  * A build the operator published through remote config.
@@ -323,8 +348,15 @@ class HomeViewModel @Inject constructor(
         observeFavorites()
         observeDailyCheckIn()
         observeTrialNote()
+        observePickThreeDone()
         _uiState.update { it.copy(sections = initialHomeSections()) }
-        loadAll(force = true)
+        // Gap A5: cache-first — the saved Home renders before the network
+        // answers, and the refresh runs behind it. The restore is awaited
+        // first so a fresh load can never be overwritten by stale rows.
+        viewModelScope.launch {
+            restoreCachedHome()
+            loadAll(force = true)
+        }
         checkForUpdate()
         askAppOpenAd()
     }
@@ -474,8 +506,58 @@ class HomeViewModel @Inject constructor(
                         favoriteWorkRefs = favorites.mapNotNull { fav -> fav.workRef }.toSet(),
                     )
                 }
+                // Gap A6: the third pick completes the card — the viewer has
+                // a My List now, so the first-run card retires itself instead
+                // of asking for a fourth pick.
+                if (favorites.size >= 3 && !_uiState.value.pickThreeDone) {
+                    setPickThreeDone()
+                }
             }
         }
+    }
+
+    /**
+     * Gap A6: the card's done flag, persisted so a finished card never
+     * returns. Dismissal and the third pick both land here.
+     */
+    private fun observePickThreeDone() {
+        viewModelScope.launch {
+            settingsRepository.pickThreeDone.collect { done ->
+                _uiState.update { it.copy(pickThreeDone = done) }
+            }
+        }
+    }
+
+    fun dismissPickThree() {
+        setPickThreeDone()
+    }
+
+    private fun setPickThreeDone() {
+        _uiState.update { it.copy(pickThreeDone = true) }
+        viewModelScope.launch {
+            runCatching { settingsRepository.setPickThreeDone(true) }
+        }
+    }
+
+    /**
+     * Gap A5: show the last good Home instantly. A corrupt or empty cache
+     * is a no-op — the network load below proceeds exactly as before.
+     */
+    private suspend fun restoreCachedHome() {
+        val json = runCatching { settingsRepository.homeCacheJson.first() }.getOrNull() ?: return
+        val payload = decodeHomeCache(json) ?: return
+        _uiState.update {
+            it.copy(sections = restoreHomeSections(payload), lastHomeSyncMs = payload.updatedAtMs)
+        }
+    }
+
+    /** Gap A5: keep the cache behind the screen — only a load that actually returned rows. */
+    private suspend fun saveHomeCacheIfWorthwhile() {
+        val sections = _uiState.value.sections
+        if (sections.none { it.items.isNotEmpty() }) return
+        val nowMs = System.currentTimeMillis()
+        runCatching { settingsRepository.saveHomeCacheJson(encodeHomeCache(sections, nowMs)) }
+        _uiState.update { it.copy(lastHomeSyncMs = nowMs) }
     }
 
     /**
@@ -690,6 +772,11 @@ class HomeViewModel @Inject constructor(
             // rails asking the same question would answer four times.
             val offline = connectivityProbe.current() == NetworkClass.NONE
             _uiState.update { it.copy(isRefreshing = true, fatal = null, isOffline = offline) }
+            // The rows before this load, so the cache is only re-stamped when
+            // the network actually returned new rows: re-saving the restored
+            // rows with a fresh timestamp after a failed refresh would claim
+            // a freshness the load never earned.
+            val beforeItems = _uiState.value.sections.associate { it.key to it.items }
             try {
                 coroutineScope {
                     _uiState.value.sections
@@ -698,6 +785,8 @@ class HomeViewModel @Inject constructor(
                         .awaitAll()
                 }
                 _uiState.update { it.copy(isRefreshing = false) }
+                val changed = _uiState.value.sections.any { it.items != beforeItems[it.key] }
+                if (changed) saveHomeCacheIfWorthwhile()
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {

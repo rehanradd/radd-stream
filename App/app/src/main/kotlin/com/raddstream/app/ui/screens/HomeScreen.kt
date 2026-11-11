@@ -9,6 +9,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.play.core.install.model.ActivityResult as PlayCoreActivityResult
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -27,6 +29,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
@@ -70,6 +74,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.network.models.PanelBroadcast
 import com.raddstream.app.network.models.Post
+import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HeroCarousel
@@ -85,6 +90,7 @@ import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.update.InAppUpdate
 import com.raddstream.app.viewmodel.HomeSection
 import com.raddstream.app.viewmodel.HomeViewModel
+import com.raddstream.app.viewmodel.homeSyncLine
 import com.raddstream.app.viewmodel.visibleHomeRows
 
 private data class JumpOff(val label: String, val type: String?)
@@ -193,6 +199,19 @@ fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
+            // Gap A5: the sync/status line — how fresh the rows below are, or
+            // that they are saved rows on an offline phone. Nothing until Home
+            // has ever loaded, so a first launch never dates an empty page.
+            homeSyncLine(state.lastHomeSyncMs, state.isOffline, System.currentTimeMillis())?.let { line ->
+                Text(
+                    text = line,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
             // The operator's channel to every phone: a broadcast shows above the
             // catalog, even when the catalog itself failed to load — that is
             // exactly when the operator has something to say.
@@ -267,6 +286,24 @@ fun HomeScreen(
                 val hasSaved = state.continueWatching.isNotEmpty() || anyVisible
                 if (state.isOffline && hasSaved) {
                     OfflineBanner()
+                    Spacer(Modifier.height(8.dp))
+                }
+                // Gap A6: the first-run card takes the pinned-first slot — a
+                // new viewer has no Continue Watching yet, so this is the
+                // first thing Home offers. Three real titles from the first
+                // rail, each heart saving it to My List; the third pick (or
+                // "Not now") retires the card for good.
+                if (state.showPickThree) {
+                    PickThreeCard(
+                        candidates = state.pickThreeCandidates,
+                        isFavorite = { post ->
+                            post.id in state.favoriteIds ||
+                                (post.workRef != null && post.workRef in state.favoriteWorkRefs)
+                        },
+                        onToggleFavorite = { post -> viewModel.toggleFavorite(post) },
+                        onPostClick = onPostClick,
+                        onDismiss = viewModel::dismissPickThree,
+                    )
                     Spacer(Modifier.height(8.dp))
                 }
                 if (state.continueWatching.isNotEmpty()) {
@@ -455,6 +492,99 @@ private fun OfflineBanner() {
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
         )
+    }
+}
+
+/**
+ * Gap A6 — the first-run "Pick 3 you like" card. Three real titles from the
+ * first rail that has them; the heart saves each one to My List, the poster
+ * opens the title, and "Not now" retires the card. Nothing here promises
+ * personalisation — the picks ARE the start of My List, and the card says
+ * exactly that.
+ */
+@Composable
+private fun PickThreeCard(
+    candidates: List<Post>,
+    isFavorite: (Post) -> Boolean,
+    onToggleFavorite: (Post) -> Unit,
+    onPostClick: (Post) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+        shape = RoundedCornerShape(16.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+    ) {
+        Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = "Pick 3 you like",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                text = "Tap the heart on three titles to start your My List.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            candidates.forEach { post ->
+                val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
+                val saved = isFavorite(post)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                        .clickable(onClick = { onPostClick(post) }, onClickLabel = "Open $title"),
+                ) {
+                    CatalogImage(
+                        url = post.posterUrl,
+                        contentDescription = null,
+                        modifier = Modifier.size(width = 48.dp, height = 72.dp)
+                            .clip(RoundedCornerShape(8.dp)),
+                        fallbackLabel = title,
+                    )
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        val subtitle = listOfNotNull(
+                            post.year?.takeIf { it > 0 }?.toString(),
+                            post.typeLabel,
+                        ).joinToString(" · ")
+                        if (subtitle.isNotBlank()) {
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    IconButton(onClick = { onToggleFavorite(post) }) {
+                        Icon(
+                            imageVector = if (saved) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = if (saved) {
+                                "Remove $title from My List"
+                            } else {
+                                "Save $title to My List"
+                            },
+                            tint = if (saved) {
+                                MaterialTheme.colorScheme.secondary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                        )
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                TextButton(onClick = onDismiss) { Text("Not now") }
+            }
+        }
     }
 }
 

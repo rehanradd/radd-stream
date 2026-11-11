@@ -127,6 +127,16 @@ fun MyListScreen(
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                     )
                 }
+                // Gap A5: the sync/status line — how fresh the saved rows
+                // are, or that titles are still waiting to sync.
+                state.syncLine?.let { line ->
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

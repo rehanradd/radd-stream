@@ -7,6 +7,7 @@ import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
+import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
@@ -36,6 +37,11 @@ data class MyListUiState(
     val popular: List<Post> = emptyList(),
     /** The title just removed, so the screen can offer Undo. Null when nothing is waiting. */
     val removedTitle: String? = null,
+    /**
+     * Gap A5: the sync/status line — how fresh the saved rows are, or that
+     * titles are still waiting to sync. Null for an empty list.
+     */
+    val syncLine: String? = null,
 ) {
     /** [AdultPolicy.hiddenNotice] — a number, because a notice naming a hidden title is a list of one. */
     val hiddenNotice: String? get() = AdultPolicy.hiddenNotice(hiddenCount)
@@ -69,6 +75,7 @@ class MyListViewModel @Inject constructor(
     private val favoritesRepository: FavoritesRepository,
     private val watchHistoryDao: WatchHistoryDao,
     private val catalogRepository: CatalogRepository,
+    private val syncAccountRepository: SyncAccountRepository,
 ) : ViewModel() {
 
     private val sortFlow = MutableStateFlow(ListSort.RECENT)
@@ -94,7 +101,10 @@ class MyListViewModel @Inject constructor(
             popularFlow,
             removedTitleFlow,
         ) { history, popular, removedTitle -> Triple(history, popular, removedTitle) },
-    ) { (list, refused, sort), (history, popular, removedTitle) ->
+        // Gap A5: the sync line needs to know whether an account exists at
+        // all — a signed-out list is local-only by design, never "waiting".
+        syncAccountRepository.signedIn,
+    ) { (list, refused, sort), (history, popular, removedTitle), signedIn ->
         // The stored rows are filtered here, before anything sorts or maps them, so no later step
         // can be handed the unfiltered list by accident. `is18Plus` is the strict half and is null
         // for every row on today's wire; the refusal ledger is the half that fires against a public
@@ -112,6 +122,7 @@ class MyListViewModel @Inject constructor(
             hiddenCount = list.size - visible.size,
             popular = popular,
             removedTitle = removedTitle,
+            syncLine = myListSyncLine(list, signedIn, System.currentTimeMillis()),
         )
     }.stateIn(
         scope = viewModelScope,
