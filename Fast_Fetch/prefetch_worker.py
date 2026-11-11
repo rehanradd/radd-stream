@@ -78,13 +78,26 @@ import signal
 import sqlite3
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+try:
+    import panel_feed  # the operator's tuning knobs + pauses
+except Exception:  # pragma: no cover - panel_feed is always importable in-repo
+    panel_feed = None
+
 #: The pool this worker keeps warm, and the rhythm it keeps it warm with.
+#: The shipped pool size (200) and the shipped resolve concurrency (1,
+#: serial) are the answers when the panel is unwired; when the panel IS
+#: wired, the operator's `prefetch_queue` knob sizes the pool and
+#: `prefetch_concurrency` sizes the resolve fan-out (panel bounds 0..500
+#: and 1..2). `warmup_count` caps how many links one sweep resolves
+#: (panel bound 0..200; 0 means "no cap" in the panel, so an unwired panel
+#: answers no cap at all).
 TOP_N = 200
 RESOLVE_DELAY_SECONDS = 2.0      # between two resolves, never between skips
 LOAD_CEILING = 4.0               # 1-minute /proc/loadavg above which we wait
@@ -102,6 +115,31 @@ MAX_WAIT_SECONDS = 300.0         # longest a sweep waits for a quiet slot,
 MIN_FRESH_WINDOW_SECONDS = 3600.0  # "warm" = horizon at least this far ahead
 SCAN_INTERVAL_SECONDS = 900.0    # pause between full sweeps
 FAILURE_BACKOFF_SECONDS = 15 * 60.0  # in-process retry delay for cold links
+
+
+def _tuning_knob(name, default):
+    """One operator tuning knob, or `default` when the panel cannot answer.
+
+    A consumer's shipped behaviour is its own default, not the panel's
+    seed, so an unwired panel changes nothing. Never raises.
+    """
+    if panel_feed is None:
+        return default
+    try:
+        return panel_feed.tuning_knob(name=name, default=default)
+    except Exception:
+        return default
+
+
+def _prefetch_paused():
+    """True when the operator paused all prefetching. Never raises."""
+    if panel_feed is None:
+        return False
+    try:
+        return panel_feed.is_paused(
+            target_type="prefetch_global", target_id="all")
+    except Exception:
+        return False
 
 _STOP = False
 
@@ -240,16 +278,92 @@ def horizon_seconds_left(row: dict, now: float) -> float:
     return row["reverify_after"] - now
 
 
+def _resolve_one(*, fast_fetch, resolved_cache, source_id, title,
+                   load_ceiling, max_wait_seconds: float | None = None,
+                   fail_backoff, verbose, _failure_backoff,
+                   delay=0.0):
+    """Resolve one source and bank it.
+
+    Returns one of "resolved", "failed", "resolved_gated",
+    "failed_gated", "stopping", "timed_out".
+
+    One unit of the pool's work, written so the serial loop and the
+    parallel fan-out call the same code: wait for a quiet machine, resolve
+    (v2, the honest contract — a failed unwrap answers no_playable_source
+    instead of success+stale, and the cache never stores a URL we believe
+    is dead), and bank the answer on the caller's own connection. A broken
+    resolve never kills the daemon; it is a cold link with a backoff.
+    `delay` staggers parallel starts so two workers do not hit the same
+    host in the same instant.
+    """
+    if delay:
+        sleep_chunks(delay)
+    blocked, stopping, timed_out = wait_for_quiet_machine(
+        load_ceiling, max_wait_seconds)
+    if stopping:
+        return "stopping"
+    if timed_out:
+        # The box stayed busy: yield this sweep rather than resolving
+        # under load. The timer re-fires in 6h (A7 behaviour, kept).
+        wait = (f"{max_wait_seconds:.0f}s" if max_wait_seconds is not None
+                else "unbounded")
+        log(f"load still above {load_ceiling:.1f} after {wait}; "
+            "yielding sweep")
+        return "timed_out"
+    try:
+        result = fast_fetch.resolve_live_source(source_id, v2=True)
+    except Exception as exc:  # a broken resolve must not kill the daemon
+        result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
+    if result.get("success"):
+        _failure_backoff.pop(source_id, None)
+        # Each worker banks on its own connection: the shared sweep
+        # connection is not shared across threads.
+        with fast_fetch.get_db() as task_conn:
+            resolved_cache.init_resolved_cache(task_conn)
+            stored = resolved_cache.record_resolved_cache(
+                task_conn, source_id, result, source="pool")
+            task_conn.commit()
+        if verbose:
+            remaining = (horizon_seconds_left(stored, time.time())
+                         if stored else 0.0)
+            log(f"warm #{source_id} '{title}' "
+                f"horizon {remaining / 3600.0:.1f}h "
+                f"({stored['category']}/{stored['kind']})" if stored else
+                f"resolve for #{source_id} returned no cacheable url")
+        return "resolved" if not blocked else "resolved_gated"
+    _failure_backoff[source_id] = time.time() + fail_backoff
+    log(f"cold #{source_id} '{title}': "
+        f"{result.get('error') or result.get('code')}")
+    return "failed" if not blocked else "failed_gated"
+
+
 def prefetch_once(*, limit: int, min_fresh: float, load_ceiling: float,
                   fail_backoff: float, dry_run: bool, verbose: bool,
                   max_wait_seconds: float = MAX_WAIT_SECONDS,
-                  _failure_backoff: dict[int, float]) -> dict:
+                  _failure_backoff: dict[int, float],
+                  workers: int = 1, warmup_count: int | None = None) -> dict:
+    """One sweep: select the priority titles, resolve the cold ones.
+
+    `workers` is the resolve fan-out — the operator's `prefetch_concurrency`
+    knob (panel, clamped 1..2); 1 is the shipped serial loop, and anything
+    above it fans the resolves out across a ThreadPoolExecutor, each worker
+    banking on its own connection. `warmup_count` caps how many links one
+    sweep resolves — the operator's `warmup_count` knob; None means no cap
+    (the shipped behaviour: resolve everything selected). A sweep the
+    operator paused (`prefetch_global`) resolves nothing and answers
+    zeroed stats.
+    """
     import fast_fetch
     import resolved_cache
     import tiers
 
     stats = {"posts": 0, "tier1": 0, "warm": 0, "resolved": 0,
              "failed": 0, "skipped_no_link": 0, "gated": 0}
+    if _prefetch_paused():
+        log("prefetching is paused by the operator (panel pause "
+            "prefetch_global); sweep skipped.")
+        return stats
+    workers = max(1, int(workers or 1))
     now = time.time()
     with fast_fetch.get_db() as conn:
         resolved_cache.init_resolved_cache(conn)
@@ -258,7 +372,8 @@ def prefetch_once(*, limit: int, min_fresh: float, load_ceiling: float,
         stats["posts"] = len(posts)
         if verbose or dry_run:
             log(f"selected {len(posts)} priority titles")
-        resolved_any = False
+        # Phase 1 (serial, cheap): which posts need a resolve at all.
+        todo = []
         for post in posts:
             if _STOP:
                 break
@@ -273,63 +388,92 @@ def prefetch_once(*, limit: int, min_fresh: float, load_ceiling: float,
                 continue
             if now < _failure_backoff.get(source_id, 0.0):
                 continue
-            if dry_run:
-                log(f"would resolve source #{source_id} for '{post['title']}'")
+            todo.append((source_id, post["title"]))
+        # The warmup cap bounds one sweep's resolves; the rest wait for
+        # the next sweep. None (unwired panel) means no cap.
+        if warmup_count is not None:
+            todo = todo[:max(0, int(warmup_count))]
+        if dry_run:
+            for source_id, title in todo:
+                log(f"would resolve source #{source_id} for '{title}'")
                 stats["resolved"] += 1
-                continue
-            blocked, stopping, timed_out = wait_for_quiet_machine(
-                load_ceiling, max_wait_seconds)
-            if stopping:
-                break
-            if timed_out:
-                # The box stayed busy: yield this sweep rather than
-                # resolving under load. The timer re-fires in 6h.
-                log(f"load still above {load_ceiling:.1f} after "
-                    f"{max_wait_seconds:.0f}s; yielding sweep")
-                stats["gated"] += 1
-                break
-            if blocked:
-                stats["gated"] += 1
-            if resolved_any:
-                sleep_chunks(RESOLVE_DELAY_SECONDS)
-            if _STOP:
-                break
-            resolved_any = True
-            try:
-                # v2=True: the honest contract. A failed unwrap answers
-                # no_playable_source instead of success+stale, and the cache
-                # must never store a URL we believe is dead. Adult refusal is
-                # already guaranteed by the query; v2 additionally keeps a
-                # typo'd id indistinguishable from a hidden one.
-                result = fast_fetch.resolve_live_source(source_id, v2=True)
-            except Exception as exc:  # a broken resolve must not kill the daemon
-                result = {"success": False, "error": f"{type(exc).__name__}: {exc}"}
-            stats["resolved"] += 1
-            if result.get("success"):
-                _failure_backoff.pop(source_id, None)
-                stored = resolved_cache.record_resolved_cache(
-                    conn, source_id, result, source="pool")
-                conn.commit()
-                if verbose:
-                    remaining = (horizon_seconds_left(stored, time.time())
-                                 if stored else 0.0)
-                    log(f"warm #{source_id} '{post['title']}' "
-                        f"horizon {remaining / 3600.0:.1f}h "
-                        f"({stored['category']}/{stored['kind']})" if stored else
-                        f"resolve for #{source_id} returned no cacheable url")
-            else:
-                stats["failed"] += 1
-                _failure_backoff[source_id] = time.time() + fail_backoff
-                log(f"cold #{source_id} '{post['title']}': "
-                    f"{result.get('error') or result.get('code')}")
+            return stats
+        # Phase 2: resolve. Serial keeps the shipped delay between
+        # resolves; parallel staggers starts across the workers.
+        if workers <= 1:
+            resolved_any = False
+            for source_id, title in todo:
+                if _STOP:
+                    break
+                if resolved_any:
+                    sleep_chunks(RESOLVE_DELAY_SECONDS)
+                if _STOP:
+                    break
+                resolved_any = True
+                outcome = _resolve_one(
+                    fast_fetch=fast_fetch, resolved_cache=resolved_cache,
+                    source_id=source_id, title=title,
+                    load_ceiling=load_ceiling,
+                    max_wait_seconds=max_wait_seconds,
+                    fail_backoff=fail_backoff,
+                    verbose=verbose, _failure_backoff=_failure_backoff)
+                if outcome == "stopping":
+                    break
+                if outcome == "timed_out":
+                    stats["gated"] += 1
+                    break
+                if outcome in ("resolved", "resolved_gated"):
+                    stats["resolved"] += 1
+                elif outcome in ("failed", "failed_gated"):
+                    stats["failed"] += 1
+                if outcome.endswith("_gated"):
+                    stats["gated"] += 1
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(
+                        _resolve_one, fast_fetch=fast_fetch,
+                        resolved_cache=resolved_cache,
+                        source_id=source_id, title=title,
+                        load_ceiling=load_ceiling,
+                        max_wait_seconds=max_wait_seconds,
+                        fail_backoff=fail_backoff, verbose=verbose,
+                        _failure_backoff=_failure_backoff,
+                        delay=RESOLVE_DELAY_SECONDS * (i % workers)): None
+                    for i, (source_id, title) in enumerate(todo)}
+                for fut in as_completed(futures):
+                    if _STOP:
+                        break
+                    outcome = fut.result()
+                    if outcome == "stopping":
+                        break
+                    if outcome == "timed_out":
+                        stats["gated"] += 1
+                        break
+                    if outcome in ("resolved", "resolved_gated"):
+                        stats["resolved"] += 1
+                    elif outcome in ("failed", "failed_gated"):
+                        stats["failed"] += 1
+                    if outcome.endswith("_gated"):
+                        stats["gated"] += 1
     return stats
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Background prefetch pool keeping Tier-1 links warm in resolved_cache.")
-    parser.add_argument("--limit", type=int, default=TOP_N,
-                        help=f"priority titles per sweep (default {TOP_N})")
+    # The pool size is the operator's `prefetch_queue` knob (panel,
+    # clamped 0..500); an unwired panel answers the shipped TOP_N. An
+    # explicit --limit wins over the knob.
+    parser.add_argument("--limit", type=int, default=None,
+                        help="priority titles per sweep (default: the "
+                             "operator's prefetch_queue knob, else %d)" % TOP_N)
+    parser.add_argument("--workers", type=int, default=None,
+                        help="parallel resolve workers (default: the "
+                             "operator's prefetch_concurrency knob, else 1)")
+    parser.add_argument("--warmup-count", type=int, default=None,
+                        help="max links resolved per sweep (default: the "
+                             "operator's warmup_count knob; no cap unwired)")
     parser.add_argument("--db", default=None,
                         help="ledger path (default: config DB_PATH / RADD_DB_PATH)")
     parser.add_argument("--interval", type=float, default=SCAN_INTERVAL_SECONDS,
@@ -353,22 +497,40 @@ def main(argv: list[str] | None = None) -> int:
         # import time, and fast_fetch.resolve_live_source writes through it.
         os.environ["RADD_DB_PATH"] = str(Path(args.db).resolve())
 
+    if _prefetch_paused():
+        log("prefetching is paused by the operator (panel pause "
+            "prefetch_global); not starting.")
+        return 0
+
+    limit = (args.limit if args.limit is not None
+             else _tuning_knob("prefetch_queue", TOP_N))
+    workers = (args.workers if args.workers is not None
+               else _tuning_knob("prefetch_concurrency", 1))
+    warmup_count = (args.warmup_count if args.warmup_count is not None
+                    else _tuning_knob("warmup_count", None))
+    # None (unwired panel) means no cap; a stored 0 means "warm up
+    # nothing" and is honoured as an empty todo list by prefetch_once.
+
     signal.signal(signal.SIGINT, _handle_stop)
     signal.signal(signal.SIGTERM, _handle_stop)
 
-    log(f"starting: top {args.limit}, fresh window {args.min_fresh:.0f}s, "
+    log(f"starting: top {limit}, workers {workers}, "
+        f"warmup cap {warmup_count if warmup_count is not None else 'none'}, "
+        f"fresh window {args.min_fresh:.0f}s, "
         f"load ceiling {args.load_ceiling:.1f}, "
         f"db {os.environ.get('RADD_DB_PATH', 'default')}")
     failure_backoff: dict[int, float] = {}
     while True:
         started = time.time()
         try:
-            stats = prefetch_once(limit=args.limit, min_fresh=args.min_fresh,
+            stats = prefetch_once(limit=limit, min_fresh=args.min_fresh,
                                   load_ceiling=args.load_ceiling,
                                   fail_backoff=args.fail_backoff,
                                   dry_run=args.dry_run, verbose=args.verbose,
                                   max_wait_seconds=args.max_wait_seconds,
-                                  _failure_backoff=failure_backoff)
+                                  _failure_backoff=failure_backoff,
+                                  workers=workers,
+                                  warmup_count=warmup_count)
             log("sweep: " + " ".join(f"{k}={v}" for k, v in stats.items()) +
                 f" in {time.time() - started:.1f}s")
         except Exception as exc:

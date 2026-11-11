@@ -767,5 +767,74 @@ class Phase1RegistryHardeningTests(unittest.TestCase):
         self.assertEqual(reason, "blocked http429")
 
 
+class TuningKnobsTests(unittest.TestCase):
+    """The operator's tuning knobs drive the domain re-check interval.
+
+    `domain_check_interval_min` is how long a verified domain is trusted
+    (the re-check interval). An unwired panel answers the shipped 6h, so
+    an unwired backend behaves exactly as it always did. A paused domain
+    check (`domain_checks` pause) probes nothing at all.
+    """
+
+    def _panel(self, interval_min=None, paused=False):
+        import os
+        import sqlite3
+        tmp = tempfile.TemporaryDirectory()
+        path = os.path.join(tmp.name, "admin_v2.db")
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE tuning_settings (id INTEGER PRIMARY KEY, "
+            "domain_check_interval_min INTEGER)")
+        conn.execute(
+            "INSERT INTO tuning_settings VALUES (1, ?)", (interval_min,))
+        conn.execute(
+            "CREATE TABLE pauses (id INTEGER PRIMARY KEY, target_type TEXT, "
+            "target_id TEXT, is_paused INTEGER, resumed_at INTEGER)")
+        if paused:
+            conn.execute(
+                "INSERT INTO pauses VALUES (1, 'domain_checks', 'all', 1, NULL)")
+        conn.commit()
+        conn.close()
+        return tmp, path
+
+    def test_verify_ttl_is_shipped_6h_when_unwired(self):
+        self.assertEqual(dr._verify_ttl_seconds(), dr.VERIFY_TTL_SECONDS)
+        self.assertEqual(dr._verify_ttl_seconds(), 6 * 3600.0)
+
+    def test_verify_ttl_reads_operator_knob(self):
+        from unittest import mock
+        import os
+        tmp, path = self._panel(interval_min=60)
+        try:
+            with mock.patch.dict(os.environ, {"RADD_ADMIN_V2_DB": path}):
+                self.assertEqual(dr._verify_ttl_seconds(), 60 * 60.0)
+        finally:
+            tmp.cleanup()
+
+    def test_verify_ttl_clamps_to_panel_bounds(self):
+        from unittest import mock
+        import os
+        tmp, path = self._panel(interval_min=5)
+        try:
+            with mock.patch.dict(os.environ, {"RADD_ADMIN_V2_DB": path}):
+                # The panel's bound is 30..1440 minutes.
+                self.assertEqual(dr._verify_ttl_seconds(), 30 * 60.0)
+        finally:
+            tmp.cleanup()
+
+    def test_domain_checks_pause_is_false_when_unwired(self):
+        self.assertFalse(dr._domain_checks_paused())
+
+    def test_domain_checks_pause_is_true_when_paused(self):
+        from unittest import mock
+        import os
+        tmp, path = self._panel(paused=True)
+        try:
+            with mock.patch.dict(os.environ, {"RADD_ADMIN_V2_DB": path}):
+                self.assertTrue(dr._domain_checks_paused())
+        finally:
+            tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main()

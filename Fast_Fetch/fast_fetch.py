@@ -39,6 +39,73 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import db_pragmas  # serve-path SQLite pragmas (Session 125); stdlib-only
+try:
+    import panel_feed  # the operator's tuning knobs + pauses
+except Exception:  # pragma: no cover - panel_feed is always importable in-repo
+    panel_feed = None
+
+
+def _tuning_knob(name, default):
+    """One operator tuning knob, or `default` when the panel cannot answer.
+
+    The per-consumer primitive (panel_feed.tuning_knob): a consumer's
+    shipped behaviour is its own default, not the panel's seed, so an
+    unwired panel changes nothing. When the panel IS wired, the stored
+    value (clamped to the panel's own bounds) wins. Never raises.
+    """
+    if panel_feed is None:
+        return default
+    try:
+        return panel_feed.tuning_knob(name=name, default=default)
+    except Exception:
+        return default
+
+
+def _import_paused():
+    """True when the operator paused all imports. Never raises."""
+    if panel_feed is None:
+        return False
+    try:
+        return panel_feed.is_paused(
+            target_type="import_global", target_id="all")
+    except Exception:
+        return False
+
+
+def _source_paused(conn, row, source_id):
+    """True when the operator paused this download source. Never raises.
+
+    A `source` pause names a service (the row's `service`, e.g. a hoster)
+    or a site (the post's `source_site`, e.g. the site the post came
+    from). Either match pauses the link: the operator stopped that
+    service or that site, and the resolve must not serve it. The panel
+    read is one row from a small database, on the resolve path only.
+    """
+    if panel_feed is None:
+        return False
+    try:
+        service = None
+        try:
+            service = (row["service"] or "").strip()
+        except (KeyError, IndexError, TypeError):
+            service = None
+        if service and panel_feed.is_paused(
+                target_type="source", target_id=service):
+            return True
+        site = conn.execute(
+            "SELECT p.source_site FROM download_sources s "
+            "JOIN releases r ON r.id = s.release_id "
+            "JOIN posts p ON p.id = r.post_id WHERE s.id = ?",
+            (source_id,)).fetchone()
+        if site and site[0]:
+            site_name = str(site[0]).strip()
+            if site_name and panel_feed.is_paused(
+                    target_type="source", target_id=site_name):
+                return True
+        return False
+    except Exception:
+        return False
+
 
 # Ensure UTF-8 output on Windows consoles
 if sys.platform.startswith("win"):
@@ -1714,6 +1781,23 @@ def sync_sitemaps(site: str = "all", max_sub_sitemaps: int | None = None, includ
     # is used at once. The long-lived `serve` unit still reads the import-time
     # DOMAINS snapshot — restart gate, documented in refresh_domains().
     refresh_domains()
+    # A paused import does nothing: the operator stopped imports, and a
+    # sync that ran anyway would write rows the operator asked not to have.
+    if _import_paused():
+        if verbose:
+            print("[i] Imports are paused by the operator (panel pause "
+                  "import_global); sync skipped.")
+        return 0
+    # The operator's `import_cap` knob is a ceiling on an EXPLICIT limit:
+    # a caller that asked for at most N sub-sitemaps gets at most the cap,
+    # never more. A caller that asked for no limit (None) keeps no limit —
+    # the knob never imposes a cap where the caller set none, so a plain
+    # sync still imports everything. An unwired panel answers no cap at
+    # all, so an explicit limit is honoured in full.
+    if max_sub_sitemaps is not None:
+        _cap = _tuning_knob("import_cap", None)
+        if _cap is not None:
+            max_sub_sitemaps = max(1, min(int(max_sub_sitemaps), int(_cap)))
     total_added_global = 0
 
     # 1. Standard XML sitemap sites (Vegamovies, RogMovies)
@@ -1759,7 +1843,10 @@ def sync_sitemaps(site: str = "all", max_sub_sitemaps: int | None = None, includ
                     items.append((loc, lastmod, slug, site_name))
             return items
 
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        # The sitemap fetch fans out across sub-sitemaps; the fan-out is the
+        # operator's `import_concurrency` knob (panel, clamped 1..3), and an
+        # unwired panel answers the shipped 5.
+        with ThreadPoolExecutor(max_workers=_tuning_knob("import_concurrency", 5)) as pool:
             future_map = {pool.submit(fetch_sub, sm): sm for sm in sub_sitemaps}
             for fut in as_completed(future_map):
                 sm_url = future_map[fut]
@@ -4352,7 +4439,10 @@ def extract_post_data_multimovies(
             return ep_releases
 
         if unique_eps:
-            with ThreadPoolExecutor(max_workers=min(6, len(unique_eps))) as executor:
+            # The episode fetch fans out across episodes; the fan-out is the
+            # operator's `import_concurrency` knob (panel, clamped 1..3),
+            # and an unwired panel answers the shipped 6.
+            with ThreadPoolExecutor(max_workers=min(_tuning_knob("import_concurrency", 6), len(unique_eps))) as executor:
                 futures = {executor.submit(_fetch_episode, ep): ep for ep in unique_eps}
                 for fut in as_completed(futures):
                     ep_rels = fut.result()
@@ -4941,9 +5031,11 @@ def extract_post_data(post_url: str, verbose: bool = True) -> dict | None:
 
         return results
 
-    # Concurrently inspect releases to maximize speed
+    # Concurrently inspect releases to maximize speed. The fan-out is the
+    # operator's `import_concurrency` knob (panel, clamped 1..3), and an
+    # unwired panel answers the shipped 6.
     releases_data = []
-    max_workers = min(6, len(unique_nex)) if unique_nex else 1
+    max_workers = min(_tuning_knob("import_concurrency", 6), len(unique_nex)) if unique_nex else 1
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         future_map = {pool.submit(_process_single_release, idx, nex_url): idx for idx, nex_url in enumerate(unique_nex, 1)}
         indexed_results = []
@@ -5869,11 +5961,18 @@ def probe_single_source(src: dict, timeout: int = 8) -> dict:
         }
 
 
-def run_health_check(post_id: int | None = None, dead_only: bool = False, max_workers: int = 12, verbose: bool = True) -> list[dict]:
+def run_health_check(post_id: int | None = None, dead_only: bool = False, max_workers: int | None = None, verbose: bool = True) -> list[dict]:
     """
     Scans download sources, performs live status probes & resumability checks,
     and updates the database.
+
+    `max_workers` is the batch resolver's parallelism: an explicit value
+    wins; None reads the operator's `resolver_concurrency` tuning knob
+    (panel, clamped 1..4), and an unwired panel answers the shipped 12.
     """
+    if max_workers is None:
+        max_workers = _tuning_knob("resolver_concurrency", 12)
+    max_workers = max(1, int(max_workers))
     init_db()
     with get_db() as conn:
         if post_id:
@@ -6562,6 +6661,14 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     # Identical to a missing id: never say why.
                     return dict(not_found)
                 return {"success": False, "error": "Source restricted (18+ content)"}
+            # A paused source resolves to nothing: the operator stopped
+            # this service (or the site the post came from), and a paused
+            # link is indistinguishable from an absent one — the same
+            # uniform not_found the adult flag gets, never the reason.
+            if _source_paused(conn, row, source_id):
+                if v2:
+                    return dict(not_found)
+                return {"success": False, "error": f"Source #{source_id} not found"}
     if not row:
         if v2:
             return dict(not_found)
@@ -8184,7 +8291,7 @@ def main():
     hc_p = subparsers.add_parser("health-check", aliases=["check"], help="Run live health check & resumability diagnostic on download links")
     hc_p.add_argument("--id", type=int, default=None, help="Check links for a specific post ID only")
     hc_p.add_argument("--dead-only", action="store_true", help="Only check currently marked dead or expired links")
-    hc_p.add_argument("--workers", type=int, default=12, help="Concurrency workers (default: 12)")
+    hc_p.add_argument("--workers", type=int, default=None, help="Concurrency workers (default: the operator's resolver_concurrency knob, else 12)")
     hc_p.add_argument("--heal", action="store_true", help="Automatically self-heal any posts found to have dead links after diagnostic")
 
     # heal

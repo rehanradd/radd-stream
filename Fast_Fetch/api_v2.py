@@ -45,6 +45,7 @@ import accounts
 import catalog_api
 import catalog_v2
 import db_pragmas  # serve-path SQLite pragmas (Session 125)
+import panel_feed  # the operator's tuning knobs (candidate_cap)
 import redact
 import release_descriptor
 import tiers
@@ -1770,7 +1771,29 @@ def route_post(handler, path: str, query: dict, *, db_path, operator: bool,
 # bundle build is a few indexed reads (`catalog_api` never probes the
 # network), so 5 costs ~5x one bundle build and nothing more. A series
 # work can hold hundreds of prints; the walk never scans past this cap.
-_WORK_PRINT_FALLBACK_LIMIT = 5
+#: The shipped cap on candidate prints, used when the panel is unwired.
+#: The live cap is the operator's `candidate_cap` tuning knob
+#: (panel_feed.read_tuning_knobs), clamped to the panel's own bounds
+#: (3..20); the panel's seed is 10.
+_CANDIDATE_CAP_DEFAULT = 5
+
+
+def _candidate_cap():
+    """How many candidate prints the play route walks, best first.
+
+    The operator's `candidate_cap` tuning knob, read fresh from the panel
+    on each play request (a single-row read on a small database). An
+    unwired panel, or a knob the panel never stored, answers the shipped
+    5 — the consumer's own default, not the panel's seed, so an unwired
+    backend behaves exactly as it always did. A larger cap tries more
+    prints before giving up (a dead best print hides less); a smaller cap
+    answers faster. Never raises.
+    """
+    try:
+        return panel_feed.tuning_knob(
+            name="candidate_cap", default=_CANDIDATE_CAP_DEFAULT)
+    except Exception:
+        return _CANDIDATE_CAP_DEFAULT
 
 
 def _episode_sibling_prints(conn, episode_id, best_release_id, *, operator):
@@ -1795,7 +1818,7 @@ def _episode_sibling_prints(conn, episode_id, best_release_id, *, operator):
         ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC
         LIMIT :lim
         """, {"ep": int(episode_id), "best": int(best_release_id),
-              "lim": _WORK_PRINT_FALLBACK_LIMIT - 1}).fetchall()
+              "lim": _candidate_cap() - 1}).fetchall()
     return [int(row["id"]) for row in rows]
 
 
@@ -1822,7 +1845,7 @@ def _same_coverage_sibling_prints(conn, named_release_id, *, operator):
     whole-season pack. The adult scope and the streamable/identity filters
     mirror Session 109; ordering mirrors the projector (quality_score DESC,
     print_version DESC, id DESC); the cap leaves room for the named print,
-    so at most `_WORK_PRINT_FALLBACK_LIMIT - 1` siblings come back.
+    so at most `_candidate_cap() - 1` siblings come back.
     """
     where = "" if operator else f" AND {adult_scope('w')}"
     named = conn.execute(
@@ -1868,14 +1891,14 @@ def _same_coverage_sibling_prints(conn, named_release_id, *, operator):
             ORDER BY r.quality_score DESC, r.print_version DESC, r.id DESC
             LIMIT :lim
             """, {"work": int(named["work_id"]), "named": int(named["id"]),
-                  "type": coverage, "lim": _WORK_PRINT_FALLBACK_LIMIT - 1}).fetchall()
+                  "type": coverage, "lim": _candidate_cap() - 1}).fetchall()
         return [int(row["id"]) for row in rows]
     if coverage in ("whole_work", "season_pack", "parts"):
         part_clause = (" AND COALESCE(r.part_number, 0) = :part"
                        if coverage == "parts" else "")
         params: dict = {"work": int(named["work_id"]), "named": int(named["id"]),
                         "type": coverage, "season": season,
-                        "lim": _WORK_PRINT_FALLBACK_LIMIT - 1}
+                        "lim": _candidate_cap() - 1}
         if coverage == "parts":
             params["part"] = part
         rows = conn.execute(
@@ -2182,7 +2205,7 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
             SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id
             WHERE r.work_id = :wid{where}
             ORDER BY r.quality_score DESC, r.id ASC LIMIT :lim
-            """, {"wid": work_id, "lim": _WORK_PRINT_FALLBACK_LIMIT}).fetchall()
+            """, {"wid": work_id, "lim": _candidate_cap()}).fetchall()
         candidate_ids = [int(row["id"]) for row in rows]
     if release_id is None and not candidate_ids:
         # Two different questions, and §13 decides which answer is legal. A caller

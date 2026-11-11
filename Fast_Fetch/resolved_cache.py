@@ -50,6 +50,11 @@ import sqlite3
 import time
 import urllib.parse
 
+try:
+    import panel_feed  # the operator's tuning knobs (cache_ttl_h, warmup_interval_h)
+except Exception:  # pragma: no cover - panel_feed is always importable in-repo
+    panel_feed = None
+
 __all__ = [
     "init_resolved_cache",
     "lookup_cache",
@@ -68,12 +73,51 @@ REVERIFY_MARGIN_SECONDS = 60.0
 MAX_FAIL_COUNT = 3
 #: No-measurement trust ceilings (seconds): the resolver's 6h temporary-token
 #: heuristic for temporaries, and a full day for permanent direct files.
+#: The temporary ceiling is the operator's `cache_ttl_h` tuning knob
+#: (panel_feed), clamped to the panel's own bounds (1..24h); the shipped 6h
+#: is the answer when the panel is unwired. The permanent ceiling is not a
+#: knob — a direct file the classifier vouches for keeps its full day.
 HEURISTIC_CAP_TEMPORARY_SECONDS = 6 * 3600.0
 HEURISTIC_CAP_PERMANENT_SECONDS = 24 * 3600.0
 #: A measured window longer than this still gets re-verified by this clock, so
 #: a "permanent" signed URL cannot sit in the cache forever (the hoster can
-#: revoke mid-window; only the pool re-probe refreshes it).
+#: revoke mid-window; only the pool re-probe refreshes it). The interval is
+#: the operator's `warmup_interval_h` tuning knob (panel_feed), clamped to
+#: the panel's own bounds (6..168h); the shipped 24h is the answer when the
+#: panel is unwired.
 POOL_RECHECK_SECONDS = 24 * 3600.0
+
+
+def _temporary_cap_seconds():
+    """The temporary-token trust ceiling, in seconds.
+
+    The operator's `cache_ttl_h` knob (hours). An unwired panel answers
+    the shipped 6h. Never raises.
+    """
+    if panel_feed is None:
+        return HEURISTIC_CAP_TEMPORARY_SECONDS
+    try:
+        return float(panel_feed.tuning_knob(
+            name="cache_ttl_h",
+            default=int(HEURISTIC_CAP_TEMPORARY_SECONDS // 3600)) * 3600)
+    except Exception:
+        return HEURISTIC_CAP_TEMPORARY_SECONDS
+
+
+def _pool_recheck_seconds():
+    """The pool re-verify interval, in seconds.
+
+    The operator's `warmup_interval_h` knob (hours). An unwired panel
+    answers the shipped 24h. Never raises.
+    """
+    if panel_feed is None:
+        return POOL_RECHECK_SECONDS
+    try:
+        return float(panel_feed.tuning_knob(
+            name="warmup_interval_h",
+            default=int(POOL_RECHECK_SECONDS // 3600)) * 3600)
+    except Exception:
+        return POOL_RECHECK_SECONDS
 
 #: Playlist media types — kind derivation only.
 _PLAYLIST_MIMES = ("application/vnd.apple.mpegurl", "application/x-mpegurl",
@@ -257,13 +301,13 @@ def _compute_reverify_after(*, resolved_at: float, expires_at: float | None,
                            category: str, is_temporary: bool,
                            now: float) -> float:
     """The one-column freshness horizon: a hit is served while now < this."""
-    cap = (HEURISTIC_CAP_TEMPORARY_SECONDS if is_temporary or category == "B"
+    cap = (_temporary_cap_seconds() if is_temporary or category == "B"
            else HEURISTIC_CAP_PERMANENT_SECONDS)
     if expires_at is not None:
         # A measured (or packer-signed) window beats every heuristic — but it
         # is still capped, so a hoster promise of "7 days" cannot go a week
         # without re-verification.
-        horizon = min(expires_at, resolved_at + max(cap, POOL_RECHECK_SECONDS))
+        horizon = min(expires_at, resolved_at + max(cap, _pool_recheck_seconds()))
     else:
         horizon = resolved_at + cap
     return horizon - REVERIFY_MARGIN_SECONDS

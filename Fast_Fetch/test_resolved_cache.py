@@ -1405,5 +1405,68 @@ class TestViewerKindGate(unittest.TestCase):
         self.assertEqual(hit["kind"], "playlist")
 
 
+class TuningKnobsTests(unittest.TestCase):
+    """The operator's tuning knobs drive the cache's freshness ceilings.
+
+    `cache_ttl_h` caps the temporary-token horizon; `warmup_interval_h`
+    is the pool re-verify interval. An unwired panel answers the shipped
+    6h / 24h, so an unwired backend behaves exactly as it always did.
+    """
+
+    def _panel_with_knobs(self, cache_ttl_h, warmup_interval_h):
+        tmp = tempfile.TemporaryDirectory()
+        path = os.path.join(tmp.name, "admin_v2.db")
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE tuning_settings (id INTEGER PRIMARY KEY, "
+            "cache_ttl_h INTEGER, warmup_interval_h INTEGER)")
+        conn.execute(
+            "INSERT INTO tuning_settings VALUES (1, ?, ?)",
+            (cache_ttl_h, warmup_interval_h))
+        conn.commit()
+        conn.close()
+        return tmp, path
+
+    def test_temporary_cap_is_shipped_6h_when_unwired(self):
+        self.assertEqual(
+            resolved_cache._temporary_cap_seconds(),
+            resolved_cache.HEURISTIC_CAP_TEMPORARY_SECONDS)
+        self.assertEqual(
+            resolved_cache._temporary_cap_seconds(), 6 * 3600.0)
+
+    def test_pool_recheck_is_shipped_24h_when_unwired(self):
+        self.assertEqual(
+            resolved_cache._pool_recheck_seconds(),
+            resolved_cache.POOL_RECHECK_SECONDS)
+        self.assertEqual(
+            resolved_cache._pool_recheck_seconds(), 24 * 3600.0)
+
+    def test_temporary_cap_reads_operator_knob(self):
+        from unittest import mock
+        tmp, path = self._panel_with_knobs(12, 48)
+        try:
+            with mock.patch.dict(os.environ, {"RADD_ADMIN_V2_DB": path}):
+                self.assertEqual(
+                    resolved_cache._temporary_cap_seconds(), 12 * 3600.0)
+                self.assertEqual(
+                    resolved_cache._pool_recheck_seconds(), 48 * 3600.0)
+        finally:
+            tmp.cleanup()
+
+    def test_temporary_cap_clamps_to_panel_bounds(self):
+        from unittest import mock
+        tmp, path = self._panel_with_knobs(99, 1)
+        try:
+            with mock.patch.dict(os.environ, {"RADD_ADMIN_V2_DB": path}):
+                # cache_ttl_h clamps to the panel's 1..24h; warmup_interval_h
+                # clamps to the panel's 6..168h.
+                self.assertEqual(
+                    resolved_cache._temporary_cap_seconds(), 24 * 3600.0)
+                self.assertEqual(
+                    resolved_cache._pool_recheck_seconds(), 6 * 3600.0)
+        finally:
+            tmp.cleanup()
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

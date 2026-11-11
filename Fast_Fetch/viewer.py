@@ -98,6 +98,39 @@ OPERATOR_ONLY_PREFIXES = ("/admin", "/operator")
 #: a panel's own smoke test is not a user pressing play.
 PLAYBACK_ROUTES = frozenset({"/api/v1/stream", "/api/v1/download"})
 
+#: The play bucket's limit, refreshed from the operator's
+#: `rate_limit_play_per_min` tuning knob at most once a minute. The gate
+#: runs on every public request, and a panel read on every one of those
+#: would be a SQLite open per request; a minute-old knob is fresh enough
+#: for a rate limit, and the shipped 30 is the answer when the panel is
+#: unwired. The cache is module state, read and written by the request
+#: threads; the worst a race does is two threads refreshing the same
+#: value, which is idempotent.
+_PLAY_LIMIT_CACHE = {"value": 30, "at": 0.0}
+_PLAY_LIMIT_TTL_SECONDS = 60.0
+
+
+def _play_limit_per_min():
+    """The play bucket's per-minute limit, from the operator's knob.
+
+    The panel's `rate_limit_play_per_min` (clamped to the panel's own
+    bounds, 10..120), cached for a minute. An unwired panel answers the
+    shipped 30. Never raises.
+    """
+    now = time.time()
+    if now - _PLAY_LIMIT_CACHE["at"] < _PLAY_LIMIT_TTL_SECONDS:
+        return _PLAY_LIMIT_CACHE["value"]
+    try:
+        value = panel_feed.tuning_knob(
+            name="rate_limit_play_per_min", default=30)
+    except Exception:
+        value = 30
+    if not isinstance(value, int) or value < 1:
+        value = 30
+    _PLAY_LIMIT_CACHE["value"] = value
+    _PLAY_LIMIT_CACHE["at"] = now
+    return value
+
 #: CORS lives in redact so the v1 and v2 edges share one allow-list (§16.7).
 cors_headers_for = redact.cors_headers_for
 
@@ -4069,6 +4102,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if path in OPERATOR_ONLY_ROUTES or path.startswith(OPERATOR_ONLY_PREFIXES):
             self.send_json({"success": False, "error": "not_found"}, status=404)
             return False
+        # The play bucket is the operator's knob: refresh its limit from
+        # the panel (cached for a minute) before charging this request, so
+        # a tuning change takes effect without a restart and an unwired
+        # panel keeps the shipped 30.
+        redact.limiter.limits["play"] = (_play_limit_per_min(), 60.0)
         verdict = redact.limiter.check(self._bucket_for(path, method),
                                        redact.client_ip(self))
         self.rate_headers = redact.limiter.headers(verdict)
@@ -4899,6 +4937,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 payload["disclaimer"] = panel_feed.read_disclaimer()
                 payload["free_quality_cap"] = panel_feed.read_free_quality_cap()
                 payload["min_version_code"] = panel_feed.read_min_version()
+                # The force-update block rides the same body: the latest
+                # APK the operator published, whether an older app must
+                # update, the copy for it, the brand colours and the region
+                # order. Read from the PUBLISHED snapshot, so a draft
+                # force-update never reaches a phone.
+                payload["force_update"] = panel_feed.read_force_update()
+                # A paused feature is off, whatever the catalog row says:
+                # the operator paused it, and the app must not offer it.
+                _paused = panel_feed.paused_features()
+                _flags = payload.get("feature_flags")
+                if isinstance(_flags, dict):
+                    for _feature in _paused:
+                        if _feature in _flags:
+                            _flags[_feature] = False
             self.send_json(redact.scrub(payload),
                            extra_headers=[("Cache-Control", "public, max-age=60")])
 

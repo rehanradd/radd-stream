@@ -62,6 +62,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+try:
+    import panel_feed  # the operator's tuning knobs + pauses
+except Exception:  # pragma: no cover - panel_feed is always importable in-repo
+    panel_feed = None
+
 BASE_DIR = Path(__file__).resolve().parent
 REGISTRY_PATH = BASE_DIR / "domain_registry.json"
 
@@ -73,6 +78,34 @@ READ_CAP = 200_000           # bytes read per response body
 PROBE_DELAY = 0.2            # seconds between probes to the same host
 VERIFY_TTL_SECONDS = 6 * 3600   # a verified domain is trusted this long within a sweep
 GITHUB_CACHE_SECONDS = 3600     # the two GitHub JSONs are fetched at most once an hour
+
+
+def _verify_ttl_seconds():
+    """How long a verified domain is trusted, in seconds.
+
+    The operator's `domain_check_interval_min` tuning knob (minutes):
+    the interval between domain re-checks. An unwired panel answers the
+    shipped 6h. Never raises.
+    """
+    if panel_feed is None:
+        return VERIFY_TTL_SECONDS
+    try:
+        return float(panel_feed.tuning_knob(
+            name="domain_check_interval_min",
+            default=int(VERIFY_TTL_SECONDS // 60)) * 60)
+    except Exception:
+        return VERIFY_TTL_SECONDS
+
+
+def _domain_checks_paused():
+    """True when the operator paused domain health checks. Never raises."""
+    if panel_feed is None:
+        return False
+    try:
+        return panel_feed.is_paused(
+            target_type="domain_checks", target_id="all")
+    except Exception:
+        return False
 MAX_TLD_PROBES = 20
 MAX_NUMERIC_PROBES = 24   # 24 covers filmyzilla 70..81 bare+www (live: 80) and hdhub4u new1..20 bare
 MAX_SEARCH_PROBES = 3
@@ -930,12 +963,19 @@ def probe_all_sites(only_stale: bool = False,
     """Probes all configured sites and returns audit summary.
 
     With only_stale=True (the §6 sweep rule) a site whose status is active
-    and whose last_verified is younger than VERIFY_TTL_SECONDS is skipped
+    and whose last_verified is younger than the verify TTL is skipped
     — a sweep that finds nothing new still updates last_checked for the
-    sites it did probe.
+    sites it did probe. The TTL is the operator's `domain_check_interval_min`
+    knob. When the operator paused domain checks, nothing is probed at all.
     """
+    if _domain_checks_paused():
+        return [{"site": site_name, "status": "paused",
+                 "skipped": True, "reason": "domain checks paused by operator"}
+                for site_name in sorted(
+                    load_registry(registry_path).get("sites", {}).keys())]
     reg = load_registry(registry_path)
     results = []
+    ttl = _verify_ttl_seconds()
     for site_name in sorted(reg.get("sites", {}).keys()):
         if only_stale:
             entry = reg["sites"][site_name]
@@ -944,8 +984,8 @@ def probe_all_sites(only_stale: bool = False,
                 try:
                     age = time.time() - time.mktime(time.strptime(last, "%Y-%m-%dT%H:%M:%SZ"))
                 except Exception:
-                    age = VERIFY_TTL_SECONDS + 1
-                if age < VERIFY_TTL_SECONDS:
+                    age = ttl + 1
+                if age < ttl:
                     results.append({"site": site_name, "status": "active",
                                     "skipped": True, "reason": "verified within TTL"})
                     continue
