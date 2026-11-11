@@ -28,6 +28,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -201,6 +202,10 @@ fun PosterCard(
                     // E-C1: the rating sat in tertiary directly on the artwork —
                     // 2.28:1 on white art, 1.73:1 on mid-grey. It now sits on a
                     // RaddArtScrim plate, like every other badge over artwork.
+                    // Owner decision 2026-11-11: white, not the purple tertiary
+                    // (#9AA5FF, ~3.8:1) — white on the scrim is ~8.6:1 and the
+                    // easiest read. Only this rating text changes; tertiary
+                    // itself (download arrow, offline badge) is untouched.
                     Box(
                         modifier = Modifier
                             .align(Alignment.TopEnd)
@@ -210,7 +215,7 @@ fun PosterCard(
                     ) {
                         Text(
                             text = "★ $rating",
-                            color = MaterialTheme.colorScheme.tertiary,
+                            color = Color.White,
                             style = MaterialTheme.typography.labelMedium,
                             fontWeight = FontWeight.Bold,
                             // Decorative: the merged tile description already says

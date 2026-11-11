@@ -11,6 +11,7 @@ import android.graphics.Typeface
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.view.TextureView
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -171,6 +172,8 @@ import com.raddstream.app.player.PinchCommand
 import com.raddstream.app.player.PlayerOrientation
 import com.raddstream.app.player.PlayerUiState
 import com.raddstream.app.player.ScreenZone
+import com.raddstream.app.player.ScrubPreviewPlayer
+import com.raddstream.app.player.ScrubThumbnails
 import com.raddstream.app.player.SleepMode
 import com.raddstream.app.player.SleepTimerState
 import com.raddstream.app.player.StartDeadline
@@ -322,6 +325,20 @@ private fun PlayerScreenContent(
     var snackbar by remember { mutableStateOf<String?>(null) }
     var scrubPreviewMs by remember { mutableStateOf<Long?>(null) }
 
+    // Scrub thumbnails (API 23+ only): a second, muted ExoPlayer that renders
+    // the frame at the scrub target into the toast's TextureView. Created
+    // lazily on the first scrub; null on Android 5, where the toast stays
+    // time-only, exactly as now. Released when this screen leaves.
+    var scrubPreviewPlayer by remember { mutableStateOf<ScrubPreviewPlayer?>(null) }
+    // The target the thumbnail is actually showing. It trails scrubPreviewMs
+    // by ScrubThumbnails.SETTLE_MS (see the LaunchedEffect below): during a
+    // fast drag the preview player never settles, so the toast shows only
+    // the time until the finger pauses and a real frame is ready.
+    var scrubSettledMs by remember { mutableStateOf<Long?>(null) }
+    DisposableEffect(scrubPreviewPlayer) {
+        onDispose { scrubPreviewPlayer?.release() }
+    }
+
     val showCoach by vm.showCoach.collectAsState()
     var coachDismissed by remember { mutableStateOf(false) }
 
@@ -444,6 +461,38 @@ private fun PlayerScreenContent(
         }
     }
 
+    // Scrub thumbnails (API 23+ only): every scrub target seeks the preview
+    // player at once — ExoPlayer coalesces rapid seeks, so a fast drag just
+    // keeps retargeting and the player renders once the finger pauses. The
+    // thumbnail itself waits SETTLE_MS after the last move: until then the
+    // TextureView would show the frame from the last settled position, which
+    // is the wrong scene for the time the toast prints. On Android 5 this
+    // whole effect is a no-op (no preview player exists) and the toast stays
+    // time-only, exactly as now. The Scrubber (bottom bar) does not come
+    // through here — it seeks the main player directly, so the picture
+    // itself is already the preview and no thumbnail is owed.
+    LaunchedEffect(scrubPreviewMs, state.activeRendition) {
+        val target = scrubPreviewMs
+        if (target == null) {
+            scrubSettledMs = null
+            return@LaunchedEffect
+        }
+        // Hide the thumbnail the moment the target moves: the frame on screen
+        // is from the last settled position, and showing it against the new
+        // time would be the wrong scene. It comes back SETTLE_MS after the
+        // finger stops, once the preview player has rendered this target.
+        scrubSettledMs = null
+        if (ScrubThumbnails.isSupported()) {
+            val preview = scrubPreviewPlayer ?: ScrubPreviewPlayer(context.applicationContext).also {
+                scrubPreviewPlayer = it
+            }
+            state.activeRendition?.let { preview.setRendition(it) }
+            preview.previewAt(target)
+        }
+        delay(ScrubThumbnails.SETTLE_MS)
+        scrubSettledMs = target
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -529,7 +578,21 @@ private fun PlayerScreenContent(
         // 4 — transient feedback layers
         DoubleTapRipple(state)
         hud?.let { HudToast(it, chrome) }
-        scrubPreviewMs?.let { ScrubToast(target = it, durationMs = state.durationMs) }
+        scrubPreviewMs?.let { target ->
+            ScrubToast(
+                target = target,
+                durationMs = state.durationMs,
+                previewPlayer = scrubPreviewPlayer,
+                // The thumbnail only shows once the target has settled: while
+                // dragging, the frame on screen is from the last settled
+                // position — the wrong scene for the time the toast prints.
+                showThumbnail = ScrubThumbnails.shouldShowThumbnail(
+                    settledMs = scrubSettledMs,
+                    targetMs = target,
+                    previewAvailable = scrubPreviewPlayer != null,
+                ),
+            )
+        }
         if (state.boosting) BoostBadge()
 
         // 5 — chrome. Ghost mode paints only the edge strip; everything else keeps the
@@ -1256,19 +1319,47 @@ private fun HudToast(hud: Hud, chrome: PlayerChromeTheme) {
 }
 
 @Composable
-private fun ScrubToast(target: Long, durationMs: Long) {
+private fun ScrubToast(
+    target: Long,
+    durationMs: Long,
+    previewPlayer: ScrubPreviewPlayer?,
+    showThumbnail: Boolean,
+) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-        Surface(
-            color = RaddHudToast,
-            shape = MaterialTheme.shapes.small,
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier.padding(bottom = 130.dp),
         ) {
-            Text(
-                stringResource(R.string.player_time_of, target.formatTime(), durationMs.formatTime()),
-                color = Color.White,
-                fontSize = brandSp(14),
-                modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-            )
+            // The thumbnail: the preview player's live TextureView, shown only
+            // once the target has settled (showThumbnail). Until then the frame
+            // on screen is from the last settled position — the wrong scene
+            // for this time — so only the time shows. On Android 5 there is
+            // no preview player and this stays time-only, exactly as before.
+            if (showThumbnail && previewPlayer != null) {
+                AndroidView(
+                    factory = { ctx ->
+                        TextureView(ctx).also { previewPlayer.setVideoTextureView(it) }
+                    },
+                    onRelease = { _ -> previewPlayer.clearVideoTextureView() },
+                    modifier = Modifier
+                        .size(
+                            ScrubThumbnails.THUMBNAIL_WIDTH_DP.dp,
+                            ScrubThumbnails.THUMBNAIL_HEIGHT_DP.dp,
+                        )
+                        .padding(bottom = 8.dp),
+                )
+            }
+            Surface(
+                color = RaddHudToast,
+                shape = MaterialTheme.shapes.small,
+            ) {
+                Text(
+                    stringResource(R.string.player_time_of, target.formatTime(), durationMs.formatTime()),
+                    color = Color.White,
+                    fontSize = brandSp(14),
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                )
+            }
         }
     }
 }

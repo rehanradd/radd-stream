@@ -1,5 +1,7 @@
 package com.raddstream.app.ui.screens
 
+import androidx.compose.ui.graphics.Color
+import com.raddstream.app.ui.theme.RaddArtScrim
 import com.raddstream.app.ui.theme.RaddCurrent500
 import com.raddstream.app.ui.theme.RaddInk750
 import com.raddstream.app.ui.theme.RaddInk800
@@ -189,6 +191,20 @@ class TextContrastTest {
         val ratio = contrastRatio(RaddMistOnInk, RaddInk900)
         assertTrue(
             "home poster card details on surface is only $ratio:1, under the 4.5:1 floor",
+            ratio >= 4.5f,
+        )
+    }
+
+    @Test
+    fun posterCardRatingOnScrimMeetsContrastFloor() {
+        // E-C1, owner decision 2026-11-11: the PosterCard "★ 8.1" rating is
+        // white on the RaddArtScrim plate, not the purple tertiary (#9AA5FF,
+        // ~3.8:1). White on the scrim is the easiest read on any artwork, so
+        // the pair is pinned here — a future change back to a coloured
+        // rating, or a lightening of the scrim, fails here first.
+        val ratio = contrastRatio(Color.White, RaddArtScrim)
+        assertTrue(
+            "poster card rating on scrim is only $ratio:1, under the 4.5:1 floor",
             ratio >= 4.5f,
         )
     }
