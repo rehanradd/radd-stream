@@ -1,6 +1,6 @@
 package com.raddstream.app.ui.screens
 
-import androidx.compose.ui.test.assertLeftPositionInRootEquals
+import androidx.compose.ui.test.assertLeftPositionInRootIsEqualTo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.unit.dp
@@ -33,7 +33,7 @@ class HomeSectionMarginsTest {
                 BrowserStrip(onPlayVideoLink = {}, onOpenLocalFiles = {}, onOpenDownloads = {})
             }
         }
-        compose.onNodeWithText("Your library").assertLeftPositionInRootEquals(16.dp)
+        compose.onNodeWithText("Your library").assertLeftPositionInRootIsEqualTo(16.dp)
     }
 
     @Test
@@ -46,7 +46,7 @@ class HomeSectionMarginsTest {
                 FacetChipsRow(facets = facets, onFacetSelected = { _, _ -> })
             }
         }
-        compose.onNodeWithText("Browse by genre").assertLeftPositionInRootEquals(16.dp)
+        compose.onNodeWithText("Browse by genre").assertLeftPositionInRootIsEqualTo(16.dp)
     }
 
     @Test
@@ -56,6 +56,6 @@ class HomeSectionMarginsTest {
                 JumpOffRow(onBrowseType = {})
             }
         }
-        compose.onNodeWithText("Browse by type").assertLeftPositionInRootEquals(16.dp)
+        compose.onNodeWithText("Browse by type").assertLeftPositionInRootIsEqualTo(16.dp)
     }
 }

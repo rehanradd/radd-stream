@@ -251,6 +251,8 @@ class QualityLadderTest {
         resumable = false,
         copies = 1,
         audioLanguages = audio,
+        // A playable stream rung, not a provider page.
+        isProviderPage = false,
     )
 
     @Test
