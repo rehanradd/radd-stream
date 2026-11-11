@@ -118,6 +118,7 @@ import com.raddstream.app.ui.navigation.DeepLinks
 import com.raddstream.app.ui.theme.rememberArtworkAccent
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
+import com.raddstream.app.viewmodel.downloadConfirmLabel
 import com.raddstream.app.viewmodel.EpisodeGroup
 import com.raddstream.app.viewmodel.EpisodeProgress
 import com.raddstream.app.viewmodel.PendingKeep
@@ -387,7 +388,20 @@ private fun KeepConfirmDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 if (showWebLink) {
-                    TextButton(onClick = onWebLink) { Text("Get Free Web Link") }
+                    // Audit #9/#10: the free web link is a SEPARATE, clearly
+                    // labelled secondary row — never the Download button's
+                    // action, never a competing primary. It opens in the
+                    // browser and has a captcha; the viewer hears that
+                    // before tapping, not after.
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        "Need a free link instead?",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    TextButton(onClick = onWebLink) {
+                        Text("Open web link — opens in browser, has a captcha")
+                    }
                 }
                 if (showDirectLink) {
                     // Session 76 (Build 4): a direct link for one movie, bought
@@ -407,7 +421,9 @@ private fun KeepConfirmDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onConfirm) { Text("Download") }
+            // Audit #10/#11: one dialog, one primary action — the version
+            // and its size, named together.
+            Button(onClick = onConfirm) { Text(downloadConfirmLabel(pending.printLabel, pending.sizeBytes)) }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) { Text("Cancel") }

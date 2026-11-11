@@ -139,6 +139,18 @@ fun keepSizeLabel(sizeBytes: Long?): String =
     sizeBytes?.takeIf { it > 0 }?.let { CacheAffordance.formatBytes(it) } ?: "Size unknown"
 
 /**
+ * The dialog's one primary action (audit #10/#11): the version and its
+ * size are named together, so the size is tied to the choice being made.
+ * "Download 480p · 730 MB"; a size the server never named says so
+ * instead of inventing one.
+ */
+fun downloadConfirmLabel(printLabel: String, sizeBytes: Long?): String {
+    val label = printLabel.trim().ifBlank { "this version" }
+    val size = sizeBytes?.takeIf { it > 0 }?.let { CacheAffordance.formatBytes(it) }
+    return if (size != null) "Download $label · $size" else "Download $label"
+}
+
+/**
  * What a keep request needs is a file. A page is not one: DownloadManager would fetch HTML and
  * the Downloads row would then claim a film had been kept. The screen offers the page instead,
  * and says why it is not in the kept list.

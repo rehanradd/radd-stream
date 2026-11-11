@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.raddstream.app.network.ApiProvider
@@ -38,6 +39,14 @@ data class DeviceDownload(
     val localUri: String?,
     val mimeType: String,
     val fileName: String,
+    /**
+     * App-design audit #12: the rolling speed (bytes/second) and the ETA
+     * derived from it — 0 / null while calculating, never a guessed number.
+     * Live only: a persisted row reloads with no samples, so it reads as
+     * calculating until the next progress tick.
+     */
+    val bytesPerSec: Long = 0L,
+    val etaSeconds: Long? = null,
 ) {
     val progress: Float
         get() = if (bytesTotal > 0) {
@@ -287,6 +296,17 @@ class DeviceDownloadsRepository @Inject constructor(
     }
 
     internal fun markProgress(id: String, downloaded: Long, total: Long) {
+        // Rolling speed over the last five progress ticks (~750 ms apart):
+        // the Downloads row and the notification read the same rate, and a
+        // stalled transfer reads as "calculating" instead of a frozen ETA.
+        // Computed before markRunning emits, so the row never lags a tick.
+        val samples = speedSamples.getOrPut(id) { ArrayDeque() }
+        samples.addLast(downloaded to SystemClock.elapsedRealtime())
+        while (samples.size > 5) samples.removeFirst()
+        val speed = DownloadSpeed.estimateBytesPerSec(samples.toList())
+        liveRates[id] = speed to DownloadSpeed.etaSeconds(
+            (total - downloaded).coerceAtLeast(0L), speed,
+        )
         markRunning(id, downloaded, total)
         val now = System.currentTimeMillis()
         if (now - (persistedAt[id] ?: 0L) >= PROGRESS_FLUSH_MS) {
@@ -295,7 +315,14 @@ class DeviceDownloadsRepository @Inject constructor(
         }
     }
 
+    /** Drop a download's live rate when it stops moving, so a stale speed never shows. */
+    private fun dropLiveRate(id: String) {
+        speedSamples.remove(id)
+        liveRates.remove(id)
+    }
+
     internal fun markPaused(id: String, downloaded: Long) {
+        dropLiveRate(id)
         update(id) {
             it.copy(
                 state = DeviceDownloadState.PAUSED,
@@ -311,6 +338,7 @@ class DeviceDownloadsRepository @Inject constructor(
         total: Long,
         reason: String = "Download stopped before it finished.",
     ) {
+        dropLiveRate(id)
         update(id) {
             it.copy(
                 state = DeviceDownloadState.FAILED,
@@ -322,6 +350,7 @@ class DeviceDownloadsRepository @Inject constructor(
     }
 
     internal fun markReady(id: String, downloaded: Long, total: Long, localUri: String) {
+        dropLiveRate(id)
         update(id) {
             it.copy(
                 state = DeviceDownloadState.READY,
@@ -349,6 +378,7 @@ class DeviceDownloadsRepository @Inject constructor(
     internal fun removeEntry(id: String) {
         val remaining = load().filterNot { it.id == id }
         persistedAt.remove(id)
+        dropLiveRate(id)
         persist(remaining)
         emit(remaining)
     }
@@ -414,7 +444,15 @@ class DeviceDownloadsRepository @Inject constructor(
         localUri = localUri,
         mimeType = mimeType,
         fileName = fileName,
+        bytesPerSec = liveRates[id]?.first ?: 0L,
+        etaSeconds = liveRates[id]?.second,
     )
+
+    /** Rolling progress samples per download (bytes, monotonic ms), last five only. */
+    private val speedSamples = HashMap<String, ArrayDeque<Pair<Long, Long>>>()
+
+    /** Live (speed, ETA) per download, derived from [speedSamples]. */
+    private val liveRates = HashMap<String, Pair<Long, Long?>>()
 
     private fun videoMime(declared: String?, kind: String?): String? {
         val mime = declared?.trim()?.lowercase(Locale.ROOT).orEmpty()
