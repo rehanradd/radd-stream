@@ -97,8 +97,4 @@ class RegionViewModel @Inject constructor(
      * choice" — it is the default choice, written like any other. A card tapped before
      * Skip is undone by it; that is what the button promises.
      */
-    fun skipAndContinue(onSaved: () -> Unit) {
-        _ui.update { it.copy(selectedId = UserRegion.DEFAULT, saveFailed = false) }
-        saveAndContinue(onSaved)
-    }
 }

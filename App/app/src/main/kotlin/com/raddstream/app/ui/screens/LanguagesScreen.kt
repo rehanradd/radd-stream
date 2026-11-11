@@ -139,7 +139,7 @@ fun LanguagesScreen(
             }
 
             Text(
-                "The Region card, the Settings chips and the player sheet write these same " +
+                "The Region card, this screen and the player sheet write these same " +
                     "choices — change one place and the others follow, because there is only " +
                     "one stored value underneath them.",
                 style = MaterialTheme.typography.labelSmall,
