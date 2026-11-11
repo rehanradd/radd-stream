@@ -33,7 +33,7 @@ def _query_tokens(query: str) -> list[str]:
     return [t for t in re.split(r"[^a-z0-9]+", (query or "").lower()) if t]
 
 
-def correct_token(conn, token: str, *, limit: int = 200) -> str | None:
+def correct_token(conn, token: str, *, limit: int = 1000) -> str | None:
     """The title word `token` most likely meant, or None.
 
     One fuzzy pass over the catalog's title words (the same 3-gram +
@@ -44,6 +44,16 @@ def correct_token(conn, token: str, *, limit: int = 200) -> str | None:
     is already correct and needs no suggestion. The adult clause applies
     here too: a suggestion must never name a title the public surface
     hides.
+
+    Recall: candidates are ordered by how many of the token's 3-grams
+    the title shares, newest first within a tie — never by recency
+    alone. The old `ORDER BY id DESC LIMIT 200` let the newest 200
+    gram-matching rows crowd an old title out of the window, so
+    "avengrs" never reached "Avengers". The window is wider too (the
+    LIKE scan already reads the table; the limit only bounds rows
+    fetched). The exact-word check runs over the whole window first,
+    so a newer misspelling ("batmann") can never outrank the exact
+    title word ("batman").
     """
     token = (token or "").lower()
     if len(token) < _MIN_TOKEN_LEN:
@@ -51,12 +61,19 @@ def correct_token(conn, token: str, *, limit: int = 200) -> str | None:
     grams = sorted(search_fuzzy.candidate_grams(token))
     if not grams:
         return None
+    patterns = [f"%{gram}%" for gram in grams]
     try:
         like_sql = " OR ".join("lower(p.clean_title) LIKE ?" for _ in grams)
+        # Parenthesise each term: in SQLite `+` binds tighter than
+        # LIKE, so an unparenthesised `a LIKE ? + b LIKE ?` parses as a
+        # chained comparison, not a sum of 0/1 matches — the score
+        # would be meaningless and the ordering would fall back to
+        # recency alone.
+        score_sql = " + ".join("(lower(p.clean_title) LIKE ?)" for _ in grams)
         rows = conn.execute(
             f"SELECT p.clean_title FROM posts p WHERE {redact.adult_clause('p')}"
-            f" AND ({like_sql}) ORDER BY p.id DESC LIMIT ?",
-            [f"%{gram}%" for gram in grams] + [int(limit)],
+            f" AND ({like_sql}) ORDER BY ({score_sql}) DESC, p.id DESC LIMIT ?",
+            patterns + patterns + [int(limit)],
         ).fetchall()
     except sqlite3.OperationalError:
         # No `posts` ledger in this database (a v2-only fixture), or a
@@ -64,17 +81,21 @@ def correct_token(conn, token: str, *, limit: int = 200) -> str | None:
         # nothing to correct against, so there is no suggestion — never
         # a 500 from a missing table.
         return None
+    words: list[str] = []
     for row in rows:
         title = row[0] if not isinstance(row, sqlite3.Row) else row["clean_title"]
-        for word in search_fuzzy.tokenize(title or ""):
-            if word == token:
-                return None
-            if search_fuzzy.edit_distance_le1(token, word):
-                return word
+        words.extend(search_fuzzy.tokenize(title or ""))
+    # Exact first, across the whole window: a newer misspelling must
+    # never outrank the exact title word.
+    if token in words:
+        return None
+    for word in words:
+        if search_fuzzy.edit_distance_le1(token, word):
+            return word
     return None
 
 
-def suggest_correction(conn, query: str, *, limit: int = 200) -> dict | None:
+def suggest_correction(conn, query: str, *, limit: int = 1000) -> dict | None:
     """The corrected query for `query`, or None when nothing corrects.
 
     Returns {"query": <corrected query>, "corrected_tokens": {<typed>:

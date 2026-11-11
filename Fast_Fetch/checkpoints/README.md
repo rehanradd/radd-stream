@@ -5,6 +5,17 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-11 — Muse self-check [DIDYOUMEAN-RECALL]: did-you-mean
+  candidates now order by 3-gram match count, not recency alone, so
+  "avengrs" / "avengerss" / "incepton" correct on the live catalog.
+  Caught while verifying: SQLite `+` binds tighter than `LIKE`, so the
+  first score expression parsed as a chained comparison — terms are now
+  parenthesised, and the regression test pins the truncating limit.
+  Tests: did_you_mean 11, search_forgiving 11, viewer_search_forgiving
+  8 — all OK solo. Branch pushed; landing via the gate is the
+  parent's. —
+  [20261111-selfcheck-didyoumean-recall.md](20261111-selfcheck-didyoumean-recall.md)
+
 - 2026-11-11 — Muse [A1-POSTER-RERESOLVE]: `--poster-url` scope for
   `backfill_tmdb.py` so a `--force` run re-resolves only the 13,234 posts
   stuck on the Masterplan poster (one 2026-10-24 bad-import window, not an
