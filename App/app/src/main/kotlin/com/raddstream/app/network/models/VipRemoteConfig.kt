@@ -71,6 +71,15 @@ data class VipRemoteConfig(
      */
     @SerializedName("min_version_code")
     val minVersionCode: Int = 0,
+    /**
+     * The operator's published force-update block (see [ForceUpdate]):
+     * the latest APK, whether an older app must update, the copy for it,
+     * the brand colours and the region order. Absent from an older
+     * deployment — it decodes to [ForceUpdate]'s defaults, which mean "no
+     * update published, no force, own brand, no order".
+     */
+    @SerializedName("force_update")
+    val forceUpdate: ForceUpdate = ForceUpdate(),
     /** Operator switch: the phone shows a maintenance notice instead of the catalog. */
     @SerializedName("maintenance_mode")
     val maintenanceMode: Boolean = false,
@@ -166,6 +175,38 @@ const val DEFAULT_DISCLAIMER_VERSION = 1
 
 /** The takedown contact shown with the default disclaimer. */
 const val DEFAULT_DISCLAIMER_EMAIL = "radddao1@gmail.com"
+
+/**
+ * The operator's published force-update block, served on this same body
+ * under `force_update` (see `Fast_Fetch/panel_feed.py:read_force_update`).
+ * Read from the PUBLISHED snapshot, so a draft force-update never reaches
+ * a phone. `latestVersionCode` / `latestVersionName` name the newest APK
+ * the operator published; `forceUpdate` says whether an older app must
+ * update before it may play; the two messages are the copy for a forced
+ * update and for maintenance; `brandPrimary` / `brandAccent` are the
+ * operator's brand colours (empty means this app's own brand);
+ * `regionOrder` is the operator's region priority. Every default is the
+ * inert one — no update published, no force, own brand, no order — so an
+ * absent block changes nothing.
+ */
+data class ForceUpdate(
+    @SerializedName("latest_version_code")
+    val latestVersionCode: Int = 0,
+    @SerializedName("latest_version_name")
+    val latestVersionName: String = "",
+    @SerializedName("force_update")
+    val forceUpdate: Boolean = false,
+    @SerializedName("force_update_message")
+    val forceUpdateMessage: String = "",
+    @SerializedName("maintenance_message")
+    val maintenanceMessage: String = "",
+    @SerializedName("brand_primary")
+    val brandPrimary: String = "",
+    @SerializedName("brand_accent")
+    val brandAccent: String = "",
+    @SerializedName("region_order")
+    val regionOrder: List<String> = emptyList(),
+)
 
 /**
  * The operator's disclaimer: the text, the version the app compares

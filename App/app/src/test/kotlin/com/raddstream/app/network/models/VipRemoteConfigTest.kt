@@ -529,4 +529,52 @@ class VipRemoteConfigTest {
         assertEquals(5, config.theme.heroIntervalS)
         assertEquals(6, config.theme.heroMax)
     }
+
+    @Test
+    fun `decodes the published force-update block`() {
+        val config = gson.fromJson(
+            """
+            {
+              "success": true,
+              "force_update": {
+                "latest_version_code": 350,
+                "latest_version_name": "1.0.5",
+                "force_update": true,
+                "force_update_message": "Please update to keep watching.",
+                "maintenance_message": "Back soon.",
+                "brand_primary": "#2563EB",
+                "brand_accent": "#7C3AED",
+                "region_order": ["pakistan", "india", "asia", "international"]
+              }
+            }
+            """.trimIndent(),
+            VipRemoteConfig::class.java,
+        )
+
+        assertEquals(350, config.forceUpdate.latestVersionCode)
+        assertEquals("1.0.5", config.forceUpdate.latestVersionName)
+        assertTrue(config.forceUpdate.forceUpdate)
+        assertEquals("Please update to keep watching.", config.forceUpdate.forceUpdateMessage)
+        assertEquals("Back soon.", config.forceUpdate.maintenanceMessage)
+        assertEquals("#2563EB", config.forceUpdate.brandPrimary)
+        assertEquals("#7C3AED", config.forceUpdate.brandAccent)
+        assertEquals(
+            listOf("pakistan", "india", "asia", "international"),
+            config.forceUpdate.regionOrder,
+        )
+    }
+
+    @Test
+    fun `a body with no force-update block decodes to the inert defaults`() {
+        val config = gson.fromJson("""{"success": true}""", VipRemoteConfig::class.java)
+
+        assertEquals(0, config.forceUpdate.latestVersionCode)
+        assertEquals("", config.forceUpdate.latestVersionName)
+        assertFalse(config.forceUpdate.forceUpdate)
+        assertEquals("", config.forceUpdate.forceUpdateMessage)
+        assertEquals("", config.forceUpdate.maintenanceMessage)
+        assertEquals("", config.forceUpdate.brandPrimary)
+        assertEquals("", config.forceUpdate.brandAccent)
+        assertTrue(config.forceUpdate.regionOrder.isEmpty())
+    }
 }
