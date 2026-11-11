@@ -59,6 +59,8 @@ import subprocess
 import threading
 import socket
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 
 from .errors import ApiError, bad, conflict, not_found
@@ -388,6 +390,51 @@ def _usage_revenue_estimate(*, metrics, users, days):
         "rewarded_per_1000_users": round(rewarded / population * 1000.0, 2),
         "estimate": True,
     }
+
+
+STREAM_CHECK_TIMEOUT = 10
+
+
+def check_stream_url(url, timeout=STREAM_CHECK_TIMEOUT):
+    """Probe one stream URL without downloading it.
+
+    HEAD first; if the host rejects HEAD (405/501), retry with a
+    1-byte Range GET. Alive = HTTP 200/206. Never reads a body larger
+    than 1 byte. Returns {"alive": bool, "status": int|None,
+    "error": str|None}."""
+    if not isinstance(url, str) or not url.strip():
+        return {"alive": False, "status": None, "error": "empty URL"}
+    url = url.strip()
+    if not re.match(r"^https?://", url, re.I):
+        return {"alive": False, "status": None, "error": "URL must be http(s)"}
+    for method, headers in (("HEAD", {}), ("GET", {"Range": "bytes=0-0"})):
+        req = urllib.request.Request(url, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                status = getattr(resp, "status", 200)
+                return {"alive": status in (200, 206), "status": status, "error": None}
+        except urllib.error.HTTPError as exc:
+            # 405/501 = HEAD not allowed; fall through to the Range GET.
+            if method == "HEAD" and exc.code in (405, 501):
+                continue
+            return {"alive": exc.code in (200, 206), "status": exc.code, "error": None}
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
+            return {"alive": False, "status": None, "error": str(exc)[:200]}
+    return {"alive": False, "status": None, "error": "stream did not answer"}
+
+
+def _live_tv_bool(value, default=True):
+    """Coerce a form/JSON flag to bool. "0"/"false"/"off"/"" -> False.
+
+    (A bare bool("0") is True in Python, so the HTML toggle form's
+    hidden enabled="0" used to never disable a channel.)"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "on", "yes")
 
 
 class LiveStores:
@@ -1678,10 +1725,205 @@ class LiveStores:
                 "category": str(ch.get("category") or ""),
                 "country": str(ch.get("country") or ""),
                 "language": str(ch.get("language") or ""),
+                "stream_url": str(ch.get("stream_url") or ""),
+                "logo_url": str(ch.get("logo_url") or ""),
+                "source": str(ch.get("source") or ""),
                 "enabled": bool(ch.get("enabled")),
                 "disabled_reason": str(ch.get("disabled_reason") or ""),
             })
         return {"channels": out, "count": len(out)}
+
+    def _read_live_tv_registry(self):
+        """Parse live_tv_registry.json; LiveUnavailable if missing/malformed."""
+        path = self.live_tv_registry_path
+        if not os.path.exists(path):
+            raise LiveUnavailable("No Live TV registry file is configured here.")
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        channels = data.get("channels") if isinstance(data, dict) else None
+        if not isinstance(channels, list):
+            raise LiveUnavailable("Live TV registry has no channel list.")
+        return data
+
+    def _write_live_tv_registry(self, data):
+        """Atomic registry write (tmp + replace) with an updated_at stamp."""
+        path = self.live_tv_registry_path
+        data["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+
+    def add_live_tv_channel(self, fields, stream_checker=None):
+        """Add one Live TV channel. Writes only after a backup.
+
+        fields: name (required), stream_url (required), category,
+        country, language, logo_url, source ("official"|"aggregator"),
+        enabled. The stream URL is probed first (checker injectable
+        for tests); a dead stream refuses unless fields["force"] is
+        truthy. A duplicate name or stream URL is a warning, not a
+        refusal. Returns {"channel": ..., "warnings": [...],
+        "backup": ...}."""
+        name = str(fields.get("name") or "").strip()
+        stream_url = str(fields.get("stream_url") or "").strip()
+        if not name:
+            raise bad("Channel name is required.")
+        if len(name) > 120:
+            raise bad("Channel name is too long (120 characters).")
+        if not re.match(r"^https?://", stream_url, re.I):
+            raise bad("Stream URL must start with http:// or https://.")
+        if len(stream_url) > 500:
+            raise bad("Stream URL is too long (500 characters).")
+        category = str(fields.get("category") or "").strip()[:40]
+        country = str(fields.get("country") or "").strip()[:40]
+        language = str(fields.get("language") or "").strip()[:40]
+        logo_url = str(fields.get("logo_url") or "").strip()[:500]
+        if logo_url and not re.match(r"^https?://", logo_url, re.I):
+            raise bad("Logo URL must start with http:// or https://.")
+        source = str(fields.get("source") or "official").strip().lower()
+        if source not in ("official", "aggregator"):
+            raise bad("Source must be official or aggregator.")
+        enabled = _live_tv_bool(fields.get("enabled", True), True)
+        force = _live_tv_bool(fields.get("force", False), False)
+
+        data = self._read_live_tv_registry()
+        channels = data["channels"]
+        warnings = []
+        for ch in channels:
+            if not isinstance(ch, dict):
+                continue
+            if str(ch.get("name") or "").strip().lower() == name.lower():
+                warnings.append("A channel named %s already exists." % name)
+            if str(ch.get("stream_url") or "").strip() == stream_url:
+                warnings.append("This stream URL is already used by %s." % (
+                    ch.get("name") or "another channel"))
+        checker = stream_checker or check_stream_url
+        probe = checker(stream_url)
+        verified_at = ""
+        if probe.get("alive"):
+            verified_at = datetime.now(timezone.utc).isoformat() + "Z"
+        elif not force:
+            status = probe.get("status")
+            err = probe.get("error") or ""
+            raise bad("Stream URL did not answer%s — check the link, or tick force to add it anyway." % (
+                (" (HTTP %s)" % status) if status else ((" (%s)" % err[:80]) if err else "")))
+        else:
+            warnings.append("Stream URL did not answer; added anyway (forced).")
+
+        backup = self._live_tv_backup_path()
+        new_id = 1
+        for ch in channels:
+            if isinstance(ch, dict) and isinstance(ch.get("id"), int):
+                new_id = max(new_id, ch["id"] + 1)
+        record = {
+            "id": new_id, "name": name, "category": category,
+            "country": country, "language": language,
+            "logo_url": logo_url, "stream_url": stream_url,
+            "source": source, "verified_at": verified_at,
+            "enabled": enabled,
+            "disabled_reason": "" if enabled else "disabled from panel",
+        }
+        channels.append(record)
+        self._write_live_tv_registry(data)
+        return {"channel": record, "warnings": sorted(set(warnings)), "backup": backup}
+
+    def update_live_tv_channel(self, channel_id, fields, stream_checker=None):
+        """Edit one Live TV channel. Writes only after a backup.
+
+        fields: any of name, category, country, language, stream_url,
+        logo_url, source, enabled, disabled_reason. A changed stream
+        URL is probed first (force overrides a dead stream). A
+        duplicate name or stream URL (on another channel) is a warning,
+        not a refusal. Returns {"channel": ..., "warnings": [...],
+        "backup": ...}."""
+        data = self._read_live_tv_registry()
+        channels = data["channels"]
+        found = None
+        for ch in channels:
+            if isinstance(ch, dict) and ch.get("id") == channel_id:
+                found = ch
+                break
+        if found is None:
+            raise not_found("That Live TV channel was not found.")
+        warnings = []
+        if fields.get("name") is not None:
+            name = str(fields["name"] or "").strip()
+            if not name:
+                raise bad("Channel name is required.")
+            if len(name) > 120:
+                raise bad("Channel name is too long (120 characters).")
+            for ch in channels:
+                if ch is not found and isinstance(ch, dict) and str(ch.get("name") or "").strip().lower() == name.lower():
+                    warnings.append("A channel named %s already exists." % name)
+            found["name"] = name
+        if fields.get("category") is not None:
+            found["category"] = str(fields["category"] or "").strip()[:40]
+        if fields.get("country") is not None:
+            found["country"] = str(fields["country"] or "").strip()[:40]
+        if fields.get("language") is not None:
+            found["language"] = str(fields["language"] or "").strip()[:40]
+        if fields.get("logo_url") is not None:
+            logo_url = str(fields["logo_url"] or "").strip()[:500]
+            if logo_url and not re.match(r"^https?://", logo_url, re.I):
+                raise bad("Logo URL must start with http:// or https://.")
+            found["logo_url"] = logo_url
+        if fields.get("source") is not None:
+            source = str(fields["source"] or "").strip().lower()
+            if source not in ("official", "aggregator"):
+                raise bad("Source must be official or aggregator.")
+            found["source"] = source
+        if fields.get("stream_url") is not None:
+            stream_url = str(fields["stream_url"] or "").strip()
+            if not re.match(r"^https?://", stream_url, re.I):
+                raise bad("Stream URL must start with http:// or https://.")
+            if len(stream_url) > 500:
+                raise bad("Stream URL is too long (500 characters).")
+            for ch in channels:
+                if ch is not found and isinstance(ch, dict) and str(ch.get("stream_url") or "").strip() == stream_url:
+                    warnings.append("This stream URL is already used by %s." % (
+                        ch.get("name") or "another channel"))
+            force = _live_tv_bool(fields.get("force", False), False)
+            checker = stream_checker or check_stream_url
+            probe = checker(stream_url)
+            if probe.get("alive"):
+                found["verified_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+            elif not force:
+                status = probe.get("status")
+                err = probe.get("error") or ""
+                raise bad("Stream URL did not answer%s — check the link, or tick force to save it anyway." % (
+                    (" (HTTP %s)" % status) if status else ((" (%s)" % err[:80]) if err else "")))
+            else:
+                warnings.append("Stream URL did not answer; saved anyway (forced).")
+            found["stream_url"] = stream_url
+        if fields.get("disabled_reason") is not None:
+            found["disabled_reason"] = str(fields["disabled_reason"] or "")[:200]
+        if fields.get("enabled") is not None:
+            enabled = _live_tv_bool(fields["enabled"], True)
+            found["enabled"] = enabled
+            if enabled:
+                found["disabled_reason"] = ""
+        backup = self._live_tv_backup_path()
+        self._write_live_tv_registry(data)
+        return {"channel": dict(found), "warnings": sorted(set(warnings)), "backup": backup}
+
+    def delete_live_tv_channel(self, channel_id):
+        """Delete one Live TV channel. Writes only after a backup."""
+        data = self._read_live_tv_registry()
+        channels = data["channels"]
+        found = None
+        for ch in channels:
+            if isinstance(ch, dict) and ch.get("id") == channel_id:
+                found = ch
+                break
+        if found is None:
+            raise not_found("That Live TV channel was not found.")
+        backup = self._live_tv_backup_path()
+        data["channels"] = [c for c in channels
+                            if not (isinstance(c, dict) and c.get("id") == channel_id)]
+        self._write_live_tv_registry(data)
+        return {"id": channel_id, "deleted": True,
+                "name": str(found.get("name") or ""), "backup": backup}
 
     def set_live_tv_channel(self, channel_id, enabled, reason=""):
         """Enable/disable one Live TV channel, atomically, after backup.

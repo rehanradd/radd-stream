@@ -56,10 +56,11 @@ def parse_cookies(header):
 class AdminApp:
     """Testable core: routes + auth, without the socket layer."""
 
-    def __init__(self, service, strict_host=False, domain_checker=None):
+    def __init__(self, service, strict_host=False, domain_checker=None, stream_checker=None):
         self.service = service
         self.strict_host = strict_host
         self.domain_checker = domain_checker
+        self.stream_checker = stream_checker
         self.limiter = RateLimiter()
 
     # -- request handling -------------------------------------------------
@@ -344,7 +345,10 @@ def _api(self, method, path, query, headers, body_bytes):
     R(("GET", r"^/admin/api/v2/remote-config/history$", lambda u, _ip: svc.list_config_history(u), False))
     R(("GET", r"^/admin/api/v2/live$", lambda u, _ip: svc.get_live(u), False))
     R(("GET", r"^/admin/api/v2/live-tv$", lambda u, _ip: svc.list_live_tv(u), False))
+    R(("POST", r"^/admin/api/v2/live-tv$", lambda u, _ip: svc.add_live_tv_channel(u, body, checker=self.stream_checker, ip=_ip), True))
     R(("POST", r"^/admin/api/v2/live-tv/(\d+)$", lambda u, _ip: svc.set_live_tv_channel(u, int(_last(path)), body, ip=_ip), True))
+    R(("POST", r"^/admin/api/v2/live-tv/(\d+)/edit$", lambda u, _ip: svc.update_live_tv_channel(u, int(_last2(path)), body, checker=self.stream_checker, ip=_ip), True))
+    R(("POST", r"^/admin/api/v2/live-tv/(\d+)/delete$", lambda u, _ip: svc.delete_live_tv_channel(u, int(_last2(path)), body, ip=_ip), True))
     R(("GET", r"^/admin/api/v2/remote-config/scheduled$", lambda u, _ip: svc.list_scheduled(u), False))
     R(("POST", r"^/admin/api/v2/remote-config/schedule$", lambda u, _ip: svc.schedule_publish(u, body, ip=_ip), True))
     R(("POST", r"^/admin/api/v2/remote-config/schedule/(\d+)/cancel$", lambda u, _ip: svc.cancel_scheduled_publish(u, int(_last2(path)), body, ip=_ip), True))
@@ -929,12 +933,14 @@ def _page_live(self, user, sess, query):
 
 
 def _page_live_tv(self, user, sess, query):
-    """Live TV channels: enable/disable per channel.
+    """Live TV channels: add / edit / delete / enable-disable.
 
     Reads live_tv_registry.json through the live store; the backend
-    re-reads the registry per call, so a toggle takes effect on the
+    re-reads the registry per call, so a change takes effect on the
     next app refresh with no service restart. A disabled channel never
-    plays (live_tv.py fail-closed)."""
+    plays (live_tv.py fail-closed). Adding or saving a channel probes
+    its stream URL first; a dead stream refuses unless force is set.
+    A duplicate name or stream URL is a warning, not a refusal."""
     hid = templates.form_hidden(sess.get("csrf_token"), "/admin/live-tv")
     try:
         res = self.service.list_live_tv(user)
@@ -947,13 +953,41 @@ def _page_live_tv(self, user, sess, query):
     rows = []
     for c in channels:
         rows.append([c["id"], c["name"], c["category"] or "—", c["country"] or "—",
+                     c["source"] or "—",
                      templates.Raw(templates.badge("On" if c["enabled"] else "Off")),
                      c["disabled_reason"] or "—"])
     body = ('<div class="card"><h3>Live TV — %d of %d channels on</h3>'
             '<p>Toggle a channel to hide it from the app. The app reads the registry '
             'on every refresh, so the change is live immediately — no restart.</p></div>') % (
                 enabled, len(channels))
-    body += templates.table(["ID", "Channel", "Category", "Country", "State", "Disabled reason"],
+    body += ('<div class="card"><h3>Add channel</h3>'
+             '<p>The stream URL is checked before saving — a dead link refuses '
+             'unless you tick force. A name or stream URL already in use shows a warning.</p>'
+             '<form method="post" action="/admin/api/v2/live-tv">%s'
+             '<label for="lt-add-name">Name</label>'
+             '<input id="lt-add-name" name="name" required>'
+             '<label for="lt-add-category">Category</label>'
+             '<input id="lt-add-category" name="category">'
+             '<label for="lt-add-country">Country</label>'
+             '<input id="lt-add-country" name="country">'
+             '<label for="lt-add-language">Language</label>'
+             '<input id="lt-add-language" name="language">'
+             '<label for="lt-add-stream">Stream URL</label>'
+             '<input id="lt-add-stream" name="stream_url" required placeholder="https://.../playlist.m3u8">'
+             '<label for="lt-add-logo">Logo URL</label>'
+             '<input id="lt-add-logo" name="logo_url">'
+             '<label for="lt-add-source">Source</label>'
+             '<select id="lt-add-source" name="source">'
+             '<option value="official" selected>official</option>'
+             '<option value="aggregator">aggregator</option></select>'
+             '<label for="lt-add-enabled">State</label>'
+             '<select id="lt-add-enabled" name="enabled">'
+             '<option value="1" selected>Enabled</option>'
+             '<option value="0">Disabled</option></select>'
+             '<label class="check"><input type="checkbox" name="force" value="1"> <span>Add even if the stream does not answer</span></label>'
+             '<div class="stickybar"><button type="submit">Add channel</button></div>'
+             '</form></div>') % hid
+    body += templates.table(["ID", "Channel", "Category", "Country", "Source", "State", "Disabled reason"],
                             rows, "No channels in the registry")
     for c in channels:
         cid = templates.esc(c["id"])
@@ -969,6 +1003,53 @@ def _page_live_tv(self, user, sess, query):
                      cid, cid, templates.esc(c["disabled_reason"] or ""),
                      "danger" if c["enabled"] else "",
                      "Disable channel" if c["enabled"] else "Enable channel")
+        src = c.get("source") or "official"
+        body += ('<div class="card"><h3>Edit %s</h3>'
+                 '<form method="post" action="/admin/api/v2/live-tv/%s/edit">%s'
+                 '<label for="lt-name-%s">Name</label>'
+                 '<input id="lt-name-%s" name="name" value="%s" required>'
+                 '<label for="lt-category-%s">Category</label>'
+                 '<input id="lt-category-%s" name="category" value="%s">'
+                 '<label for="lt-country-%s">Country</label>'
+                 '<input id="lt-country-%s" name="country" value="%s">'
+                 '<label for="lt-language-%s">Language</label>'
+                 '<input id="lt-language-%s" name="language" value="%s">'
+                 '<label for="lt-stream-%s">Stream URL</label>'
+                 '<input id="lt-stream-%s" name="stream_url" value="%s" required>'
+                 '<label for="lt-logo-%s">Logo URL</label>'
+                 '<input id="lt-logo-%s" name="logo_url" value="%s">'
+                 '<label for="lt-source-%s">Source</label>'
+                 '<select id="lt-source-%s" name="source">'
+                 '<option value="official"%s>official</option>'
+                 '<option value="aggregator"%s>aggregator</option></select>'
+                 '<label for="lt-enabled-%s">State</label>'
+                 '<select id="lt-enabled-%s" name="enabled">'
+                 '<option value="1"%s>Enabled</option>'
+                 '<option value="0"%s>Disabled</option></select>'
+                 '<label for="lt-disreason-%s">Disabled reason</label>'
+                 '<input id="lt-disreason-%s" name="disabled_reason" value="%s">'
+                 '<label class="check"><input type="checkbox" name="force" value="1"> <span>Save even if the stream does not answer</span></label>'
+                 '<div class="stickybar"><button type="submit">Save changes</button></div>'
+                 '</form>'
+                 '<form method="post" action="/admin/api/v2/live-tv/%s/delete">%s'
+                 '<label class="check"><input type="checkbox" name="confirm" required> <span>Confirm delete %s</span></label>'
+                 '<div class="stickybar"><button type="submit" class="danger">Delete channel</button></div>'
+                 '</form></div>') % (
+                     templates.esc(c["name"]), cid, hid,
+                     cid, cid, templates.esc(c["name"]),
+                     cid, cid, templates.esc(c["category"] or ""),
+                     cid, cid, templates.esc(c["country"] or ""),
+                     cid, cid, templates.esc(c["language"] or ""),
+                     cid, cid, templates.esc(c["stream_url"] or ""),
+                     cid, cid, templates.esc(c["logo_url"] or ""),
+                     cid,
+                     " selected" if src == "official" else "",
+                     " selected" if src == "aggregator" else "",
+                     cid,
+                     " selected" if c["enabled"] else "",
+                     " selected" if not c["enabled"] else "",
+                     cid, cid, templates.esc(c["disabled_reason"] or ""),
+                     cid, hid, templates.esc(c["name"]))
     return templates.layout("Live TV", body, active="live-tv")
 
 
@@ -1603,8 +1684,8 @@ class Handler(BaseHTTPRequestHandler):
         self._run("DELETE")
 
 
-def serve(service, host="127.0.0.1", port=8080, strict_host=False, domain_checker=None):
-    app = AdminApp(service, strict_host=strict_host, domain_checker=domain_checker)
+def serve(service, host="127.0.0.1", port=8080, strict_host=False, domain_checker=None, stream_checker=None):
+    app = AdminApp(service, strict_host=strict_host, domain_checker=domain_checker, stream_checker=stream_checker)
     Handler.app = app
     server = ThreadingHTTPServer((host, port), Handler)
     print("Admin Panel v2 (workspace build) on %s:%d — not a live deploy" % (host, port))

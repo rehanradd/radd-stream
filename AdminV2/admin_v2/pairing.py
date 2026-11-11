@@ -105,4 +105,7 @@ MATRIX = {
     "draft_remote_config_form_save": ("POST", "/admin/api/v2/remote-config", "app_remote_config_v2.brand_primary", "public_remote_config"),
     "live_tv_list": ("GET", "/admin/api/v2/live-tv", "live_tv_registry.enabled", "live_tv"),
     "live_tv_toggle": ("POST", "/admin/api/v2/live-tv/{id}", "live_tv_registry.enabled", "live_tv"),
+    "live_tv_add": ("POST", "/admin/api/v2/live-tv", "live_tv_registry.enabled", "live_tv"),
+    "live_tv_edit": ("POST", "/admin/api/v2/live-tv/{id}/edit", "live_tv_registry.enabled", "live_tv"),
+    "live_tv_delete": ("POST", "/admin/api/v2/live-tv/{id}/delete", "live_tv_registry.enabled", "live_tv"),
 }

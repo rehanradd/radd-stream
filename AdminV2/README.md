@@ -79,6 +79,14 @@ in temp dirs by the tests (`store.init_catalog_fixture` /
 - `tests/` — unit, API, end-to-end pairing, regressions, orphan audit, phone checklist
 - `tools/orphan_audit.py` — orphan check used by the tests
 
+## Live TV channels
+
+`/admin/live-tv` manages `live_tv_registry.json`: add, edit, delete, enable/disable.
+Adding or saving a channel probes its stream URL first (HEAD, 1-byte Range GET
+fallback); a dead stream refuses unless force is ticked. A duplicate name or
+stream URL is a warning, not a refusal. Delete needs the confirm box. Every
+write backs up the registry first and is audited. Tests: `tests/test_live_tv_controls.py`.
+
 ## Known gaps (honest)
 
 - No live deploy, no nginx/HTTPS wiring, no VM work of any kind from git.

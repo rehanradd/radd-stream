@@ -28,6 +28,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from admin_v2.domain_check import check_domain
+from admin_v2.live_stores import check_stream_url
 from admin_v2.server import serve
 from admin_v2.services import Service
 
@@ -69,7 +70,7 @@ def main():
     if args.background_jobs:
         svc.start_background_jobs(domain_checker=check_domain)
     serve(svc, host=args.host, port=args.port, strict_host=args.strict_host,
-          domain_checker=check_domain)
+          domain_checker=check_domain, stream_checker=check_stream_url)
 
 
 if __name__ == "__main__":

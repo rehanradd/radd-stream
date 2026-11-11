@@ -40,6 +40,32 @@ from .store import (
 NOW = lambda: int(time.time())
 
 
+def _coerce_bool(value, default=True):
+    """Coerce a form/JSON flag to bool. "0"/"false"/"off"/"" -> False.
+
+    (A bare bool("0") is True in Python, so the Live TV toggle form's
+    hidden enabled="0" used to never disable a channel.)"""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in ("1", "true", "on", "yes")
+
+
+def _live_tv_audit_view(channel):
+    """Audit-safe channel summary: no stream/logo URL (provenance).
+
+    redact_payload refuses any string containing a URL, so the audit
+    log only ever carries the identity fields."""
+    if channel is None:
+        return None
+    return {k: channel.get(k) for k in
+            ("id", "name", "category", "country", "language", "source",
+             "enabled", "disabled_reason")}
+
+
 def _parse_broadcast_time(value, field):
     """Accept a schedule time as Unix seconds or as a datetime-local
     string ("YYYY-MM-DDTHH:MM", as an HTML datetime-local input posts
@@ -2438,11 +2464,88 @@ class Service:
         prev = [c["enabled"] for c in before["channels"]
                 if c["id"] == int(channel_id)]
         result = self.live.set_live_tv_channel(
-            int(channel_id), bool(body.get("enabled")),
+            int(channel_id), _coerce_bool(body.get("enabled"), True),
             str(body.get("reason") or ""))
         self.audit(actor["id"], "live_tv.channel", "live_tv_channel", channel_id,
                    {"enabled": prev[0] if prev else None},
                    {"enabled": result["enabled"]}, ip)
+        return result
+
+    def add_live_tv_channel(self, actor, body, checker=None, ip=""):
+        """Add a Live TV channel (operator). The stream URL is probed
+        first; a dead stream refuses unless force is set. A duplicate
+        name or stream URL comes back as a warning, not a refusal."""
+        self.require_role(actor, write=True)
+        body = body or {}
+        self._validate_body(body, {"name", "category", "country", "language",
+                                   "stream_url", "logo_url", "source",
+                                   "enabled", "force"})
+        if self.live is None:
+            raise LiveUnavailable("No live store is configured here.")
+        if not str(body.get("name") or "").strip():
+            raise bad("Channel name is required.")
+        if not str(body.get("stream_url") or "").strip():
+            raise bad("Stream URL is required.")
+        fields = {
+            "name": body.get("name"), "category": body.get("category"),
+            "country": body.get("country"), "language": body.get("language"),
+            "stream_url": body.get("stream_url"), "logo_url": body.get("logo_url"),
+            "source": body.get("source"),
+            "enabled": _coerce_bool(body.get("enabled", True), True),
+            "force": _coerce_bool(body.get("force", False), False),
+        }
+        result = self.live.add_live_tv_channel(fields, stream_checker=checker)
+        self.audit(actor["id"], "live_tv.channel_add", "live_tv_channel",
+                   result["channel"]["id"], None,
+                   _live_tv_audit_view(result["channel"]), ip)
+        return result
+
+    def update_live_tv_channel(self, actor, channel_id, body, checker=None, ip=""):
+        """Edit a Live TV channel (operator). Only the fields present
+        in the body change. A changed stream URL is probed first."""
+        self.require_role(actor, write=True)
+        body = body or {}
+        self._validate_body(body, {"name", "category", "country", "language",
+                                   "stream_url", "logo_url", "source", "enabled",
+                                   "disabled_reason", "force"})
+        if self.live is None:
+            raise LiveUnavailable("No live store is configured here.")
+        before = self.live.list_live_tv_channels()
+        prev = [c for c in before["channels"] if c["id"] == int(channel_id)]
+        if not prev:
+            raise not_found("That Live TV channel was not found.")
+        fields = {}
+        for key in ("name", "category", "country", "language", "stream_url",
+                    "logo_url", "source", "disabled_reason"):
+            if key in body:
+                fields[key] = body[key]
+        if "enabled" in body:
+            fields["enabled"] = _coerce_bool(body.get("enabled"), True)
+        if "force" in body:
+            fields["force"] = _coerce_bool(body.get("force"), False)
+        result = self.live.update_live_tv_channel(
+            int(channel_id), fields, stream_checker=checker)
+        self.audit(actor["id"], "live_tv.channel_edit", "live_tv_channel",
+                   channel_id, _live_tv_audit_view(prev[0]),
+                   _live_tv_audit_view(result["channel"]), ip)
+        return result
+
+    def delete_live_tv_channel(self, actor, channel_id, body, ip=""):
+        """Delete a Live TV channel (operator). Requires confirm."""
+        self.require_role(actor, write=True)
+        body = body or {}
+        self._validate_body(body, {"confirm"})
+        if self.live is None:
+            raise LiveUnavailable("No live store is configured here.")
+        if not _coerce_bool(body.get("confirm"), False):
+            raise bad("Tick the confirm box to delete this channel.")
+        before = self.live.list_live_tv_channels()
+        prev = [c for c in before["channels"] if c["id"] == int(channel_id)]
+        if not prev:
+            raise not_found("That Live TV channel was not found.")
+        result = self.live.delete_live_tv_channel(int(channel_id))
+        self.audit(actor["id"], "live_tv.channel_delete", "live_tv_channel",
+                   channel_id, _live_tv_audit_view(prev[0]), None, ip)
         return result
 
     def add_candidate(self, actor, site_key, body, ip=""):
