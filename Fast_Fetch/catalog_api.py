@@ -693,7 +693,7 @@ def _is_static_file(url) -> bool:
     return path.endswith(_STATIC_EXTS)
 
 
-def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
+def _link_view(row, evidence: dict | None, secret: str = "", tracks: dict | None = None) -> dict:
     """One `cat_links` row as the public may see it.
 
     The descriptor and the measurement stay; *who* hosts it goes: no site, no
@@ -780,8 +780,63 @@ def _link_view(row, evidence: dict | None, secret: str = "") -> dict:
         "score_range": tiers.score_range({"measured": measured_flag}),
         "last_evidence_at": measured.get("probed_at") if measured else link.get("last_evidence_at"),
         "probe_error": measured.get("error") if measured else None,
+        # API_V2.md §5 / gap G-1: the tracks this print offers. Audio comes from
+        # the release descriptor; subtitles are harvested `cat_subtitles` rows,
+        # addressed by our own /api/v2/subtitle handle — never an upstream URL,
+        # so `redact.scrub` (which drops any key named `url`) leaves the entry
+        # alone and the address the client reads is our own redirector.
+        "tracks": tracks if tracks is not None else {"audio": [], "subtitles": []},
     }
     return view
+
+
+def _audio_tracks(release: dict) -> list[dict]:
+    """One audio entry per language the print declares (API_V2.md §5).
+
+    The channel layout is per *release*, not per track (gap G-1's own note), so
+    every entry carries the same layout; the codec is the print's first, if any.
+    """
+    langs = _json_list(release.get("audio_languages"))
+    codecs = _json_list(release.get("audio_codecs"))
+    layout = release.get("audio_channels") or None
+    return [{"lang": lang, "default": index == 0,
+             "channels": layout, "codec": codecs[0] if codecs else None}
+            for index, lang in enumerate(langs)]
+
+
+def _subtitle_tracks(conn, release_ids: list[int], secret: str) -> dict[int, list[dict]]:
+    """Per-release subtitle tracks from `cat_subtitles`, in bundle shape.
+
+    English is the house default subtitle language; otherwise the first track
+    is the default, so the player always has one to offer. A row with no ledger
+    id has no handle and is skipped — the client cannot fetch what it cannot
+    address, and a handleless track must not be offered as if it could.
+    """
+    if not release_ids or not _has_table(conn, "cat_subtitles"):
+        return {}
+    marks = ", ".join(str(int(i)) for i in release_ids)
+    rows = conn.execute(
+        f"SELECT * FROM cat_subtitles WHERE release_id IN ({marks})"
+        " ORDER BY release_id, id", tuple()).fetchall()
+    out: dict[int, list[dict]] = {}
+    for row in rows:
+        ledger_id = row["ledger_link_id"]
+        if ledger_id is None:
+            continue
+        handle = (redact.mint_token(int(ledger_id), secret) if secret
+                  else str(int(ledger_id)))
+        out.setdefault(row["release_id"], []).append({
+            "lang": row["lang"] or "",
+            "kind": "subtitles",
+            "format": row["format"] or None,
+            "default": False,
+            "forced": False,
+            "subtitle_url": f"/api/v2/subtitle/{handle}",
+        })
+    for tracks in out.values():
+        default = next((item for item in tracks if item["lang"] == "en"), tracks[0])
+        default["default"] = True
+    return out
 
 
 def _sort_links(links: list[dict]) -> list[dict]:
@@ -822,10 +877,18 @@ def _ordered_links(conn, release_ids: list[int]) -> dict[int, list[dict]]:
         f"SELECT * FROM cat_links WHERE release_id IN ({marks}) ORDER BY id", tuple()).fetchall()
     evidence = _latest_evidence(conn, [row["id"] for row in rows])
     secret = signing_secret(conn)
+    subtitles = _subtitle_tracks(conn, release_ids, secret)
+    audio: dict[int, list[dict]] = {}
+    for rel in conn.execute(
+            f"SELECT id, audio_languages, audio_channels, audio_codecs"
+            f" FROM cat_releases WHERE id IN ({marks})", tuple()).fetchall():
+        audio[rel["id"]] = _audio_tracks(_as_dict(rel))
     views: dict[int, list[dict]] = {}
     for row in rows:
+        tracks = {"audio": audio.get(row["release_id"], []),
+                  "subtitles": subtitles.get(row["release_id"], [])}
         views.setdefault(row["release_id"], []).append(
-            _link_view(row, evidence.get(row["id"]), secret))
+            _link_view(row, evidence.get(row["id"]), secret, tracks))
     for items in views.values():
         items[:] = sorted(items, key=lambda link: (-(link["rank_score"] or 0), link["link_id"]))
     return views

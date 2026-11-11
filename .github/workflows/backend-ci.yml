@@ -299,6 +299,11 @@ jobs:
       - name: 🧪 test_catalog_api.py
         run: python3 -S Fast_Fetch/test_catalog_api.py
 
+      # Gap A3 (G-1): subtitle tracks harvested into cat_subtitles, served as
+      # `tracks.subtitles` in the v2 bundle and fetched via /api/v2/subtitle.
+      - name: 🧪 test_subtitle_tracks.py
+        run: python3 -S Fast_Fetch/test_subtitle_tracks.py
+
       # Session 111: a v2 bundle handle names a ledger row, never the
       # projected cat id — the bundle's own handle pressed through a real
       # /api/v1/stream socket server (loopback media file, real resolver),

@@ -214,6 +214,7 @@ PRINT_FORMULA = {
 ROUTE_BUCKETS = {
     "play": "play",
     "resolve": "play",
+    "subtitle": "play",
     "report": "reports",
     "offset": "reports",
     "browse": "browse",
@@ -239,7 +240,7 @@ ROUTE_ARITY = {
     "GET": {"manifest": (1,), "browse": (1,), "search": (1,), "suggest": (1,),
             "sync": (1,), "stats": (1,), "health": (1,), "feed.m3u": (1,),
             "works": (2, 4), "episodes": (2,), "releases": (2,), "resolve": (2,),
-            "collections": (1, 2)},
+            "subtitle": (2,), "collections": (1, 2)},
     "POST": {"play": (1,), "links": (3,), "episodes": (3,)},
 }
 
@@ -1325,6 +1326,8 @@ def bucket_for(path: str, method: str = "GET") -> str:
         return ROUTE_BUCKETS["browse"]
     if head == "resolve":
         return ROUTE_BUCKETS["resolve"]
+    if head == "subtitle":
+        return ROUTE_BUCKETS["subtitle"]
     return ROUTE_BUCKETS.get(head, "browse")
 
 
@@ -1413,6 +1416,62 @@ def listing_kwargs(query: dict, *, operator: bool, for_search: bool) -> dict:
             "industry": _q_list(query, "industry") or None,
         })
     return kwargs
+
+
+def _subtitle_row(conn, ledger_id: int):
+    """One ledger subtitle row, or None — a video row is not a subtitle."""
+    try:
+        return conn.execute(
+            "SELECT * FROM download_sources WHERE id = ?"
+            " AND playback_type = 'subtitle'",
+            (int(ledger_id),)).fetchone()
+    except sqlite3.Error:
+        return None
+
+
+def route_subtitle(handler, conn, handle: str, *, secret: str, operator: bool,
+                   db_path, rid: str, path: str) -> bool:
+    """GET /api/v2/subtitle/{handle} — 302 to one stored subtitle file (§12, G-1).
+
+    The bundle names tracks by our own handle, never by an upstream URL, so the
+    fetch goes through the same signed-handle redirector as video and art: the
+    token parses to a `download_sources` id, the row must be a subtitle row, a
+    flagged work answers exactly like a missing one, and the bytes never cross
+    this box. No resolver runs — the stored URL IS the file — and no quality
+    gate: subtitles are not a video print. There is no `?redirect=0` JSON form:
+    the upstream URL must never appear in a JSON body.
+    """
+    ledger_id = redact.parse_token(handle, secret, signed_only=not operator)
+    if ledger_id is None:
+        problem(handler, code="invalid_params", rid=rid, instance=path,
+                detail="The subtitle reference is not one we issued.")
+        return True
+    if redact.link_is_adult(int(ledger_id), db_path):
+        problem(handler, code="not_found", rid=rid, instance=path,
+                detail="No such subtitle track.")
+        return True
+    row = _subtitle_row(conn, int(ledger_id))
+    target = str((row["final_url"] or row["source_url"] or "") if row else "")
+    if not row or not target:
+        problem(handler, code="not_found", rid=rid, instance=path,
+                detail="No such subtitle track.")
+        return True
+    # The 302 model, as /resolve: the player follows it and gets bytes, the VM
+    # moves none of them, and the URL never appears in a JSON body.
+    handler.send_response(302)
+    handler.send_header("Location", target)
+    handler.send_header("Cache-Control", CACHE_NO_STORE)
+    for name, value in redact.cors_headers_for(
+            str(handler.headers.get("Origin") or "")):
+        handler.send_header(name, value)
+    handler.send_header("X-Request-Id", rid)
+    # §16.5 on the redirect too: this path writes its own header block, so the
+    # budget the gate already spent has to be repeated here.
+    for name, value in (getattr(handler, "rate_headers", []) or []):
+        handler.send_header(name, value)
+    handler.send_header("Connection", "close")
+    handler.end_headers()
+    return True
 
 
 def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
@@ -1589,6 +1648,11 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                 "refreshed": bool(payload.get("refreshed")),
             })), rid=rid, cache=CACHE_NO_STORE, operator=operator)
             return True
+
+        if head == "subtitle" and len(segments) == 2:
+            return route_subtitle(handler, conn, segments[1], secret=secret,
+                                  operator=bool(operator), db_path=db_path,
+                                  rid=rid, path=path)
 
         if head == "sync":
             scope = _q(query, "scope") or "catalog"

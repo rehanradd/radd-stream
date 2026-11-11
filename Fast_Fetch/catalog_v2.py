@@ -364,6 +364,26 @@ CREATE TABLE IF NOT EXISTS cat_link_evidence (
 CREATE INDEX IF NOT EXISTS idx_cat_link_evidence_link
     ON cat_link_evidence(link_id, probed_at);
 
+-- Subtitle tracks harvested from the ledger (playback_type='subtitle'): one row
+-- per track file, keyed to the print it belongs to. These are NOT video links —
+-- they used to project into cat_links as cloud_page rows, which put the 125,686
+-- live .vtt files in the play ladder. The bundle serves them as
+-- `tracks.subtitles`, addressed by our own /api/v2/subtitle handle.
+CREATE TABLE IF NOT EXISTS cat_subtitles (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    release_id INTEGER NOT NULL,
+    work_id INTEGER NOT NULL,
+    ledger_link_id INTEGER,
+    lang TEXT NOT NULL DEFAULT '',
+    label TEXT,
+    format TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'unchecked',
+    UNIQUE (release_id, ledger_link_id, lang)
+);
+
+CREATE INDEX IF NOT EXISTS idx_cat_subtitles_release
+    ON cat_subtitles(release_id, lang);
+
 CREATE TABLE IF NOT EXISTS cat_entitlements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     work_id INTEGER,
@@ -560,6 +580,50 @@ def work_key_for(title: str, year, work_type: str, imdb_id: str = "", tmdb_id=No
 
 # ── Link classification ──────────────────────────────────────────────────────
 
+#: Language names a subtitle row may carry as its `source_name`, mapped back to
+#: the code the bundle emits. The filename code wins whenever it parses (kisskh
+#: writes `1.en.vtt`); this is only the fallback for a track whose URL carries
+#: no code. The eleven are the codes kisskh publishes; the rest are the common
+#: names other importers use.
+_SUBTITLE_NAME_TO_CODE = {
+    "filipino": "tl", "khmer": "km", "english": "en", "indonesian": "id",
+    "malay": "ms", "portuguese": "pt", "arabic": "ar", "hindi": "hi",
+    "german": "de", "french": "fr", "spanish": "es", "tagalog": "tl",
+    "urdu": "ur", "tamil": "ta", "telugu": "te", "bengali": "bn",
+    "marathi": "mr", "punjabi": "pa", "italian": "it", "thai": "th",
+    "vietnamese": "vi", "chinese": "zh", "japanese": "ja", "korean": "ko",
+}
+
+#: Subtitle container the app player knows (`SubtitleTrackInfo.format`).
+_SUBTITLE_FORMATS = ("vtt", "srt", "ass", "ssa", "ttml")
+
+_LANG_CODE_RE = re.compile(r"^[a-z]{2,3}(?:-[A-Za-z]{2})?$")
+
+
+def _subtitle_lang(url: str, source_name: str) -> str:
+    """The language code for one subtitle track, or "" when it cannot be told.
+
+    The filename code wins (`.../1.en.vtt` -> `en`); a name the importer stored
+    (`English`) maps back to its code; anything else stays blank rather than
+    inventing a language the player would then offer as if it were known.
+    """
+    path = str(url or "").split("?", 1)[0].split("#", 1)[0]
+    stem = path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+    if "." in stem:
+        code = stem.rsplit(".", 1)[-1]
+        if _LANG_CODE_RE.match(code):
+            return code.split("-")[0].lower()
+    return _SUBTITLE_NAME_TO_CODE.get(str(source_name or "").strip().lower(), "")
+
+
+def _subtitle_format(url: str) -> str:
+    """The subtitle container from the URL extension, or "" when unknown."""
+    path = str(url or "").lower().split("?", 1)[0].split("#", 1)[0]
+    last = path.rsplit("/", 1)[-1]
+    ext = last.rsplit(".", 1)[-1] if "." in last else ""
+    return ext if ext in _SUBTITLE_FORMATS else ""
+
+
 def classify_link(service: str, source_url: str, final_url: str,
                   playback_type: str, is_temporary: int) -> tuple[str, str]:
     """Returns (kind, playability) from what the URL actually is.
@@ -727,7 +791,7 @@ def _migrate_evidence_journal(conn: sqlite3.Connection) -> None:
 def _reset(conn: sqlite3.Connection) -> None:
     for table in ("cat_works", "cat_work_aliases", "cat_work_sites", "cat_seasons",
                   "cat_episodes", "cat_parts", "cat_releases", "cat_release_episodes",
-                  "cat_links", "cat_entitlements", "cat_review_queue"):
+                  "cat_links", "cat_subtitles", "cat_entitlements", "cat_review_queue"):
         conn.execute(f"DELETE FROM {table}")
     conn.execute("DELETE FROM sqlite_sequence WHERE name LIKE 'cat_%'")
 
@@ -1069,6 +1133,7 @@ def project(conn: sqlite3.Connection, *, rev: int | None = None, reset: bool = T
         "works": len(work_ids),
         "releases": counters["releases"],
         "links": counters["links"],
+        "subtitles": counters.get("subtitles", 0),
         # The same numbers with every `is_18_plus` work removed, plus the verified
         # share of the public links. `/api/v1/stats` reads these instead of counting
         # `cat_*` rows per request: the public surface must not advertise a catalog
@@ -1309,6 +1374,28 @@ def _project_pages(conn, works, work_ids, release_descriptor, now,
                 for src in conn.execute(
                     "SELECT * FROM download_sources WHERE release_id = ? ORDER BY id", (rel["id"],)
                 ).fetchall():
+                    if str(_pick_col(src, "playback_type", "url") or "").lower() == "subtitle":
+                        # A subtitle track is not a video link: it never enters
+                        # cat_links (it used to, as a cloud_page row, and the
+                        # 125,686 live .vtt files sat in the play ladder). It
+                        # projects to cat_subtitles, where the bundle reads it
+                        # as a `tracks.subtitles` entry addressed by our own
+                        # /api/v2/subtitle handle.
+                        target = src["final_url"] or src["source_url"] or ""
+                        conn.execute(
+                            """
+                            INSERT OR IGNORE INTO cat_subtitles
+                                (release_id, work_id, ledger_link_id, lang, label,
+                                 format, state)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (release_id, work_id, src["id"],
+                             _subtitle_lang(target, src["source_name"]),
+                             src["source_name"] or None,
+                             _subtitle_format(target), _link_state_of(src)),
+                        )
+                        counters["subtitles"] = counters.get("subtitles", 0) + 1
+                        continue
                     kind, playability = classify_link(
                         src["service"], src["source_url"], src["final_url"],
                         _pick_col(src, "playback_type", "url"), int(src["is_temporary"] or 0),

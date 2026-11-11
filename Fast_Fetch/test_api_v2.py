@@ -1656,6 +1656,76 @@ class V2OpaqueHandleTests(V2WireFixture):
         self.assertEqual(decoded, stored, "the handle does not name the row it keys")
 
 
+# ── 3b. the subtitle route (gap A3 / G-1) ───────────────────────────────────
+
+class V2SubtitleRouteTests(V2WireFixture):
+    """`GET /api/v2/subtitle/{handle}` — the bundle's `tracks.subtitles` address.
+
+    The shared corpus holds no subtitle row (adding one would move every
+    coverage count the stats tests pin), so each test adds its own post with
+    subtitle sources and re-projects — full isolation, same as the fixture.
+    """
+
+    def _add_subtitled_post(self, *, title="Subtitled Film", is_18_plus=0):
+        url = "https://res.cloudinary.com/sub2t9/raw/upload/v1759504074/1.en.vtt"
+        self.add_post("kisskh", f"https://kisskh.test/{title.lower().replace(' ', '-')}/",
+                      clean_title=title, year=2024, is_18_plus=is_18_plus,
+                      releases=[{
+                          "release_title": f"{title} 1080p",
+                          "sources": [cdn("SUB-VID"),
+                                      {"source_name": "English", "service": "res.cloudinary.com",
+                                       "resource_id": "SUB-EN", "source_url": url,
+                                       "final_url": url, "playback_type": "subtitle",
+                                       "is_temporary": 0, "status": "unverified"}]}])
+        self.project()
+        # The play route takes a LEGACY `releases.id` (it translates through
+        # cat_id_map); the projection renumbers cat ids, the ledger id is stable.
+        release_id = int(self.conn.execute(
+            "SELECT id FROM releases ORDER BY id DESC LIMIT 1").fetchone()[0])
+        sub_id = int(self.conn.execute(
+            "SELECT id FROM download_sources WHERE playback_type = 'subtitle'"
+            " ORDER BY id DESC LIMIT 1").fetchone()[0])
+        video_id = int(self.conn.execute(
+            "SELECT id FROM download_sources WHERE playback_type = 'direct'"
+            " AND release_id = ? ORDER BY id DESC LIMIT 1",
+            (release_id,)).fetchone()[0])
+        return release_id, sub_id, video_id
+
+    def test_subtitle_handle_302s_to_the_stored_file(self):
+        release_id, sub_id, _video_id = self._add_subtitled_post()
+        handle = self.handle(sub_id)
+        reply = self.get(f"/api/v2/subtitle/{handle}")
+        self.assertEqual(reply.status, 302)
+        self.assertEqual(reply.header("location"),
+                         "https://res.cloudinary.com/sub2t9/raw/upload/v1759504074/1.en.vtt")
+        self.assertEqual(reply.header("cache-control"), "no-store")
+        self.assertIsNone(reply.json, "a redirect carries no JSON body")
+        # The same track is offered in the print's own bundle, under our own
+        # address — never the upstream URL — and the route answers the address
+        # the bundle gave out.
+        bundle = self.post("/api/v2/play", {"release_id": release_id})
+        self.assertEqual(bundle.status, 200)
+        subs = bundle.json["candidates"][0]["tracks"]["subtitles"]
+        self.assertEqual(len(subs), 1)
+        self.assertEqual(subs[0]["lang"], "en")
+        self.assertEqual(subs[0]["subtitle_url"], f"/api/v2/subtitle/{handle}")
+
+    def test_a_video_handle_and_a_flagged_track_answer_like_a_missing_track(self):
+        _release_id, sub_id, video_id = self._add_subtitled_post()
+        video_handle = self.handle(video_id)
+        self.assert_problem(self.get(f"/api/v2/subtitle/{video_handle}"),
+                            code="not_found", status=404,
+                            instance=f"/api/v2/subtitle/{video_handle}")
+        _flagged_release, flagged_id, _flagged_video = self._add_subtitled_post(
+            title="Flagged Film", is_18_plus=1)
+        flagged_handle = self.handle(flagged_id)
+        self.assert_problem(self.get(f"/api/v2/subtitle/{flagged_handle}"),
+                            code="not_found", status=404,
+                            instance=f"/api/v2/subtitle/{flagged_handle}")
+        # The public track still answers: the flagged one did not take it down.
+        self.assertEqual(self.get(f"/api/v2/subtitle/{self.handle(sub_id)}").status, 302)
+
+
 # ── 4. conditional requests ─────────────────────────────────────────────────
 
 class V2CachingTests(V2WireFixture):
@@ -2131,6 +2201,7 @@ class V2RateBucketTests(V2WireFixture):
             "GET /api/v2/episodes": ("GET", "/api/v2/episodes/1", "browse"),
             "GET /api/v2/releases": ("GET", "/api/v2/releases/1", "browse"),
             "GET /api/v2/resolve": ("GET", "/api/v2/resolve/1", "play"),
+            "GET /api/v2/subtitle": ("GET", "/api/v2/subtitle/1", "play"),
             "GET /api/v2/sync": ("GET", "/api/v2/sync", "browse"),
             "GET /api/v2/collections": ("GET", "/api/v2/collections/1", "browse"),
             "GET /api/v2/feed.m3u": ("GET", "/api/v2/feed.m3u", "browse"),
@@ -2279,8 +2350,8 @@ class V2SurfaceTests(V2WireFixture):
         self.assertEqual(
             get_heads,
             {"manifest", "browse", "search", "suggest", "works", "episodes",
-             "releases", "resolve", "sync", "collections", "feed.m3u", "stats",
-             "health"},
+             "releases", "resolve", "subtitle", "sync", "collections", "feed.m3u",
+             "stats", "health"},
             "the GET surface changed; §12 and this suite must change with it")
         self.assertEqual(
             post_heads - get_heads, {"play", "links"},
@@ -2521,6 +2592,8 @@ ROUTE_TESTS = {
     "releases": ("V2SurfaceTests", "test_browse_search_and_detail_shapes_a_client_needs"),
     "resolve": ("V2OpaqueHandleTests",
                 "test_public_port_refuses_enumerable_row_ids"),
+    "subtitle": ("V2SubtitleRouteTests",
+                 "test_subtitle_handle_302s_to_the_stored_file"),
     "sync": ("V2CursorTests", "test_sync_pagination_advances_in_every_scope"),
     "collections": ("V2ErrorTests",
                     "test_unknown_and_misshapen_routes_are_problem_json"),

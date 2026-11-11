@@ -811,7 +811,7 @@ def provenance_keys(obj, found=None) -> list[str]:
 #: noise, not information about anyone. A sentinel scan masks these before reading
 #: text, because random noise collides with brand spellings.
 MINTED_KEYS = frozenset({"stream_id", "art", "play_url", "download_url",
-                         "link_ref", "work_ref", "backup_handles"})
+                         "link_ref", "work_ref", "backup_handles", "subtitle_url"})
 
 
 def minted_values(obj, found=None) -> list[str]:

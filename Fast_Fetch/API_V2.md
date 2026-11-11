@@ -229,7 +229,7 @@ the **exact enums the code can emit** — anything else never appears:
 | `size_bytes` / `size_per_episode_bytes` | ints, `0` = unknown | `2.24 GB/E` → per-episode, total stays 0 (Decimal-exact) ✅ |
 | `audio_languages` / `audio_channels` / `audio_codecs` | JSON arrays + single layout string `5.1|2.0|unknown` ✅ | layout is per *release*, not per track — see gap G-1 (§18); `7.1` is folded into `5.1` deliberately |
 | `dual_audio` | 0/1 ✅ | true when ≥2 languages or label says dual/multi audio |
-| `subtitle_mode` | `hardcoded | external | none` ✅ | `ESubs` → external; `Hsubs`/burned → hardcoded. **No subtitle URLs** exist anywhere — gap G-1 |
+| `subtitle_mode` | `hardcoded | external | none` ✅ | `ESubs` → external; `Hsubs`/burned → hardcoded. Subtitle files live in `cat_subtitles` and are served as `tracks.subtitles` per link, fetched via `GET /api/v2/subtitle/{handle}` (gap A3) |
 | `watermarked`, `official_print` | 0/1 ✅ | watermark markers list incl. `i60x, etlb, etleb, psa, hdhub4u wm`; `official_print` false when watermarked or `fan_edit` |
 | `flags` | JSON array `watermarked|unofficial|pack|alternate_edition` ✅ | |
 | `quality_score` | int 0..1000, formula below ✅ | |
@@ -511,7 +511,9 @@ bundle time; *(derived)* = computable from the request/URL; *(planned)* = §17.
         "score": 830, "score_scale": "measured",                     // LINK axis (§6.3) — cat: links.rank_score; measured once apply_evidence has run, else the prior (§17)
         "drm": null },                                               // always null today (§19)
       "tracks": { "audio": [{"lang": "hi", "default": true, "channels": "5.1", "codec": "eac3"}],
-                  "subtitles": [] },                                 // PLANNED — gap G-1: no per-track rows exist
+                  "subtitles": [{"lang": "en", "kind": "subtitles", "format": "vtt",
+                                 "default": true, "forced": false,
+                                 "subtitle_url": "/api/v2/subtitle/<handle>"}] },  // ✅ gap A3: cat_subtitles → tracks; the address is our own subtitle route, never an upstream URL
       "coverage": {"type": "single_episode", "ordinal": 3, "offset_seconds": null,
                    "needs_offset_calibration": false}                 // cat: release_episodes ✅
     },
@@ -922,8 +924,9 @@ responses (§16.4). `v1` stays frozen and untouched — the current APK keeps wo
 | `GET /works/{id}/seasons/{n}` | season + episodes + coverage mode | `fields` | pack enumeration G-2 |
 | `GET /episodes/{id}` | one episode: prints, coverage, links | — | — |
 | `GET /releases/{id}` | one print: descriptor + ranked links | — | — |
-| `POST /play` | PlayBundle | body: one of `work_id/release_id/episode_id` (+season/episode for packs), `prefer`, `device` | two-axis ladder + `prefer` ✅; tracks (G-1) and the §11 entitlement gate still 📝 |
+| `POST /play` | PlayBundle | body: one of `work_id/release_id/episode_id` (+season/episode for packs), `prefer`, `device` | two-axis ladder + `prefer` ✅; tracks ✅ (gap A3: audio from the release descriptor, subtitles from `cat_subtitles` via `/api/v2/subtitle` handles); the §11 entitlement gate still 📝 |
 | `GET /resolve/{link_id}` | JIT unwrap for `resolve_required` links | — | ✅ wraps `resolve_live_source` with `v2=True`, so §2 #4's fall-through cannot return a fake playable |
+| `GET /subtitle/{handle}` | 302 to one stored subtitle file (gap A3) | — | ✅ handle minted from the ledger id, row must be `playback_type='subtitle'`, flagged works answer `not_found` like a missing track; no resolver, no quality gate, no `?redirect=0` JSON form (the upstream URL never appears in a JSON body); **needs the nginx allow-list entry before the app can reach it publicly** |
 | `POST /links/{id}/report` | client telemetry `played\|stalled\|failed\|resolved` | `event, ms, error` | ✅ ingest table `client_link_reports` (side table, survives `project(reset=True)`), appended to `cat_link_evidence` (feeds axis 2) |
 | `POST /episodes/{id}/offset` | learned pack offset | `offset_seconds, chapter_title` | `record_offset` ✅ |
 | `GET /sync?since=` | delta rows (`scope=catalog\|health\|entitlements`) | key on **work_key**, not ids (§3 caveat) | per-group revs 📝 |
@@ -1337,8 +1340,11 @@ Everything 📝/🛠 above, in one place. Nothing here may be described as live 
 - [ ] `cat_parts` population + real `parts` coverage (G-3): [x] population via
       `Part/Chapter/Disc n` labels with `cat_releases.part_number` links (§S4); a `parts`
       value in `coverage_type` is still open.
-- [ ] Tracks: `cat_tracks` table (per-audio-language codec/channels/default flag, subtitle
-      external URLs/formats) or HLS-`EXT-X-MEDIA` parsing at resolve time (G-1).
+- [x] Tracks, subtitle half (G-1, gap A3): `cat_subtitles` table (lang/label/format/state
+      per track, harvested from `playback_type='subtitle'` ledger rows), `tracks.subtitles`
+      on every link view, `GET /api/v2/subtitle/{handle}` 302. Still open: per-track
+      audio codec/channels (layout stays per-release) and HLS-`EXT-X-MEDIA` parsing
+      at resolve time.
 - [x] `display_priority` column + derivation `catalog_v2.derive_display_priority` (§11.2);
       paid `model` rows + admin write path (`set_entitlement`, CLI `--set-entitlement`, §11.1).
 - [ ] `/play` entitlement check + `licence_expired` problem (§11.3/§16.4) — Layer 2.
@@ -1378,7 +1384,7 @@ Everything 📝/🛠 above, in one place. Nothing here may be described as live 
 
 | ID | Gap | Scenario blocked / degraded | Workaround the API must implement now |
 |---|---|---|---|
-| G-1 | No per-track rows; audio is one aggregate per print; no subtitle URLs with formats | S1/S6 "pick Hindi 5.1 track, English SDH subs" from the API alone | HLS `EXT-X-MEDIA` parsed **at resolve time** by Media3 itself (free for hls links); progressive links show only the aggregate (`dual_audio`, `subtitle_mode`) — no track UI |
+| G-1 | **Subtitle half resolved (gap A3)** — `cat_subtitles` projects harvested subtitle rows and every link view carries `tracks.subtitles` (fetched via `GET /api/v2/subtitle/{handle}`); audio is still one aggregate per print (layout per-release, no per-track codec/channels) | S1/S6 "pick Hindi 5.1 track, English SDH subs" from the API alone | subtitles are now selectable from the bundle; HLS `EXT-X-MEDIA` parsed **at resolve time** by Media3 itself (free for hls links); per-track audio codec/channels still open |
 | G-2 | `season_pack` span unknowable from the ledger (no external expected-count source) | S2 per-episode grid/play targeting for label-silent packs only — packs whose span IS named (label hint or existing per-episode prints) now enumerate 1:1 and can win `best_release_id` (§4.3) | unknowable packs raise `season_pack_span_unresolved`; season-level `pack_releases[]` + offsets (§S2) remain the API answer there; `target_unresolvable` only when even the season can't be inferred |
 | G-3 | no `parts` value in `coverage_type` | S4 "the movie is exactly this part" as a coverage mode | **resolved at Layer 1 for data**: `cat_parts` + `cat_releases.part_number` are populated from `Part/Chapter/Disc n` labels (§S4); Layer 2 can read structure instead of guessing |
 | G-4 | **Resolved** — `hdtc` is now a cam-family rung (weight 75, capped 250, never `official_print`) | S6 ordering fixed: `1080p HDTC x265` scores 250, below a bare `720p WEBRip` (460) | nothing left for this gap; `bdmux`/`dvd` remain planned (§17) |
