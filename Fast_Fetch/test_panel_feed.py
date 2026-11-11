@@ -770,5 +770,95 @@ class PostsHideTests(unittest.TestCase):
         self.assertEqual(resp["total"], 5)
 
 
+class HeroAndDedupeTests(PanelFeedTests):
+    """Audit #16/#17/#22: the hero is recent, posted and shown; a film
+    appears on one rail only."""
+
+    def _add_post(self, post_id, title, year, poster=None, n_releases=0):
+        self.catalog.execute(
+            "INSERT INTO posts (id, title, clean_title, year, content_type,"
+            " poster_url, is_18_plus, canonical_key, slug)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (post_id, title, title.lower(), year, "movie", poster, 0,
+             "key-%d" % post_id, "slug-%d" % post_id))
+        for i in range(n_releases):
+            cur = self.catalog.execute(
+                "INSERT INTO releases (post_id, release_title, quality,"
+                " codec, languages) VALUES (?,?,?,?,?)",
+                (post_id, "%s r%d" % (title, i), "720p", "x264", "Hindi"))
+            for _ in range(1):
+                self.catalog.execute(
+                    "INSERT INTO download_sources (release_id) VALUES (?)",
+                    (cur.lastrowid,))
+        self.catalog.commit()
+
+    def _add_section(self, section_id, key, position, rule, cards=()):
+        panel = sqlite3.connect(self.panel_path)
+        panel.execute(
+            "INSERT INTO home_sections VALUES (?,?,?,?,?,?,?,?,?)",
+            (section_id, key, key.title(), position, 1, 0, "all", rule,
+             None))
+        for card_id, work_id in cards:
+            panel.execute(
+                "INSERT INTO slider_cards VALUES (?,?,?,?,?,?,?,?)",
+                (card_id, section_id, work_id, card_id, None, 1, None,
+                 None))
+        panel.commit()
+        panel.close()
+
+    def _seed_hero_rows(self):
+        # A 1938 film with a poster and the most prints, a 2024 film
+        # with a poster and one print, a 2024 film with the most prints
+        # but no poster, and a 2025 film with a poster and three prints.
+        self._add_post(7, "Old Film", 1938,
+                       poster="https://cdn.example/old.jpg", n_releases=5)
+        self._add_post(8, "New Film", 2024,
+                       poster="https://cdn.example/new.jpg", n_releases=1)
+        self._add_post(9, "No Poster", 2024, poster=None, n_releases=5)
+        self._add_post(10, "Newer Film", 2025,
+                       poster="https://cdn.example/newer.jpg", n_releases=3)
+
+    def _hero_ids(self, feed):
+        hero = [s for s in feed["sections"] if s["key"] == "hero"][0]
+        return [int(r["id"]) for r in hero["rows"]]
+
+    def test_hero_curated_fallback_is_recent_posted_and_shown(self):
+        self._seed_hero_rows()
+        # Curated hero, but its only card points at a missing work.
+        self._add_section(6, "hero", 0, "curated", cards=[(5, 99)])
+        feed = self.feed()
+        # 1938 is too old, the posterless row has nothing to show; the
+        # 2025 film leads on prints, the 2024 film follows.
+        self.assertEqual(self._hero_ids(feed), [10, 8])
+
+    def test_hero_latest_rule_uses_hero_rows(self):
+        self._seed_hero_rows()
+        self._add_section(6, "hero", 0, "latest")
+        feed = self.feed()
+        self.assertEqual(self._hero_ids(feed), [10, 8])
+
+    def test_work_does_not_repeat_across_sections(self):
+        # A curated section first, then the latest rail: post 1 is a
+        # curated pick, so the latest rail must not serve it again.
+        self._add_section(6, "first-picks", 0, "curated",
+                          cards=[(5, 3), (6, 1)])
+        feed = self.feed()
+        latest = [s for s in feed["sections"] if s["key"] == "latest"][0]
+        self.assertEqual([int(r["id"]) for r in latest["rows"]], [6, 5])
+        picks = [s for s in feed["sections"]
+                 if s["key"] == "first-picks"][0]
+        self.assertEqual([int(r["id"]) for r in picks["rows"]], [3, 1])
+
+    def test_work_collapses_inside_one_section(self):
+        # Two filings of one film are the newest rows; the latest rail
+        # serves the film once.
+        self._add_post(7, "Salaar Cease Fire", 2023)
+        self._add_post(8, "Salaar: Part 1 – Ceasefire", 2023)
+        feed = self.feed()
+        latest = [s for s in feed["sections"] if s["key"] == "latest"][0]
+        self.assertEqual([int(r["id"]) for r in latest["rows"]],
+                         [8, 6, 5, 1])
+
+
 if __name__ == "__main__":
     unittest.main()

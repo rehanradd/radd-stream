@@ -577,5 +577,70 @@ class DetailWarmTests(Fixture):
                 "premium_quality_requires_vip")["message"])
 
 
+class RailDedupeTests(Fixture):
+    """Audit #17: a rail shows each film once, even filed by two sites."""
+
+    def setUp(self):
+        super().setUp()
+        self.salaar_a_id = self.ingest(
+            title="Salaar Cease Fire", year=2023, content_type="movie",
+            genres=["Action"], cast=["Prabhas"], industry="Bollywood",
+            language="Hindi", n_releases=5, n_sources=3)
+        self.salaar_b_id = self.ingest(
+            title="Salaar: Part 1 – Ceasefire", year=2023,
+            content_type="movie", genres=["Action"], cast=["Prabhas"],
+            industry="Bollywood", language="Hindi",
+            n_releases=4, n_sources=2)
+        # A legacy twin row for Wonka, filed under a per-site key the
+        # way the live catalog holds twins: `save_scraped_data` would
+        # merge a second "Wonka" 2023 ingest into the first (title+year
+        # identity), so the twin is written directly.
+        cur = self.conn.execute(
+            "INSERT INTO posts (url, slug, title, clean_title, year,"
+            " content_type, poster_url, genres, cast_names, industry,"
+            " country, language, is_18_plus, canonical_key)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            ("https://othersite.example/movie/wonka/", "wonka-legacy",
+             "Wonka (2023)", "Wonka", 2023, "movie",
+             "https://cdn/poster.jpg", '["Comedy", "Family"]',
+             '["Timothee Chalamet"]', "Hollywood", "India", "English", 0,
+             "wonka-2023-legacy"))
+        self.wonka_twin_id = cur.lastrowid
+        cur = self.conn.execute(
+            "INSERT INTO releases (post_id, release_title, quality, codec,"
+            " languages) VALUES (?,?,?,?,?)",
+            (self.wonka_twin_id, "Wonka 720p part0", "720p", "x264",
+             '["English"]'))
+        self.conn.execute(
+            "INSERT INTO download_sources (release_id, source_url, status)"
+            " VALUES (?,?,?)",
+            (cur.lastrowid, "https://cdn.example/wonka-twin-0-0.mp4",
+             "active"))
+        self.conn.commit()
+
+    def _titles(self, resp):
+        return [(item.get("clean_title") or item.get("title") or "")
+                for item in resp["results"]]
+
+    def test_trending_shows_one_salaar(self):
+        resp = viewer.api_v1_get_trending(limit=20)
+        salaar = [t for t in self._titles(resp) if "Salaar" in t]
+        self.assertEqual(len(salaar), 1)
+        wonka = [t for t in self._titles(resp) if t == "Wonka"]
+        self.assertEqual(len(wonka), 1)
+        # Total still counts rows (9: the six public fixture rows plus
+        # the two Salaar filings plus the Wonka twin); the page shows
+        # works, so it is two shorter — one Salaar filing and the twin
+        # both folded into their work.
+        self.assertEqual(resp["total"], 9)
+        self.assertEqual(len(resp["results"]), 7)
+
+    def test_related_shows_one_wonka(self):
+        resp = viewer.api_v1_get_related(self.seed_id, limit=20)
+        wonka = [t for t in self._titles(resp) if t == "Wonka"]
+        self.assertEqual(len(wonka), 1)
+        self.assertIn(self.wonka_id, self.ids(resp))
+
+
 if __name__ == "__main__":
     unittest.main()

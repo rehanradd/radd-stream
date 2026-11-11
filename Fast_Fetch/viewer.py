@@ -3236,6 +3236,42 @@ def _enrich_post_rows(conn, rows, base_url: str) -> list[dict]:
 _SEARCH_DEDUPE_CAP = 1000
 
 
+def _dedupe_page_rows(rows):
+    """One row per work within a page, in the page's own order.
+
+    Audit #17: a rail must not show the same film twice. The page keeps
+    its order (a work sits where its earliest row sat) and its
+    representative is the best-printed row; `total` is untouched, so a
+    deduped page may simply be shorter than `limit` — the count counts
+    rows, the page shows works. Cross-page repeats are out of scope:
+    the trending order is a join, so a whole-catalog grouping would
+    cost the scan this avoids.
+    """
+    if len(rows) < 2:
+        return list(rows)
+    candidates = []
+    for r in rows:
+        try:
+            candidates.append({
+                "id": int(r["id"]),
+                "clean_title": r["clean_title"] or "",
+                "title": r["title"] or "",
+                "year": r["year"],
+                "content_type": r["content_type"] or "",
+                "release_count": int(r["release_count"] or 0),
+                "source_count": int(r["source_count"] or 0),
+            })
+        except (KeyError, IndexError, TypeError, ValueError):
+            continue
+    if not candidates:
+        return list(rows)
+    position = {int(c["id"]): i for i, c in enumerate(candidates)}
+    groups = title_clean.group_work_rows(candidates)
+    groups.sort(key=lambda g: min(position[int(c["id"])] for c in g))
+    keep = {int(title_clean.representative(g)["id"]) for g in groups}
+    return [r for r in rows if int(r["id"]) in keep]
+
+
 def _dedupe_search_page(conn, where_sql, params, step1_order, page, limit):
     """(page_ids, deduped_total): one representative id per work.
 
@@ -3614,6 +3650,12 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             sql = (select_sql + f" WHERE {where_sql} GROUP BY p.id"
                    f" ORDER BY {order_sql} LIMIT ? OFFSET ?")
             rows = conn.execute(sql, params + [limit, offset]).fetchall()
+        if sort_key == "trending":
+            # Audit #17: the trending rail is the one-query path, so the
+            # search dedupe above never runs on it — collapse the page
+            # to one row per work here instead. `total` still counts
+            # rows (see _dedupe_page_rows).
+            rows = _dedupe_page_rows(rows)
         if full:
             results = [dict(r) for r in rows]
         else:
@@ -3764,6 +3806,9 @@ def api_v1_get_related(work_id, page: int = 1, limit: int = 20,
         rows = conn.execute(
             page_sql,
             score_params + where_params + [limit, offset]).fetchall()
+        # Audit #17: one row per work in the rail; `total` still counts
+        # rows (see _dedupe_page_rows).
+        rows = _dedupe_page_rows(rows)
         return {
             "page": page,
             "limit": limit,
