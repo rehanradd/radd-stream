@@ -73,10 +73,15 @@ enum class IndustryFilter(val label: String, val wireValue: String?) {
 enum class GenreFilter(val label: String, val wireValue: String?) {
     ALL("All", null),
     ACTION("Action", "action"),
+    ADVENTURE("Adventure", "adventure"),
+    ANIMATION("Animation", "animation"),
     COMEDY("Comedy", "comedy"),
+    CRIME("Crime", "crime"),
     DRAMA("Drama", "drama"),
-    SCI_FI("Sci-Fi", "sci-fi"),
     HORROR("Horror", "horror"),
+    ROMANCE("Romance", "romance"),
+    SCI_FI("Sci-Fi", "sci-fi"),
+    THRILLER("Thriller", "thriller"),
 }
 
 enum class QualityFilter(val label: String, val wireValue: String?) {

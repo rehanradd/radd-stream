@@ -14,6 +14,12 @@ import com.google.gson.annotations.SerializedName
  *                               each release with `sources[]` projected by the link view)
  *  GET /api/v1/stream           → [StreamResponse]           (our own redirector, `redirect=0`)
  *  GET /api/v1/stats            → [StatsResponse]            (scale only, no per-site rows)
+ *  GET /api/v1/trending         → [PostsResponse]            (the "Most Sources" order,
+ *                               `sort=trending` on /api/v1/posts, as its own route)
+ *  GET /api/v1/related          → [PostsResponse]            ("Because you watch", scored
+ *                               on the seed post's genres, cast, industry, type and year)
+ *  GET /api/v1/facets           → [FacetsResponse]           (browse jump-off chips, each
+ *                               with the count its tap delivers)
  *
  * Those four are the ENTIRE served surface. There is no `/api/v1/sync`, no
  * `/api/v2` endpoint at all, and the public answers carry NO source-site, hoster or upstream
@@ -51,6 +57,25 @@ data class PostsResponse(
      * viewer who typed "Avngers" knows why "Avengers" is what came back.
      */
     val fuzzy: Boolean = false,
+)
+
+/** One entry of GET /api/v1/facets — a jump-off chip with its honest count. */
+data class FacetEntry(
+    val key: String,
+    val label: String,
+    val count: Int = 0,
+)
+
+/**
+ * Exact response of GET /api/v1/facets. Every group is present even when
+ * empty, and a count is the number of public posts the matching filter
+ * returns — a chip never promises a count its tap cannot keep.
+ */
+data class FacetsResponse(
+    val genres: List<FacetEntry> = emptyList(),
+    val languages: List<FacetEntry> = emptyList(),
+    val industries: List<FacetEntry> = emptyList(),
+    val types: List<FacetEntry> = emptyList(),
 )
 
 /** One catalog row of GET /api/v1/posts (the served `post_brief` view: identity + title fields + counts). */

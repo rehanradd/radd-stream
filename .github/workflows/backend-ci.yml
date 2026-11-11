@@ -34,6 +34,8 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       routing — the layer every other suite calls as a function)
 #     - Fast_Fetch/test_media_search.py      (by-media matcher: the bounded candidate
 #       window, the no-SQL floor on short tokens, EXPLAIN QUERY PLAN assertions)
+#     - Fast_Fetch/test_home_rails.py        (Home rails: /api/v1/trending,
+#       /api/v1/related, /api/v1/facets, and the genre/language filters)
 #     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
 #       nothing without --execute, is idempotent, and fails verify on a drifted index)
 #     - Fast_Fetch/test_bounded_ledger.py    (/api/data: page ceiling, operator-only
@@ -419,6 +421,13 @@ jobs:
       # 45 s on the production catalog is red on the runner in milliseconds.
       - name: 🧪 test_media_search.py
         run: python3 -S Fast_Fetch/test_media_search.py
+
+      # The Home rails: /api/v1/trending, /api/v1/related and /api/v1/facets,
+      # plus the genre (5 -> 10 categories) and language filter extensions
+      # they stand on. The facet-count-equals-filter-total assertions are the
+      # ones that matter: a chip must never promise a count its tap cannot keep.
+      - name: 🧪 test_home_rails.py
+        run: python3 -S Fast_Fetch/test_home_rails.py
 
       # The index migration, against a throwaway fixture catalog in a temp directory.
       # It never opens a real database; the target path is required on the command line.

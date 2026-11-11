@@ -12,6 +12,7 @@ import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.data.local.WatchHistoryMerge
 import com.raddstream.app.network.friendlyNetworkError
+import com.raddstream.app.network.models.FacetsResponse
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.PanelBroadcast
 import com.raddstream.app.network.models.VipRemoteConfig
@@ -45,13 +46,12 @@ import kotlinx.coroutines.launch
  * has a real backing source. `HomeViewModel` therefore only builds rails the v1 API
  * can actually serve. Continue Watching renders from the device's own watch
  * history (no server needed), and the panel's sections render from the feed.
- * Rails the brief asks for but that have **no server support yet** ("because you
- * watched", genre/language jump-off) are declared in [RESERVE_NOTE] and
- * intentionally omitted — the endpoint is requested in docs/HANDOFF_appui.md
- * rather than filled with fabricated or client-invented data. "Most Sources"
- * used to sit in that list; it does not any more, because the sort it needs
- * already exists on the live route (`/api/v1/posts?sort=trending`) — see
- * [initialHomeSections].
+ * "Because you watch" renders from GET /api/v1/related, seeded from the
+ * first Continue Watching post, and the genre/language jump-off renders
+ * from GET /api/v1/facets — both are real server answers now, so neither
+ * is reserved any more. "Most Sources" used to sit in that list; it does
+ * not any more, because the sort it needs already exists on the live route
+ * (`/api/v1/posts?sort=trending`) — see [initialHomeSections].
  */
 /**
  * The rails Home actually renders, in order. Continue Watching counts as a
@@ -84,6 +84,13 @@ data class HomeSection(
      */
     val sort: String? = null,
     /**
+     * The v1 post id this rail is related to (`/api/v1/related?work_id=`),
+     * or null for an ordinary list rail. Only "Because you watch" sets
+     * one: it is seeded from the first Continue Watching post, and it
+     * hides when there is no seed or the server answers an empty page.
+     */
+    val relatedWorkId: Int? = null,
+    /**
      * True when the operator's feed, not a posts call, owns this rail. A
      * panel rail already has its rows — it is never loaded, retried, or
      * refreshed through [HomeViewModel.loadSection]; the next remote-config
@@ -96,9 +103,11 @@ data class HomeSection(
     /**
      * True when Browse can reproduce this rail's order. Browse takes a type
      * but no sort, so a rail ordered by a server sort has no "See all": the
-     * Browse page would silently re-sort it to freshest-first.
+     * Browse page would silently re-sort it to freshest-first. A related
+     * rail has no Browse equivalent either — Browse cannot reproduce a
+     * seed's neighbours.
      */
-    val browseEquivalent: Boolean get() = sort == null
+    val browseEquivalent: Boolean get() = sort == null && relatedWorkId == null
 
     /**
      * A rail that already has rows and whose newest refresh came back empty-handed. Without
@@ -166,6 +175,15 @@ data class HomeUiState(
     val lastHomeSyncMs: Long? = null,
     /** Gap A6: true once the first-run "Pick 3 you like" card is done (picked 3 or dismissed). */
     val pickThreeDone: Boolean = false,
+    /**
+     * The browse jump-off chips from GET /api/v1/facets (genres, languages,
+     * industries, types, each with the count its tap delivers). Null until
+     * the call answers, and null again when it fails — no chips, never a
+     * failed Home, and the screen must not pretend the silence means "no
+     * genres exist". Language chips are not rendered yet: Search has no
+     * language filter to land on, so the group waits for one.
+     */
+    val facets: FacetsResponse? = null,
 ) {
     /**
      * Gap A6: the three titles the first-run card offers — the first rail
@@ -236,13 +254,16 @@ data class AppUpdate(
 
 private const val RESERVE_NOTE = """
     Reserved rails awaiting server support (see docs/HANDOFF_appui.md):
-      - because_you_watch : needs GET /api/v1/related?work_id= (API_V2.md collections) — requested.
-      - genre / language jump-off : needs GET /api/v1/facets (browse facets) — requested.
+      - (none — "Because you watch" shipped with GET /api/v1/related and
+        the genre / language jump-off with GET /api/v1/facets.)
     None of these render until the backend returns real rows; they are NOT faked.
     "Most Sources" left this list in D2.2: its order already exists as
     sort=trending on /api/v1/posts (most prints and mirrors — no play counts
     exist, so it is not popularity), and the app already calls that sort.
 """
+
+/** The key of the "Because you watch" rail, inserted after "Recently added". */
+private const val BECAUSE_YOU_WATCH_KEY = "because_you_watch"
 
 /**
  * The rails Home actually renders, in order. Pure, so the test can pin the
@@ -357,9 +378,13 @@ class HomeViewModel @Inject constructor(
             restoreCachedHome()
             loadAll(force = true)
         }
+        loadFacets()
         checkForUpdate()
         askAppOpenAd()
     }
+
+    /** The seed post id the "Because you watch" rail is loaded for, or null when no rail is loaded. */
+    private var relatedSeedId: Int? = null
 
     /**
      * The daily check-in's facts, read not written: the streak count is this
@@ -489,8 +514,68 @@ class HomeViewModel @Inject constructor(
                 .collect { rows ->
                     val items = rows.mapNotNull { ResumeTile.of(it) }
                     _uiState.update { it.copy(continueWatching = items) }
+                    syncBecauseYouWatch(items.firstOrNull()?.post?.id)
                 }
         }
+    }
+
+    /**
+     * GET /api/v1/facets — the browse jump-off chips. One call per Home
+     * load; a failed call means no chips, never a failed Home, and the
+     * last good facets stay on screen rather than being wiped by a
+     * failed refresh.
+     */
+    private fun loadFacets() {
+        viewModelScope.launch {
+            val facets = try {
+                catalogRepository.getFacets()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
+            if (facets != null) {
+                _uiState.update { it.copy(facets = facets) }
+            }
+        }
+    }
+
+    /**
+     * The "Because you watch" rail, seeded from the first Continue Watching
+     * post. The rail is inserted after "Recently added" and loaded once;
+     * a later refresh reloads it like any other rail through [loadSection].
+     * A new seed replaces the rail and reloads it; no seed removes it.
+     * A seed that is already loaded is a no-op, so a re-emitted watch
+     * history does not reload the rail for nothing.
+     */
+    private fun syncBecauseYouWatch(seedPostId: Int?) {
+        if (seedPostId == relatedSeedId) return
+        relatedSeedId = seedPostId
+        val current = _uiState.value.sections
+        if (seedPostId == null) {
+            if (current.any { it.key == BECAUSE_YOU_WATCH_KEY }) {
+                _uiState.update { state ->
+                    state.copy(sections = state.sections.filterNot { it.key == BECAUSE_YOU_WATCH_KEY })
+                }
+            }
+            return
+        }
+        val existing = current.firstOrNull { it.key == BECAUSE_YOU_WATCH_KEY }
+        val section = (existing ?: HomeSection(
+            key = BECAUSE_YOU_WATCH_KEY,
+            title = "Because you watch",
+            type = null,
+            loading = true,
+        )).copy(relatedWorkId = seedPostId, loading = true, error = null)
+        val sections = if (existing != null) {
+            current.map { if (it.key == BECAUSE_YOU_WATCH_KEY) section else it }
+        } else {
+            val index = current.indexOfFirst { it.key == "recent" }
+                .takeIf { it >= 0 }?.plus(1) ?: 1
+            current.toMutableList().apply { add(index.coerceIn(0, size), section) }
+        }
+        _uiState.update { it.copy(sections = sections) }
+        viewModelScope.launch { loadSection(section) }
     }
 
     /**
@@ -656,6 +741,7 @@ class HomeViewModel @Inject constructor(
 
     fun refresh() {
         loadAll(force = true)
+        loadFacets()
         checkForUpdate()
     }
 
@@ -804,16 +890,41 @@ class HomeViewModel @Inject constructor(
         if (section.panelManaged) return
         markSection(section.key) { it.copy(loading = true, error = null) }
         try {
-            // Phase 7 (M1): the v2 list first — one row per work, keyset-safe —
-            // with the v1 list as the fallback. An empty v2 page falls back too:
-            // a section type the v2 side cannot serve must not read as "no titles".
-            // A rail that asks for a server sort (only "Most Sources" today) keeps
-            // it on both paths; the others keep the v2 default sort.
-            val page = catalogRepository.browseWorksV2(type = section.type, sort = section.sort ?: "trending", limit = 18)
-            val results = if (page != null && page.posts.isNotEmpty()) {
-                page.posts
-            } else {
-                catalogRepository.getPosts(type = section.type, sort = section.sort, page = 1, limit = 18).results
+            val results = when {
+                section.relatedWorkId != null -> {
+                    // "Because you watch": the dedicated route, seeded from
+                    // the first Continue Watching post. An empty page hides
+                    // the rail; the v2 list cannot serve a seed, so there
+                    // is no v2 path here.
+                    catalogRepository.getRelated(
+                        workId = section.relatedWorkId, page = 1, limit = 18,
+                    ).results
+                }
+                else -> {
+                    // Phase 7 (M1): the v2 list first — one row per work, keyset-safe —
+                    // with the v1 list as the fallback. An empty v2 page falls back too:
+                    // a section type the v2 side cannot serve must not read as "no titles".
+                    // A rail that asks for a server sort (only "Most Sources" today) keeps
+                    // it on both paths; the others keep the v2 default sort.
+                    val page = catalogRepository.browseWorksV2(type = section.type, sort = section.sort ?: "trending", limit = 18)
+                    if (page != null && page.posts.isNotEmpty()) {
+                        page.posts
+                    } else if (section.sort == "trending") {
+                        // "Most Sources": the dedicated /api/v1/trending route
+                        // first, the list it replaces behind it — an old
+                        // server answers the old route, so the rail never
+                        // loses rows to a route it does not have yet.
+                        try {
+                            catalogRepository.getTrending(type = section.type, page = 1, limit = 18).results
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            catalogRepository.getPosts(type = section.type, sort = section.sort, page = 1, limit = 18).results
+                        }
+                    } else {
+                        catalogRepository.getPosts(type = section.type, sort = section.sort, page = 1, limit = 18).results
+                    }
+                }
             }
             markSection(section.key) { it.copy(items = results, loading = false, error = null) }
         } catch (cancelled: CancellationException) {

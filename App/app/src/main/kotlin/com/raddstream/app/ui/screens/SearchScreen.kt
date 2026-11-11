@@ -112,6 +112,10 @@ fun SearchScreen(
     onPlayDirectUrl: (url: String, title: String) -> Unit = { _, _ -> },
     /** A query to run at once — an actor tap on a detail card lands here with the name filled in. */
     initialQuery: String? = null,
+    /** A genre filter to apply at once — a facet chip on Home lands here with the genre filled in. */
+    initialGenre: String? = null,
+    /** An industry filter to apply at once — a facet chip on Home lands here with the industry filled in. */
+    initialIndustry: String? = null,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -127,6 +131,19 @@ fun SearchScreen(
     // or a later edit never re-runs it.
     LaunchedEffect(initialQuery) {
         if (!initialQuery.isNullOrBlank()) viewModel.runRecent(initialQuery)
+    }
+
+    // A facet chip applies its filter at once — and runs the search, like
+    // any filter the viewer set. Keyed on the arguments, so a rotation or
+    // a later edit never re-applies them. An unknown wire value is ignored,
+    // never guessed at.
+    LaunchedEffect(initialGenre, initialIndustry) {
+        initialGenre?.let { wire ->
+            GenreFilter.entries.firstOrNull { it.wireValue == wire }?.let { viewModel.selectGenre(it) }
+        }
+        initialIndustry?.let { wire ->
+            IndustryFilter.entries.firstOrNull { it.wireValue == wire }?.let { viewModel.selectIndustry(it) }
+        }
     }
 
     Scaffold(

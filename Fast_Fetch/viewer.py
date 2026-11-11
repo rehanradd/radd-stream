@@ -3106,11 +3106,133 @@ _NEWEST_YEAR_SQL = (
 SEARCH_DEADLINE_SECONDS = 10.0
 
 
+#: The 10 genre categories the panel seeded (gap A18) and the facets
+#: endpoint reports. The `genre=` filter and the facets counts share the
+#: predicates below, so a facet count is exactly the number of rows the
+#: matching filter returns — a chip must never promise a count its tap
+#: cannot deliver.
+GENRE_KEYS = ("action", "adventure", "animation", "comedy", "crime",
+              "drama", "horror", "romance", "sci-fi", "thriller")
+
+#: genre key -> (SQL fragment on alias `p`, params). A plain token is one
+#: `lower(p.genres) LIKE ?`; sci-fi keeps the four spellings the filter
+#: already matched, and animation also matches the `is_animated` flag the
+#: ledger actually writes (a cartoon whose genres never say "animation"
+#: is still animation).
+GENRE_FILTER_SQL = {
+    "action": ("lower(p.genres) LIKE ?", ["%action%"]),
+    "adventure": ("lower(p.genres) LIKE ?", ["%adventure%"]),
+    "animation": ("(lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?"
+                  " OR p.is_animated = 1)", ["%animation%", "%anime%"]),
+    "comedy": ("lower(p.genres) LIKE ?", ["%comedy%"]),
+    "crime": ("lower(p.genres) LIKE ?", ["%crime%"]),
+    "drama": ("lower(p.genres) LIKE ?", ["%drama%"]),
+    "horror": ("lower(p.genres) LIKE ?", ["%horror%"]),
+    "romance": ("lower(p.genres) LIKE ?", ["%romance%"]),
+    "sci-fi": ("(lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?"
+               " OR lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?)",
+               ["%sci-fi%", "%sci fi%", "%scifi%", "%science fiction%"]),
+    "thriller": ("lower(p.genres) LIKE ?", ["%thriller%"]),
+}
+
+#: industry key -> SQL fragment on alias `p` (no params; the values are
+#: fixed). The `industry=` filter and the facets counts share these, for
+#: the same reason as the genre predicates above.
+INDUSTRY_FILTER_SQL = {
+    "bollywood": "lower(p.industry) LIKE '%bollywood%'",
+    "hollywood": "lower(p.industry) LIKE '%hollywood%'",
+    "pakistani": ("(lower(p.industry) LIKE '%pakistan%'"
+                  " OR lower(p.country) LIKE '%pakistan%'"
+                  " OR lower(p.language) LIKE '%urdu%')"),
+    "south_indian": ("(lower(p.industry) LIKE '%south%'"
+                     " OR lower(p.industry) LIKE '%tollywood%'"
+                     " OR lower(p.industry) LIKE '%kollywood%'"
+                     " OR lower(p.industry) LIKE '%mollywood%'"
+                     " OR lower(p.industry) LIKE '%sandalwood%'"
+                     " OR lower(p.language) LIKE '%tamil%'"
+                     " OR lower(p.language) LIKE '%telugu%'"
+                     " OR lower(p.language) LIKE '%malayalam%'"
+                     " OR lower(p.language) LIKE '%kannada%')"),
+    "anime": "(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')",
+}
+
+INDUSTRY_KEYS = tuple(INDUSTRY_FILTER_SQL)
+
+INDUSTRY_LABELS = {
+    "bollywood": "Bollywood",
+    "hollywood": "Hollywood",
+    "pakistani": "Pakistani",
+    "south_indian": "South Indian",
+    "anime": "Anime",
+}
+
+#: content_type -> display label for the facets types group. A type the
+#: ledger has not written yet falls back to a title-cased key.
+TYPE_LABELS = {
+    "movie": "Movies",
+    "series": "Series",
+    "complete_season": "Complete seasons",
+    "ongoing_season": "Ongoing seasons",
+}
+
+
+def _like_escape(value: str) -> str:
+    """Escape a value for use inside a LIKE pattern (`%`, `_`, `\\`).
+
+    The value is caller- or seed-supplied text, not a fixed key, so an
+    unescaped `%` would match every row and an unescaped `_` any single
+    character. Use with `LIKE ? ESCAPE '\\'`.
+    """
+    return (value.replace("\\", "\\\\")
+                .replace("%", "\\%")
+                .replace("_", "\\_"))
+
+
+def _genre_tokens(genres) -> list[str]:
+    """Normalize a posts.genres / posts.language / cast_names value into
+    lowercase tokens.
+
+    Accepts a JSON array (`[\"Action\", \"Drama\"]`), a comma-separated
+    string (\"Action, Horror\"), or a single plain string (\"Action\").
+    Blank, \"[]\", and unparseable values yield []. Same shape as
+    `backfill_categories.parse_genre_tokens`, kept local so the serve
+    path does not import a data-job script.
+    """
+    if not genres:
+        return []
+    text = str(genres).strip()
+    if not text or text == "[]":
+        return []
+    if text.startswith("["):
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            parsed = None
+        if isinstance(parsed, list):
+            return [str(t).strip().lower() for t in parsed if str(t).strip()]
+        # Malformed JSON array: fall through to comma-split.
+    return [t.strip().lower() for t in text.split(",") if t.strip()]
+
+
+def _enrich_post_rows(conn, rows, base_url: str) -> list[dict]:
+    """Project page rows the way /api/v1/posts does: the `post_brief`
+    view, the art pair, the work handle, and the subtitled flag."""
+    subtitled = _subtitled_posts(conn, [r["id"] for r in rows])
+    results = []
+    for r in rows:
+        item = redact.project(r, "post_brief")
+        item.update(_art_pair(r, base_url))
+        item["work_ref"] = _work_ref(r)
+        item["subtitled"] = bool(subtitled.get(int(r["id"]), False))
+        results.append(item)
+    return results
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
                      quality: str = "", sort: str = "", free_only: bool = False,
-                     work_ref: str = "") -> dict:
+                     work_ref: str = "", language: str = "") -> dict:
     _ensure_schema()
     try:
         limit = int(limit)
@@ -3182,39 +3304,25 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # string never reaches the SQL. An unknown value is ignored (the honest
         # answer is the unfiltered list), not guessed at.
         industry_key = industry.strip().lower()
-        industry_sql = {
-            "bollywood": "lower(p.industry) LIKE '%bollywood%'",
-            "hollywood": "lower(p.industry) LIKE '%hollywood%'",
-            "pakistani": ("(lower(p.industry) LIKE '%pakistan%'"
-                          " OR lower(p.country) LIKE '%pakistan%'"
-                          " OR lower(p.language) LIKE '%urdu%')"),
-            "south_indian": ("(lower(p.industry) LIKE '%south%'"
-                             " OR lower(p.industry) LIKE '%tollywood%'"
-                             " OR lower(p.industry) LIKE '%kollywood%'"
-                             " OR lower(p.industry) LIKE '%mollywood%'"
-                             " OR lower(p.industry) LIKE '%sandalwood%'"
-                             " OR lower(p.language) LIKE '%tamil%'"
-                             " OR lower(p.language) LIKE '%telugu%'"
-                             " OR lower(p.language) LIKE '%malayalam%'"
-                             " OR lower(p.language) LIKE '%kannada%')"),
-            "anime": "(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')",
-        }.get(industry_key)
+        industry_sql = INDUSTRY_FILTER_SQL.get(industry_key)
         if industry_sql:
             where_clauses.append(industry_sql)
 
         genre_key = genre.strip().lower()
-        genre_sql = {
-            "action": ("lower(p.genres) LIKE ?", ["%action%"]),
-            "comedy": ("lower(p.genres) LIKE ?", ["%comedy%"]),
-            "drama": ("lower(p.genres) LIKE ?", ["%drama%"]),
-            "sci-fi": ("(lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?"
-                       " OR lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?)",
-                       ["%sci-fi%", "%sci fi%", "%scifi%", "%science fiction%"]),
-            "horror": ("lower(p.genres) LIKE ?", ["%horror%"]),
-        }.get(genre_key)
+        genre_sql = GENRE_FILTER_SQL.get(genre_key)
         if genre_sql:
             where_clauses.append(genre_sql[0])
             params.extend(genre_sql[1])
+
+        # Language is a property of the post row, like genre: one token
+        # matched as a substring, so a Hindi+English row answers both
+        # `language=hindi` and `language=english` — the same rows the
+        # facets language counts name. The value is caller-supplied, so it
+        # is escaped before it reaches the LIKE pattern.
+        language_key = language.strip().lower()
+        if language_key:
+            where_clauses.append(r"lower(p.language) LIKE ? ESCAPE '\'")
+            params.append("%" + _like_escape(language_key) + "%")
 
         # Quality is a property of a release, not of the post row, so it is an
         # existence test over the prints: "this work has at least one 4K/1080p/720p
@@ -3424,17 +3532,10 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             sql = (select_sql + f" WHERE {where_sql} GROUP BY p.id"
                    f" ORDER BY {order_sql} LIMIT ? OFFSET ?")
             rows = conn.execute(sql, params + [limit, offset]).fetchall()
-        results = []
-        subtitled = {} if full else _subtitled_posts(conn, [r["id"] for r in rows])
-        for r in rows:
-            if full:
-                results.append(dict(r))
-                continue
-            item = redact.project(r, "post_brief")
-            item.update(_art_pair(r, base_url))
-            item["work_ref"] = _work_ref(r)
-            item["subtitled"] = bool(subtitled.get(int(r["id"]), False))
-            results.append(item)
+        if full:
+            results = [dict(r) for r in rows]
+        else:
+            results = _enrich_post_rows(conn, rows, base_url)
         if page_ids is not None:
             # The page query fetched by id, so impose the step-1 order here.
             by_id = {}
@@ -3453,6 +3554,218 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "mood_genres": mood_genres,
             "did_you_mean": did_you_mean_query,
         }
+
+
+def api_v1_get_trending(page: int = 1, limit: int = 20,
+                        content_type: str = "", base_url: str = "") -> dict:
+    """GET /api/v1/trending — the \"Most Sources\" rail as its own route.
+
+    The order already exists as sort=trending on /api/v1/posts (most prints
+    and mirrors — no play counts exist, so it is not popularity); this is
+    the same page through a dedicated route, so the rail and any other
+    consumer read one contract. Delegating keeps the 10 s deadline, the
+    adult clause, the hides and the envelope identical to /api/v1/posts.
+    """
+    return api_v1_get_posts(page=page, limit=limit, content_type=content_type,
+                            sort="trending", base_url=base_url)
+
+
+def api_v1_get_related(work_id, page: int = 1, limit: int = 20,
+                       base_url: str = "") -> dict:
+    """GET /api/v1/related?work_id= — \"Because you watch\".
+
+    `work_id` is a v1 post id. A seed that is missing or adult answers an
+    empty page (total 0), never an error — the rail hides instead of
+    failing the Home load. A non-integer work_id raises ValueError; the
+    route turns that into a 400. The score is the seed's own evidence:
+    a shared cast member +5 each, a shared genre +3 each, the same
+    industry +1, the same content type +1, a year within two +1; the
+    order is score, then the same (release_count + source_count) the
+    trending rail uses, then id. Only rows with a score above zero are
+    returned, so a seed with no neighbours answers empty instead of the
+    whole catalog in disguise. The adult clause and the panel hides
+    apply exactly as on /api/v1/posts.
+    """
+    try:
+        seed_id = int(work_id)
+    except (TypeError, ValueError):
+        raise ValueError("work_id must be an integer post id")
+    _ensure_schema()
+    try:
+        page = int(page)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(1, page)
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(100, limit))
+    offset = max(0, (page - 1) * limit)
+    empty = {"page": page, "limit": limit, "total": 0,
+             "total_pages": 1, "results": []}
+    with get_db() as conn:
+        deadline = time.monotonic() + SEARCH_DEADLINE_SECONDS
+
+        def _related_deadline():
+            return 1 if time.monotonic() > deadline else 0
+
+        conn.set_progress_handler(_related_deadline, 1000)
+        seed = conn.execute(
+            "SELECT id, genres, cast_names, industry, content_type, year,"
+            " is_18_plus FROM posts WHERE id = ?",
+            (seed_id,)).fetchone()
+        if seed is None or seed["is_18_plus"]:
+            return empty
+        # The score, as one expression over the seed's own fields. Genre
+        # and cast tokens are capped at five each: a long cast list must
+        # not drown the other signals, and every token is escaped before
+        # it reaches the LIKE pattern.
+        score_parts = []
+        score_params = []
+        for token in _genre_tokens(seed["genres"])[:5]:
+            score_parts.append(
+                r"(CASE WHEN lower(p.genres) LIKE ? ESCAPE '\' THEN 3 ELSE 0 END)")
+            score_params.append("%" + _like_escape(token) + "%")
+        for name in _genre_tokens(seed["cast_names"])[:5]:
+            score_parts.append(
+                r"(CASE WHEN lower(p.cast_names) LIKE ? ESCAPE '\' THEN 5 ELSE 0 END)")
+            score_params.append("%" + _like_escape(name) + "%")
+        industry_tokens = _genre_tokens(seed["industry"])
+        if industry_tokens:
+            score_parts.append(
+                r"(CASE WHEN lower(p.industry) LIKE ? ESCAPE '\' THEN 1 ELSE 0 END)")
+            score_params.append("%" + _like_escape(industry_tokens[0]) + "%")
+        if seed["content_type"]:
+            score_parts.append("(CASE WHEN p.content_type = ? THEN 1 ELSE 0 END)")
+            score_params.append(seed["content_type"])
+        try:
+            seed_year = int(seed["year"]) if seed["year"] is not None else None
+        except (TypeError, ValueError):
+            seed_year = None
+        if seed_year is not None:
+            score_parts.append(
+                "(CASE WHEN p.year BETWEEN ? AND ? THEN 1 ELSE 0 END)")
+            score_params.extend([seed_year - 2, seed_year + 2])
+        score_sql = " + ".join(score_parts) if score_parts else "0"
+        where_clauses = [redact.adult_clause("p"), "p.id != ?"]
+        where_params = [seed_id]
+        hidden = panel_feed.hidden_work_ids()
+        if hidden:
+            ids = sorted(hidden)[:panel_feed.HIDDEN_IDS_CAP]
+            where_clauses.append(
+                "p.id NOT IN (%s)" % ",".join("?" for _ in ids))
+            where_params.extend(ids)
+        where_sql = " AND ".join(where_clauses)
+        total = conn.execute(
+            "SELECT COUNT(*) FROM (SELECT p.id, (" + score_sql + ") AS _rel_score"
+            " FROM posts p WHERE " + where_sql + ") WHERE _rel_score > 0",
+            score_params + where_params).fetchone()[0]
+        if total == 0:
+            return empty
+        page_sql = (
+            "SELECT p.id, p.clean_title, p.title, p.year, p.content_type,"
+            " p.seasons, p.poster_url, p.backdrop_urls, p.imdb_rating,"
+            " p.imdb_id, p.tmdb_id, p.genres, p.is_animated, p.industry,"
+            " p.country, p.language, (" + score_sql + ") AS _rel_score,"
+            " COUNT(DISTINCT r.id) as release_count,"
+            " COUNT(DISTINCT s.id) as source_count"
+            " FROM posts p"
+            " LEFT JOIN releases r ON r.post_id = p.id"
+            " LEFT JOIN download_sources s ON s.release_id = r.id"
+            " WHERE " + where_sql + " GROUP BY p.id"
+            " HAVING _rel_score > 0"
+            " ORDER BY _rel_score DESC,"
+            " (release_count + source_count) DESC, p.id DESC"
+            " LIMIT ? OFFSET ?")
+        rows = conn.execute(
+            page_sql,
+            score_params + where_params + [limit, offset]).fetchall()
+        return {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": max(1, (total + limit - 1) // limit),
+            "results": _enrich_post_rows(conn, rows, base_url),
+        }
+
+
+def api_v1_get_facets() -> dict:
+    """GET /api/v1/facets — the browse jump-off chips.
+
+    Four groups, each entry {key, label, count}: genres (the 10 panel
+    categories), languages (top 12), industries (the 5 fixed keys), types
+    (the content_type values). Every count is the number of public,
+    non-adult posts the matching filter returns — the counts and the
+    filters share the same predicates (`GENRE_FILTER_SQL`,
+    `INDUSTRY_FILTER_SQL`, the `language=` LIKE), so a chip's count is
+    what its tap delivers. The panel hides apply here too. A group with
+    no rows is an empty list, never an error.
+    """
+    _ensure_schema()
+    with get_db() as conn:
+        deadline = time.monotonic() + SEARCH_DEADLINE_SECONDS
+
+        def _facets_deadline():
+            return 1 if time.monotonic() > deadline else 0
+
+        conn.set_progress_handler(_facets_deadline, 1000)
+        adult = redact.adult_clause("p")
+        hidden = panel_feed.hidden_work_ids()
+        hidden_sql = ""
+        hidden_params: list = []
+        if hidden:
+            ids = sorted(hidden)[:panel_feed.HIDDEN_IDS_CAP]
+            hidden_sql = " AND p.id NOT IN (%s)" % ",".join("?" for _ in ids)
+            hidden_params = ids
+        # Genres + industries: one aggregate, one CASE per key, so the
+        # whole catalog is scanned once for both groups.
+        cases = []
+        case_params: list = []
+        for key in GENRE_KEYS:
+            frag, params = GENRE_FILTER_SQL[key]
+            cases.append("SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS %s"
+                         % (frag, key.replace("-", "_")))
+            case_params.extend(params)
+        for key in INDUSTRY_KEYS:
+            cases.append("SUM(CASE WHEN %s THEN 1 ELSE 0 END) AS %s"
+                         % (INDUSTRY_FILTER_SQL[key], key))
+        agg = conn.execute(
+            "SELECT %s FROM posts p WHERE %s%s"
+            % (", ".join(cases), adult, hidden_sql),
+            case_params + hidden_params).fetchone()
+        genres = [{"key": key, "label": key.title(),
+                   "count": int(agg[key.replace("-", "_")] or 0)}
+                  for key in GENRE_KEYS]
+        industries = [{"key": key, "label": INDUSTRY_LABELS[key],
+                       "count": int(agg[key] or 0)}
+                      for key in INDUSTRY_KEYS]
+        # Languages: group by the raw value, then split multi-language
+        # rows in Python — a Hindi+English post counts for both, the same
+        # rows a `language=` filter matches.
+        lang_counts: dict[str, int] = {}
+        lang_rows = conn.execute(
+            "SELECT p.language, COUNT(*) AS c FROM posts p"
+            " WHERE %s%s GROUP BY p.language ORDER BY c DESC LIMIT 40"
+            % (adult, hidden_sql), hidden_params).fetchall()
+        for raw, count in lang_rows:
+            for token in _genre_tokens(raw):
+                lang_counts[token] = lang_counts.get(token, 0) + int(count)
+        languages = [{"key": key, "label": key.title(), "count": count}
+                     for key, count in sorted(
+                         lang_counts.items(), key=lambda kv: -kv[1])[:12]]
+        # Types: the content_type values the ledger actually writes.
+        types = [{"key": ctype or "",
+                  "label": TYPE_LABELS.get(
+                      ctype or "", (ctype or "").replace("_", " ").title()),
+                  "count": int(count)}
+                 for ctype, count in conn.execute(
+                     "SELECT p.content_type, COUNT(*) AS c FROM posts p"
+                     " WHERE %s%s GROUP BY p.content_type ORDER BY c DESC"
+                     % (adult, hidden_sql), hidden_params).fetchall()
+                 if ctype]
+        return {"genres": genres, "languages": languages,
+                "industries": industries, "types": types}
 
 
 def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "",
@@ -4424,6 +4737,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     full=full, base_url=base_url,
                     industry=query_params.get("industry", [""])[0],
                     genre=query_params.get("genre", [""])[0],
+                    language=query_params.get("language", [""])[0],
                     quality=query_params.get("quality", [""])[0],
                     sort=query_params.get("sort", [""])[0],
                     free_only=query_params.get("free_only", [""])[0] == "1",
@@ -4434,6 +4748,64 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # handler aborted it, which surfaces as "interrupted" (a
                 # raise inside the callback is swallowed by sqlite3). Any
                 # other OperationalError is not the deadline: re-raise it.
+                if str(exc) != "interrupted":
+                    raise
+                self.send_json({"success": False, "error": "search_timeout"},
+                               status=503)
+                return
+            self.send_json(data)
+
+        elif path == "/api/v1/trending":
+            # The "Most Sources" rail as its own route (see api_v1_get_trending).
+            page = bounded_int(query_params, "page", 1, 1, 1_000_000)
+            limit = bounded_int(query_params, "limit", 20, 1, 100)
+            if (page - 1) * limit > POSTS_MAX_OFFSET:
+                self.send_json({"success": False, "error": "page_beyond_range",
+                                "max_offset": POSTS_MAX_OFFSET}, status=400)
+                return
+            try:
+                data = api_v1_get_trending(
+                    page=page, limit=limit,
+                    content_type=query_params.get("type", [""])[0],
+                    base_url=base_url)
+            except sqlite3.OperationalError as exc:
+                if str(exc) != "interrupted":
+                    raise
+                self.send_json({"success": False, "error": "search_timeout"},
+                               status=503)
+                return
+            self.send_json(data)
+
+        elif path == "/api/v1/related":
+            # "Because you watch" — work_id is a required v1 post id.
+            raw_work_id = query_params.get("work_id", [""])[0].strip()
+            if not raw_work_id.isdigit():
+                self.send_json({"success": False, "error": "invalid work_id"},
+                               status=400)
+                return
+            page = bounded_int(query_params, "page", 1, 1, 1_000_000)
+            limit = bounded_int(query_params, "limit", 20, 1, 100)
+            if (page - 1) * limit > POSTS_MAX_OFFSET:
+                self.send_json({"success": False, "error": "page_beyond_range",
+                                "max_offset": POSTS_MAX_OFFSET}, status=400)
+                return
+            try:
+                data = api_v1_get_related(work_id=int(raw_work_id), page=page,
+                                          limit=limit, base_url=base_url)
+            except sqlite3.OperationalError as exc:
+                if str(exc) != "interrupted":
+                    raise
+                self.send_json({"success": False, "error": "search_timeout"},
+                               status=503)
+                return
+            self.send_json(data)
+
+        elif path == "/api/v1/facets":
+            # The browse jump-off chips (see api_v1_get_facets). No
+            # parameters: the groups are the whole catalog's facets.
+            try:
+                data = api_v1_get_facets()
+            except sqlite3.OperationalError as exc:
                 if str(exc) != "interrupted":
                     raise
                 self.send_json({"success": False, "error": "search_timeout"},

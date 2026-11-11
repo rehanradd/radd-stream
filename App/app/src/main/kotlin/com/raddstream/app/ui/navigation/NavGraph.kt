@@ -377,6 +377,11 @@ fun RaddStreamNavGraph(
                         navController.navigateToPost(post, autoplay = true)
                     },
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
+                    // A facet chip on Home lands on Search with the filter
+                    // already applied — the same tab, not a pushed copy.
+                    onFacetSelected = { genre, industry ->
+                        navController.navigate(Screen.Search.createRoute(genre = genre, industry = industry))
+                    },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
                     onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
                     onOpenDownloads = { navController.navigate(Screen.Downloads.route) },
@@ -420,10 +425,23 @@ fun RaddStreamNavGraph(
                         type = NavType.StringType
                         defaultValue = ""
                     },
+                    // A facet chip on Home lands here with the filter
+                    // already applied; the plain tab navigates with no
+                    // argument, so the default keeps it unfiltered.
+                    navArgument(Screen.Search.ARG_GENRE) {
+                        type = NavType.StringType
+                        defaultValue = ""
+                    },
+                    navArgument(Screen.Search.ARG_INDUSTRY) {
+                        type = NavType.StringType
+                        defaultValue = ""
+                    },
                 ),
             ) { backStackEntry ->
                 SearchScreen(
                     initialQuery = backStackEntry.arguments?.getString(Screen.Search.ARG_QUERY)?.takeIf { it.isNotBlank() },
+                    initialGenre = backStackEntry.arguments?.getString(Screen.Search.ARG_GENRE)?.takeIf { it.isNotBlank() },
+                    initialIndustry = backStackEntry.arguments?.getString(Screen.Search.ARG_INDUSTRY)?.takeIf { it.isNotBlank() },
                     onPostClick = { post -> navController.navigateToPost(post) },
                     onPlayDirectUrl = { url, title ->
                         // The address is staged, never routed: the player

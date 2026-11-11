@@ -72,6 +72,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.network.models.FacetsResponse
 import com.raddstream.app.network.models.PanelBroadcast
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.ui.components.CatalogImage
@@ -109,6 +110,11 @@ fun HomeScreen(
     /** Session 121 (P-26): the hero's Watch Now — opens the title and starts it. */
     onWatchNowClick: (Post) -> Unit = onPostClick,
     onBrowseType: (String?) -> Unit = {},
+    /**
+     * A facet chip's jump-off: the genre and/or industry to land on Search
+     * with already applied. Null means "no filter of that kind".
+     */
+    onFacetSelected: (genre: String?, industry: String?) -> Unit = { _, _ -> },
     onSetupServerClick: () -> Unit = {},
     /** The phone's own videos (Movies/ and Download/), listed from MediaStore. */
     onOpenLocalFiles: () -> Unit = {},
@@ -365,6 +371,7 @@ fun HomeScreen(
                     }
                 }
                 JumpOffRow(onBrowseType = onBrowseType)
+                FacetChipsRow(facets = state.facets, onFacetSelected = onFacetSelected)
                 Spacer(Modifier.height(8.dp))
 
                 // At most 10 rows total, CW included: a panel that publishes 12
@@ -938,6 +945,60 @@ private fun BrowserTile(
         }
     }
 }
+
+/**
+ * The browse jump-off chips from GET /api/v1/facets: the genres and
+ * industries the catalog actually holds, each with the count its tap
+ * delivers. A chip lands on Search with the filter already applied.
+ * Nothing renders until the facets answer — a failed call means no chips,
+ * never a failed Home. A group with no rows contributes no chips. Language
+ * chips wait for a Search language filter to land on.
+ */
+@Composable
+private fun FacetChipsRow(
+    facets: FacetsResponse?,
+    onFacetSelected: (genre: String?, industry: String?) -> Unit,
+) {
+    val chips = remember(facets) {
+        val genreChips = facets?.genres.orEmpty()
+            .filter { it.count > 0 }
+            .map { FacetChip(label = "${it.label} · ${it.count}", genre = it.key, industry = null) }
+        val industryChips = facets?.industries.orEmpty()
+            .filter { it.count > 0 }
+            .map { FacetChip(label = "${it.label} · ${it.count}", genre = null, industry = it.key) }
+        genreChips + industryChips
+    }
+    if (chips.isEmpty()) return
+    Column(Modifier.padding(top = 4.dp)) {
+        SectionHeader(title = "Browse by genre")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .horizontalScrollPadding(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            chips.forEach { chip ->
+                Surface(
+                    onClick = { onFacetSelected(chip.genre, chip.industry) },
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                ) {
+                    Text(
+                        text = chip.label,
+                        style = MaterialTheme.typography.labelLarge,
+                        // E-T4: the tile was ~40dp tall (label line + 10dp + 10dp).
+                        // 14dp of vertical padding takes it to >= 48dp.
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private data class FacetChip(val label: String, val genre: String?, val industry: String?)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

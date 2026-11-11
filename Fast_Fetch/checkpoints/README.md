@@ -5,6 +5,15 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-11 — Muse [HOME-RAILS]: the Home rails — GET /api/v1/trending,
+  /api/v1/related and /api/v1/facets, plus the app wiring (Because you
+  watch rail, facet chips landing on Search, GenreFilter 5 → 10). Every
+  facet count equals the matching filter's total, so a chip never promises
+  a count its tap cannot keep. Tests: `test_home_rails.py` (25), both
+  ledgers registered; the public-edge sweep now scans the three routes.
+  Deploy note: nginx's public allow-list needs the three paths. —
+  [20261111-muse-home-rails.md](20261111-muse-home-rails.md)
+
 - 2026-11-11 — Muse self-check [DIDYOUMEAN-RECALL]: did-you-mean
   candidates now order by 3-gram match count, not recency alone, so
   "avengrs" / "avengerss" / "incepton" correct on the live catalog.

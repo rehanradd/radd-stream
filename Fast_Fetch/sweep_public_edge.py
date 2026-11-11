@@ -341,6 +341,30 @@ class Sweep:
             self.scan("/api/v1/search/by-media?q=a&duration_s=notanumber",
                       expect=(200,), label="by-media with a garbage duration")
 
+            # ── the Home rails edge ──────────────────────────────────────────
+            # /api/v1/trending and /api/v1/related answer with the same rows
+            # as `q=`, and /api/v1/facets with bare counts, so they inherit
+            # every leak this walk already looks for. Two rules of their own:
+            # a related seed that is missing or adult answers an empty page
+            # (never the catalog, never an error), and a related call
+            # without a work_id is a 400.
+            self.scan("/api/v1/trending?limit=20")
+            self.scan("/api/v1/facets")
+            if sample:
+                self.scan(f"/api/v1/related?work_id={sample[0]}&limit=20")
+            self.scan("/api/v1/related", expect=(400,),
+                      label="related without work_id")
+            self.scan("/api/v1/related?work_id=abc", expect=(400,),
+                      label="related with a non-integer work_id")
+            self.scan("/api/v1/related?work_id=999999999", expect=(200,),
+                      label="related with a missing seed")
+            if hidden:
+                status, _, body = self.scan(
+                    f"/api/v1/related?work_id={hidden[0]}&limit=20",
+                    expect=(200,), label="related with an adult seed")
+                if status == 200 and json.loads(body).get("results"):
+                    self.flag(f"related returned rows for adult seed {hidden[0]}")
+
             probed = 0
             for index, post_id in enumerate(sample):
                 status, _, body = self.scan(f"/api/v1/posts/{post_id}")

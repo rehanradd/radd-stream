@@ -5,6 +5,7 @@ import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.bearerHeader
 import kotlinx.coroutines.flow.first
 import com.raddstream.app.network.models.ContactRequest
+import com.raddstream.app.network.models.FacetsResponse
 import com.raddstream.app.network.models.LiveTvChannelsResponse
 import com.raddstream.app.network.models.PlayBundle
 import com.raddstream.app.network.models.Post
@@ -49,6 +50,7 @@ class CatalogRepository @Inject constructor(
         type: String? = null,
         industry: String? = null,
         genre: String? = null,
+        language: String? = null,
         quality: String? = null,
         sort: String? = null,
         freeOnly: Boolean? = null,
@@ -60,6 +62,7 @@ class CatalogRepository @Inject constructor(
         type = type,
         industry = industry,
         genre = genre,
+        language = language,
         quality = quality,
         sort = sort,
         freeOnly = freeOnly,
@@ -67,6 +70,54 @@ class CatalogRepository @Inject constructor(
         page = page,
         limit = limit,
     )
+
+    /**
+     * GET /api/v1/trending — the "Most Sources" rail's own route. Throws
+     * like [getPosts]; the caller ([HomeViewModel.loadSection]) falls back
+     * to the `sort=trending` list when the route is unavailable, so an old
+     * server never loses the rail.
+     */
+    suspend fun getTrending(
+        type: String? = null,
+        page: Int = 1,
+        limit: Int = 20,
+    ): PostsResponse = apiProvider.current().getTrending(
+        type = type,
+        page = page,
+        limit = limit,
+    )
+
+    /**
+     * GET /api/v1/related — "Because you watch" for one seed post id.
+     * Throws like [getPosts]; an empty page is a rail with nothing to
+     * show, not an error.
+     */
+    suspend fun getRelated(
+        workId: Int,
+        page: Int = 1,
+        limit: Int = 20,
+    ): PostsResponse = apiProvider.current().getRelated(
+        workId = workId,
+        page = page,
+        limit = limit,
+    )
+
+    /**
+     * GET /api/v1/facets — the browse jump-off chips. Null on any failure,
+     * like [browseWorksV2]: a chips call that fails must never fail the
+     * Home load it was helping, and the screen must not pretend the
+     * silence means "no genres exist". An empty response is NOT null:
+     * the server answered and has no facets.
+     */
+    suspend fun getFacets(): FacetsResponse? {
+        return try {
+            apiProvider.current().getFacets()
+        } catch (_: HttpException) {
+            null
+        } catch (_: IOException) {
+            null
+        }
+    }
 
     /**
      * GET /api/v2/suggest while typing. Never throws: a blocked route (the

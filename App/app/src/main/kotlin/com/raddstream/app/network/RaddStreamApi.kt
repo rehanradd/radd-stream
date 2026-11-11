@@ -32,6 +32,7 @@ import com.raddstream.app.network.models.FavoritesResponse
 import com.raddstream.app.network.models.PaymentRequest
 import com.raddstream.app.network.models.PaymentSubmitResponse
 import com.raddstream.app.network.models.LiveTvChannelsResponse
+import com.raddstream.app.network.models.FacetsResponse
 import com.raddstream.app.network.models.PostDetailResponse
 import com.raddstream.app.network.models.PostsResponse
 import com.raddstream.app.network.models.ProfileLinkRequest
@@ -105,6 +106,7 @@ interface RaddStreamApi {
         @Query("type") type: String? = null,
         @Query("industry") industry: String? = null,
         @Query("genre") genre: String? = null,
+        @Query("language") language: String? = null,
         @Query("quality") quality: String? = null,
         @Query("sort") sort: String? = null,
         @Query("free_only") freeOnly: Boolean? = null,
@@ -112,6 +114,38 @@ interface RaddStreamApi {
         @Query("page") page: Int = 1,
         @Query("limit") limit: Int = 20,
     ): PostsResponse
+
+    /**
+     * GET /api/v1/trending — the "Most Sources" order as its own route.
+     * The same page `sort=trending` on /api/v1/posts returns (most prints
+     * and mirrors — no play counts exist, so it is not popularity), and
+     * the label stays "Most Sources" for the same reason.
+     */
+    @GET("api/v1/trending")
+    suspend fun getTrending(
+        @Query("type") type: String? = null,
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 20,
+    ): PostsResponse
+
+    /**
+     * GET /api/v1/related — "Because you watch", scored on the seed post.
+     * `workId` is a v1 post id; a missing or adult seed answers an empty
+     * page, never an error, so the rail hides instead of failing Home.
+     */
+    @GET("api/v1/related")
+    suspend fun getRelated(
+        @Query("work_id") workId: Int,
+        @Query("page") page: Int = 1,
+        @Query("limit") limit: Int = 20,
+    ): PostsResponse
+
+    /**
+     * GET /api/v1/facets — the browse jump-off chips. One call per Home
+     * load; a failed call means no chips, never a failed Home.
+     */
+    @GET("api/v1/facets")
+    suspend fun getFacets(): FacetsResponse
 
     /**
      * GET /api/v2/suggest — cheap type-ahead over the works ledger (title
