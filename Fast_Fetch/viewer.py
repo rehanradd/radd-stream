@@ -5375,8 +5375,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if blocked:
                 # Audit critical 5, download half: the free cap that used to
                 # live only in the app. Same 402, same operator exemption as
-                # the stream route above.
-                self.send_json({"success": False, "error": blocked}, status=402)
+                # the stream route above — and the same plain-language
+                # message, so the app can fail over instead of spinning.
+                self.send_json(_plain_stream_error(blocked), status=402)
                 return
 
             import fast_fetch

@@ -1000,7 +1000,8 @@ class PublicEdgeHttpTests(FixtureMixin):
         self.assertEqual(status, 404, body)
         self.assertNotIn("Location", headers, "a stale URL must never be redirected to")
         self.assertEqual(json.loads(body),
-                         {"success": False, "error": "no_playable_source"})
+                         {"success": False, "error": "no_playable_source",
+                         "message": "That copy didn't play. Try another quality."})
         for needle in ("media.example.test", "token=old"):
             self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
 
@@ -1011,7 +1012,8 @@ class PublicEdgeHttpTests(FixtureMixin):
                                    self.public_port)
         self.assertEqual(status, 404, body)
         self.assertEqual(json.loads(body),
-                         {"success": False, "error": "no_playable_source"})
+                         {"success": False, "error": "no_playable_source",
+                         "message": "That copy didn't play. Try another quality."})
         status, _, body = self.get(f"/api/v1/stream?id={sid}", self.operator_port)
         self.assertEqual(status, 404, body)
         payload = json.loads(body)
@@ -1067,7 +1069,8 @@ class PublicEdgeHttpTests(FixtureMixin):
                 self.assertNotIn("Location", headers,
                                  f"a link the ledger retired as {verdict} was redirected to")
                 self.assertEqual(json.loads(body),
-                                 {"success": False, "error": "no_playable_source"})
+                                 {"success": False, "error": "no_playable_source",
+                                 "message": "That copy didn't play. Try another quality."})
                 for needle in ("media.example.test", "token=old"):
                     self.assertNotIn(needle, body, "the refusal must not quote the dead URL")
 
@@ -1119,7 +1122,8 @@ class PublicEdgeHttpTests(FixtureMixin):
                              "the refusal must not redirect anywhere")
             self.assertEqual(json.loads(body),
                              {"success": False,
-                              "error": "premium_quality_requires_vip"})
+                              "error": "premium_quality_requires_vip",
+                              "message": "This quality needs VIP. A lower quality is included — try that instead."})
             for needle in SENTINELS:
                 self.assertNotIn(needle, body.lower(), body)
 
@@ -1133,7 +1137,8 @@ class PublicEdgeHttpTests(FixtureMixin):
             self.assertEqual(status, 402, f"{route}: {body}")
             self.assertEqual(json.loads(body),
                              {"success": False,
-                              "error": "premium_quality_requires_vip"})
+                              "error": "premium_quality_requires_vip",
+                              "message": "This quality needs VIP. A lower quality is included — try that instead."})
 
     def test_the_gate_lets_720p_and_a_signed_vip_pass_through(self):
         self.enable_quality_gate()
