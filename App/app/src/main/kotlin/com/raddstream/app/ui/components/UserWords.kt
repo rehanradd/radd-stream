@@ -81,6 +81,27 @@ object UserWords {
         .replace("-", "-\u200B")
         .replace("/", "/\u200B")
         .replace("_", "_\u200B")
+
+    /**
+     * The work identity for cross-rail dedupe: the catalog's work ref when
+     * it has one, else the normalised title + year. Two rows of one film —
+     * two prints, two mirrors — share one key, so the same title can never
+     * appear twice on one Home screen.
+     */
+    fun workKey(workRef: String?, title: String, year: Int?): String {
+        val ref = workRef?.trim()?.lowercase()
+        if (!ref.isNullOrBlank()) return "work:$ref"
+        return "title:${normalizeDedupTitle(title)}:${year ?: ""}"
+    }
+
+    /** Lowercase, punctuation to spaces: the title half of a dedupe key. */
+    fun normalizeDedupTitle(title: String): String =
+        title.lowercase()
+            .replace(Regex("[^a-z0-9]+"), " ")
+            .trim()
+
+    /**
+     * Drop items whose work key was already shown on this screen. [keyOf]
      * is the work identity (work ref, or normalised title + year) — never
      * the row id, because the same film filed twice has two row ids.
      * Returns the kept items and the grown seen set, so rails filter in

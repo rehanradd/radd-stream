@@ -68,6 +68,19 @@ class UserWordsTest {
     }
 
     @Test
+    fun workKeyPrefersTheWorkRef() {
+        assertEquals("work:salaar-2023", UserWords.workKey("Salaar-2023", "Salaar", 2023))
+        assertEquals(
+            "title:salaar part 1 ceasefire:2023",
+            UserWords.workKey(null, "Salaar: Part 1 – Ceasefire", 2023),
+        )
+        assertEquals(
+            "title:salaar part 1 2023 multi audios:2023",
+            UserWords.workKey("  ", "Salaar - Part 1 (2023) Multi Audios", 2023),
+        )
+    }
+
+    @Test
     fun railDedupeKeepsFirstRailAndDropsRepeats() {
         val (first, seen) = UserWords.dedupeAcrossRails(
             listOf("a", "b", "c"), emptySet(), { it },
