@@ -1,0 +1,23 @@
+[Unit]
+Description=Radd Stream Admin Panel v2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/admin-v2-workspace-20261105
+Environment=RADD_CATALOG_DB=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db
+Environment=RADD_USER_STATE_DB=/home/ubuntu/radd-stream-data/user_state.db
+Environment=RADD_DOMAIN_REGISTRY=/opt/radd-stream/Fast_Fetch/domain_registry.json
+Environment=RADD_STATUS_DIR=/opt/radd-stream/Fast_Fetch
+Environment=RADD_CERT_PATH=/etc/letsencrypt/live/raddstream.duckdns.org/fullchain.pem
+Environment=RADD_FLEET_DIR=/opt/radd-stream/Fast_Fetch
+ExecStart=/usr/bin/python3 run.py --base-dir ./data-live --port 18080 --strict-host --background-jobs
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

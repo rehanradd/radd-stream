@@ -71,3 +71,11 @@ git-askpass.sh
 .netrc
 *.pem
 *.key
+
+# Admin panel v2 — live data/secrets must never reach git.
+# The live panel DB (sessions, TOTP secrets, tuning) lives in
+# AdminV2/data-live/ on the VM; backups/ holds live DB copies.
+# *.db / __pycache__ are already ignored above; these close the rest.
+AdminV2/data-live/
+AdminV2/backups/
+AdminV2/*.log
