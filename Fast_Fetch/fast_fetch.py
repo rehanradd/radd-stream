@@ -447,7 +447,12 @@ def site_implies_animation(source_site) -> int:
 #: adult short film / web series. Its importer (import_xprimehub.py) also asserts
 #: is_18_plus = 1 on every row it writes; this entry is the shared-rule backstop so a
 #: row can never slip through on a title that carries no adult token.
-ADULT_SOURCE_SITES = frozenset({"xprimehub"})
+#: MEASURED 2026-11-11: missav.ws IS that host too — a JAV-only tube (every video
+#: is a Japanese adult video by definition, 100% adult by catalog, not by
+#: reputation), owner-approved 2026-11-11 to scrape the whole site and tag every
+#: video 18+. Its importer (importers/import_missav.py) also asserts
+#: is_18_plus = 1 on every row it writes; this entry is the same backstop.
+ADULT_SOURCE_SITES = frozenset({"xprimehub", "missav"})
 
 
 def site_implies_adult(source_site) -> int:

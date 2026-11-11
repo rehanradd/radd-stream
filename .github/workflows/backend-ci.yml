@@ -769,6 +769,8 @@ jobs:
         run: python3 -S Fast_Fetch/importers/test_megacartoons_import.py
       - name: 🧪 test_castle_import.py
         run: python3 -S Fast_Fetch/importers/test_castle_import.py
+      - name: 🧪 test_missav_import.py
+        run: python3 -S Fast_Fetch/importers/test_missav_import.py
 
       # The admin panel feed for the app (sections / broadcasts / hides): the
       # resolver, the adult fail-closed rule, the hide expiry/restore rules,

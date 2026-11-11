@@ -721,6 +721,29 @@
       "last_checked": "2026-11-09T20:20:00Z",
       "notes": "Enumerated via wp-json /wp-json/wp/v2/posts (the tracker verifies the homepage because cartoon titles carry no quality marker for the wp-json proof)."
     },
+    "missav": {
+      "active_base_url": "https://missav.ws",
+      "last_verified": "2026-11-11T14:35:00Z",
+      "verified_by": "sitemap",
+      "known_mirrors": [
+        "https://missav.ws",
+        "https://missav.live",
+        "https://missav.com"
+      ],
+      "slug_variants": [
+        "missav"
+      ],
+      "tld_history": [
+        "ws",
+        "live",
+        "com"
+      ],
+      "api_type": "xml_sitemap",
+      "status": "active",
+      "last_checked": "2026-11-11T14:35:00Z",
+      "sitemap_endpoint": "/sitemap.xml",
+      "notes": "18+ adult JAV catalog — scrape only, never publish; every row is_18_plus=1 (owner-approved 2026-11-11). Video pages are Cloudflare-walled (HTML 403); enumeration via sitemap only (559 sub-sitemaps, sitemap_items_1..520). The m3u8 lives in obfuscated JS on the video page — Phase C crack task, not extracted here."
+    },
     "castle": {
       "active_base_url": "https://www.bulwik.com",
       "last_verified": "2026-11-09T20:20:00Z",
