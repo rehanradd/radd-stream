@@ -762,6 +762,26 @@
       "status": "active",
       "last_checked": "2026-11-09T20:20:00Z",
       "notes": "Site brand is Castle; domain is bulwik.com. Signed tlnob .m3u8 (~3h expiry) re-extracted per press by unwrap_castle; series need JS episode loading (movies only in batch 1)."
+    },
+    "javmost": {
+      "active_base_url": "https://www.javmost.ws",
+      "last_verified": "2026-11-11T21:40:00Z",
+      "verified_by": "sitemap",
+      "known_mirrors": [
+        "https://www.javmost.ws",
+        "https://javmost.ws"
+      ],
+      "slug_variants": [
+        "javmost"
+      ],
+      "tld_history": [
+        "ws"
+      ],
+      "api_type": "xml_sitemap",
+      "status": "active",
+      "last_checked": "2026-11-11T21:40:00Z",
+      "sitemap_endpoint": "/sitemap_index.xml",
+      "notes": "18+ adult JAV catalog — scrape only, never publish; every row is_18_plus=1 (owner-approved 2026-11-11). NOT Cloudflare-walled: homepage + video pages 200 from curl and a real browser (MissAV .live/.ws and SupJav are walled even there). Sitemap index has 34 movies-sitemapN.xml files (~10,000 videos each); each <url> carries a real poster (image:loc). Video pages carry og:title/poster, keywords (quoted real title + actress + genres) and JSON-LD uploadDate. The player is JS-loaded (voe.sx embed); no direct m3u8/mp4 in the page — Phase C crack task, bridge-only unverified source."
     }
   }
 }

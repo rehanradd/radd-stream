@@ -452,7 +452,13 @@ def site_implies_animation(source_site) -> int:
 #: reputation), owner-approved 2026-11-11 to scrape the whole site and tag every
 #: video 18+. Its importer (importers/import_missav.py) also asserts
 #: is_18_plus = 1 on every row it writes; this entry is the same backstop.
-ADULT_SOURCE_SITES = frozenset({"xprimehub", "missav"})
+#: MEASURED 2026-11-11: javmost.ws IS that host too — a JAV-only tube, the one
+#: JAV site that loads from a real browser (MissAV .live/.ws and SupJav are
+#: Cloudflare-walled even there; JavGuru is dead). Owner-approved 2026-11-11
+#: to scrape the whole site and tag every video 18+. Its importer
+#: (importers/import_javmost.py) also asserts is_18_plus = 1 on every row it
+#: writes; this entry is the same backstop.
+ADULT_SOURCE_SITES = frozenset({"xprimehub", "missav", "javmost"})
 
 
 def site_implies_adult(source_site) -> int:
