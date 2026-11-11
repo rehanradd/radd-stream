@@ -16,13 +16,17 @@ import java.net.UnknownHostException
  *
  * What the viewer needs is which of the three real situations this is — the address
  * is wrong, the server is not answering, or this build is not allowed to reach it —
- * and each one names where to go. Raw text is kept for debug builds only, appended
- * after the plain sentence, because a developer genuinely does need it.
+ * and each one names where to go.
+ *
+ * App-design audit (2026-11-12, issue #14): the raw text is NEVER appended,
+ * not even in debug builds. The shipped build IS a debug build, so the old
+ * debug suffix put "(HTTP 503 Service Unavailable)" in front of the viewer.
+ * A developer who needs the raw failure reads the exception in logcat.
  */
 fun friendlyNetworkError(
     error: Throwable?,
     fallback: String,
-    debugBuild: Boolean = BuildConfig.DEBUG,
+    @Suppress("UNUSED_PARAMETER") debugBuild: Boolean = BuildConfig.DEBUG,
 ): String {
     val raw = error?.message.orEmpty()
     val plain = when {
@@ -44,7 +48,7 @@ fun friendlyNetworkError(
             "The catalog server is having trouble right now."
         else -> fallback
     }
-    return if (debugBuild && raw.isNotBlank() && plain != fallback) "$plain ($raw)" else plain
+    return plain
 }
 
 /** The status code inside a Retrofit `HttpException` message, or null if there isn't one. */

@@ -67,12 +67,13 @@ class ClientErrorsTest {
     }
 
     @Test
-    fun `debug builds append the raw text so a developer still has it`() {
-        val error = ConnectException("Failed to connect /10.0.2.2:8080")
-        val plain = friendlyNetworkError(error, fallback, debugBuild = false)
+    fun `no raw text is ever appended, even in debug builds`() {
+        // Audit #14: the shipped build is a debug build, and the old debug
+        // suffix showed "(HTTP 503 Service Unavailable)" to the viewer.
+        val error = IOException("HTTP 503 Service Unavailable")
         val debug = friendlyNetworkError(error, fallback, debugBuild = true)
-        assertEquals(plain, debug.substringBefore(" ("))
-        assertTrue(debug, debug.endsWith("${error.message})"))
+        assertEquals("The catalog server is having trouble right now.", debug)
+        assertTrue(debug, !debug.contains("503"))
     }
 
     @Test
