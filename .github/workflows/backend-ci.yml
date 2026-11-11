@@ -347,6 +347,19 @@ jobs:
       - name: 🧪 test_prefetch_worker.py
         run: python3 -S Fast_Fetch/test_prefetch_worker.py
 
+      # Gap A17 (blank-year backfill from the title) + A18 (genre-category
+      # backfill into the panel's category_works) + A20 (fleet worker +
+      # systemd timer/service + runbook). Offline, stdlib, temp-file DBs,
+      # no network; the live runs are parent-gated with a backup first.
+      - name: 🧪 test_backfill_year_from_title.py
+        run: python3 -S Fast_Fetch/test_backfill_year_from_title.py
+
+      - name: 🧪 test_backfill_categories.py
+        run: python3 -S Fast_Fetch/test_backfill_categories.py
+
+      - name: 🧪 test_fleet_worker.py
+        run: python3 -S Fast_Fetch/test_fleet_worker.py
+
       - name: 🧪 test_catalog_exporter.py
         run: python3 -S Fast_Fetch/test_catalog_exporter.py
 

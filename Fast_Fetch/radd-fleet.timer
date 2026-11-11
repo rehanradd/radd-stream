@@ -1,0 +1,15 @@
+[Unit]
+Description=Run one fleet crawler every day (gap A20)
+
+[Timer]
+# Once a day at 03:30 PKT — a quiet hour, clear of the prefetch sweeps
+# (00:30, 06:30, 12:30, 18:30) and the gate-backup window, so no two heavy
+# jobs share a slot. One site per run means the 21 runnable crawlers rotate
+# over ~3 weeks; a site that fails is retried the next day, because the
+# worker picks the stalest site and a failed run does not update last_sync_at.
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

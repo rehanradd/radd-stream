@@ -1,0 +1,34 @@
+[Unit]
+Description=Run one fleet crawler (gap A20)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/opt/radd-stream
+# The live catalog path and the live panel database, the same values
+# radd-stream.service and the panel carry. The worker reads the catalog
+# through RADD_DB_PATH at import (config.py freezes DB_PATH), so it must be
+# set here rather than left to a --db flag; the panel DB is read through
+# RADD_PANEL_DB the same way.
+Environment=RADD_DB_PATH=/home/ubuntu/radd-stream-data/merged_catalog_20261025.db
+Environment=RADD_PANEL_DB=/home/ubuntu/admin-v2-workspace-20261105/data-live/admin_v2.db
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+# One --stalest run: the single stalest runnable crawler, limit 100. The
+# worker's own load gate (--load-ceiling 4.0, --max-wait-seconds 300) pauses
+# or yields the run while the box is busy; Nice=19 + idle IO class (the same
+# deprioritisation as the backup unit and the prefetch unit) keeps it from
+# stealing CPU or disk from the live API either way. A crawl can take a
+# while, hence the 2h start timeout, matching the backup unit.
+ExecStart=/usr/bin/python3 -S /opt/radd-stream/Fast_Fetch/fleet_worker.py --stalest --limit 100 --load-ceiling 4.0 --max-wait-seconds 300
+Nice=19
+IOSchedulingClass=idle
+TimeoutStartSec=7200
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
