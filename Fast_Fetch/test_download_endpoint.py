@@ -228,7 +228,8 @@ class DownloadEndpointTests(unittest.TestCase):
             self.public_url, f"/api/v1/download?id={token}&redirect=0")
         self.assertEqual(status, 404)
         self.assertEqual(json.loads(raw),
-                         {"success": False, "error": "no_playable_source"})
+                         {"success": False, "error": "no_playable_source",
+                          "message": "That copy didn't play. Try another quality."})
 
     # ---- the operator port still sees provenance -------------------------- #
     def test_operator_port_accepts_a_plain_id_and_returns_the_resolved_url(self):
@@ -512,7 +513,8 @@ class DownloadEndpointTests(unittest.TestCase):
         self.assertEqual(status, 402)
         self.assertEqual(json.loads(raw),
                          {"success": False,
-                          "error": "premium_quality_requires_vip"})
+                          "error": "premium_quality_requires_vip",
+                          "message": "This quality needs VIP. A lower quality is included — try that instead."})
         self.assertNotIn("media.example.test", raw.decode("utf-8", "replace"))
 
     def test_a_premium_download_plays_for_a_signed_vip_pass(self):
