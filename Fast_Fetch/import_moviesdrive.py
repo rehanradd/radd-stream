@@ -34,6 +34,17 @@ page (service hubcloud/gdflix, playback_type "download", final_url the
 anchor as-is — the resolver unwraps HubCloud/GDFlix at play time; neither
 host is re-proven here, the archive page is the evidence the link exists).
 
+DIRECT-HUBCLOUD SHAPE (newer posts, ~6,500 pending 2026-11-13): the post
+content carries hubcloud.ist/drive/search-recover.php links directly, one
+per quality (movies) or per quality x {single-episode, zip} (series), with
+the quality + size in the anchor text ("480p [310.53 MB]", "Zip [3.01GB]")
+and a base64 `q` param decoding to "<Title> <Year> <quality>" (e.g. "Eye
+for an Eye 2 2024 480p"). These links are extracted into one release per
+(quality, zip, size, codec) group with the search-recover URL as the
+source (service hubcloud, playback_type "download") — the resolver learns
+to follow search-recover.php to the drive page separately; the importer
+only records that the link exists, same as it records mdrive anchors.
+
 100% Python Standard Library. Zero external pip packages.
 
 Usage:
@@ -46,6 +57,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures
 import html
 import json
@@ -327,6 +339,161 @@ def extract_archive_sources(archive_html: str) -> list[dict]:
     return sources
 
 
+def _decode_search_q(url: str) -> str:
+    """Decoded `q` param of a search-recover URL ("<Title> <Year> <quality>").
+
+    The param is URL-safe base64; "" when absent or undecodable. Never
+    raises — a bad token just means no quality hint from this source.
+    """
+    try:
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("q", [""])[0]
+        if not q:
+            return ""
+        padded = q + "=" * (-len(q) % 4)
+        return base64.urlsafe_b64decode(padded).decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+_DIRECT_QUALITY_RE = re.compile(r"\b(480p|720p|1080p|2160p)\b", re.I)
+_DIRECT_4K_RE = re.compile(r"\b4k\b", re.I)
+_DIRECT_SIZE_RE = re.compile(r"\[([0-9.]+\s*(?:MB|GB)(?:/[A-Za-z]+)?)\]", re.I)
+_DIRECT_CODEC_RE = re.compile(r"\b(x264|x265|hevc|10bit)\b", re.I)
+_H5_RE = re.compile(r"<h5\b[^>]*>(.*?)</h5>", re.I | re.S)
+_ANCHOR_RE = re.compile(
+    r'<a\b[^>]*href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', re.I | re.S)
+
+
+def _direct_quality(*texts: str) -> str:
+    """First quality token across the texts, "4K" normalised to "2160p".
+
+    The mdrive path's archive titles say "2160p 4K", so "2160p" is the
+    quality the catalog already uses for that tier; a bare "4K" (the
+    search-recover `q` form, e.g. "The Pitt 4K") maps to the same tier.
+    """
+    for text in texts:
+        if not text:
+            continue
+        m = _DIRECT_QUALITY_RE.search(text)
+        if m:
+            return m.group(1).lower()
+        if _DIRECT_4K_RE.search(text):
+            return "2160p"
+    return ""
+
+
+def extract_direct_hubcloud_links(post_content_html: str) -> list[dict]:
+    """Direct hubcloud search-recover links in a WP post's content.
+
+    One dict per (quality, zip, size, codec) group, each carrying its
+    sources (one per link). The quality comes from the anchor text first,
+    then the decoded `q` param, then the nearest preceding <h5> heading;
+    size/codec the same way. A link with no resolvable quality is dropped —
+    a release needs a quality tier for the per-quality Play/Download
+    buttons, and an untyped link would be served as "unknown" forever.
+
+    Grouping matters: two links for the same file at the same quality (the
+    site sometimes lists a mirror) are two sources of ONE release, not two
+    releases with the same title.
+    """
+    headings = [
+        (m.end(), html.unescape(re.sub(r"<[^>]+>", "", m.group(1)).strip()))
+        for m in _H5_RE.finditer(post_content_html)
+    ]
+    groups: dict[tuple, dict] = {}
+    order: list[tuple] = []
+    for m in _ANCHOR_RE.finditer(post_content_html):
+        href = html.unescape(m.group(1).strip())
+        if not href.startswith("http"):
+            continue
+        parsed = urllib.parse.urlparse(href)
+        if not parsed.netloc.lower().startswith("hubcloud."):
+            continue
+        if parsed.path.lower() != "/drive/search-recover.php":
+            continue
+        label = html.unescape(re.sub(r"<[^>]+>", "", m.group(2)).strip())
+        decoded_q = _decode_search_q(href)
+        # The heading is the <h5> that ENDS before this anchor: the anchor
+        # itself sits inside its own <h5>, whose text is just the label —
+        # the size/codec live in the title <h5> above it.
+        heading = ""
+        for hend, htext in headings:
+            if hend <= m.start():
+                heading = htext
+            else:
+                break
+        quality = _direct_quality(label, decoded_q, heading)
+        if not quality:
+            continue
+        is_zip = bool(re.search(r"\bzip\b", f"{label} {decoded_q}", re.I))
+        size_m = _DIRECT_SIZE_RE.search(label) or _DIRECT_SIZE_RE.search(heading)
+        size = size_m.group(1) if size_m else ""
+        codec_m = _DIRECT_CODEC_RE.search(label) or _DIRECT_CODEC_RE.search(heading)
+        codec = codec_m.group(1).upper() if codec_m else ""
+        key = (quality, is_zip, size, codec)
+        if key not in groups:
+            groups[key] = {
+                "quality": quality,
+                "is_zip": is_zip,
+                "size": size,
+                "codec": codec,
+                "sources": [],
+            }
+            order.append(key)
+        groups[key]["sources"].append({
+            "source_name": label or f"HubCloud {quality}",
+            "service": "hubcloud",
+            "resource_id": decoded_q or f"search-recover-{quality}",
+            "source_url": href,
+            "final_url": href,
+            "playback_type": "download",
+        })
+    return [groups[k] for k in order]
+
+
+def _direct_hubcloud_releases(
+    direct_links: list[dict],
+    clean_title: str,
+    year,
+    seasons,
+    languages: str,
+) -> list[dict]:
+    """One release dict per direct-hubcloud group, same shape as mdrive.
+
+    The release title is built from the post's clean title + the group's
+    quality/codec/size and run through the same parse_release_info as the
+    archive titles, so quality/size/codec/season/batch land in the same
+    columns the merge and the resolver already read. The intermediate_url
+    is the search-recover URL itself: it is the intermediate between the
+    post and the file host, exactly as the mdrive archive URL is for that
+    path. Season falls back to the post metadata when the title carries
+    none (the clean title usually carries it already).
+    """
+    releases = []
+    for group in direct_links:
+        parts = [clean_title]
+        if year and str(year) not in clean_title:
+            parts.append(f"({year})")
+        parts.append(group["quality"])
+        if group["codec"]:
+            parts.append(group["codec"])
+        if group["is_zip"]:
+            parts.append("zip")
+        if group["size"]:
+            parts.append(f"[{group['size']}]")
+        rel = fast_fetch.parse_release_info(" ".join(parts))
+        if not rel.get("season") and seasons:
+            sm = re.search(r"(\d+)", str(seasons))
+            if sm:
+                rel["season"] = f"S{int(sm.group(1)):02d}"
+        rel["intermediate_url"] = group["sources"][0]["source_url"]
+        rel["source_site"] = SITE_NAME
+        rel["languages"] = languages or rel.get("languages", "")
+        rel["sources"] = group["sources"]
+        releases.append(rel)
+    return releases
+
+
 def languages_from_title(title: str) -> str:
     """'Hindi', 'Hindi + English', ... from the words present in a title."""
     found = [w.title() for w in LANG_WORDS if re.search(rf"\b{w}\b", title, re.I)]
@@ -339,8 +506,9 @@ def extract_post_data_moviesdrive(
 ) -> dict | None:
     """Builds one post record from a wp-json post + its archive pages.
 
-    archive_pages maps archive URL -> fetched archive HTML. A post with no
-    archive link, or whose archives carry no file-host anchor, yields None.
+    archive_pages maps archive URL -> fetched archive HTML. A post with
+    neither an archive link nor a direct-hubcloud link, or whose archives
+    carry no file-host anchor, yields None.
     """
     link = (post.get("link") or "").strip()
     title_obj = post.get("title") or {}
@@ -360,7 +528,8 @@ def extract_post_data_moviesdrive(
 
     content_html = ((post.get("content") or {}).get("rendered") or "")
     archive_links = extract_archive_links(content_html)
-    if not archive_links:
+    direct_links = extract_direct_hubcloud_links(content_html)
+    if not archive_links and not direct_links:
         return None
 
     languages = languages_from_title(raw_title)
@@ -380,6 +549,20 @@ def extract_post_data_moviesdrive(
         rel["languages"] = languages or rel.get("languages", "")
         rel["sources"] = sources
         releases.append(rel)
+
+    # Direct hubcloud links need no archive fetch: the search-recover URL
+    # IS the intermediate. A post carrying both shapes keeps both; a
+    # direct release whose title coincides with an archive release's adds
+    # its source to that release instead of duplicating the quality tier.
+    for rel in _direct_hubcloud_releases(
+            direct_links, clean_title, year, seasons, languages):
+        existing = next(
+            (r for r in releases
+             if r.get("release_title") == rel["release_title"]), None)
+        if existing is not None:
+            existing.setdefault("sources", []).extend(rel["sources"])
+        else:
+            releases.append(rel)
 
     if not releases:
         return None

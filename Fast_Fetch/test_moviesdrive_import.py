@@ -520,5 +520,226 @@ class TestDedupeDuplicateReleases(unittest.TestCase):
             self.assertEqual(stats, {"groups": 0, "releases_deleted": 0, "sources_deleted": 0})
 
 
+# --- Direct-hubcloud shape (2026-11-13) -------------------------------------
+# Newer MoviesDrive posts link hubcloud.ist/drive/search-recover.php directly,
+# one link per quality, instead of mdrive.lol/archive pages. The fixtures
+# below are the live shape (Eye for an Eye 2 / The Pitt, probed from the
+# Oracle VM 2026-11-13 02:15 PKT), re-pointed at the reserved hubcloud.test
+# host with synthetic from_ac tokens; the `q` values are the real base64
+# payloads ("Eye for an Eye 2 2024 480p", "The Pitt 480p zip", ...).
+
+_TOK = lambda ch: ch * 60  # synthetic from_ac token (never validated)
+
+SAMPLE_MD_WP_POST_DIRECT = {
+    "id": 65296,
+    "slug": "eye-for-an-eye-2-2024-bluray-hindi-dd5-1-english-480p-720p-1080p-x264-esubs-full-movie",
+    "link": "https://new3.moviesdrive.cyou/eye-for-an-eye-2-2024-bluray-hindi-dd5-1-english-480p-720p-1080p-x264-esubs-full-movie/",
+    "title": {"rendered": "Eye for an Eye 2 (2024) BluRay [Hindi (DD5.1) & English] 480p | 720p | 1080p [x264/ESubs] | Full Movie"},
+    "content": {"rendered": """
+        <h4>-: DOWNLOAD LINKS :-</h4><hr>
+        <p><a href="https://moviesdrives.mov/">MoviesDrives.mov</a></p>
+        <p><a href="https://t.me/moviesdrivee">Telegram</a></p>
+        <h5 style="text-align: center;">Eye for an Eye 2 (2024) BluRay [Hindi (DD5.1) &amp; English] 480p [310.53 MB]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=RXllIGZvciBhbiBFeWUgMiAyMDI0IDQ4MHA" target="_blank" rel="noopener noreferrer">480p [310.53 MB]</a></h5>
+        <h5 style="text-align: center;">Eye for an Eye 2 (2024) BluRay [Hindi (DD5.1) &amp; English] 720p x264 [908.16 MB]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=RXllIGZvciBhbiBFeWUgMiAyMDI0IDcyMHA" target="_blank" rel="noopener noreferrer">720p x264 [908.16 MB]</a></h5>
+        <h5 style="text-align: center;">Eye for an Eye 2 (2024) BluRay [Hindi (DD5.1) &amp; English] 1080p x264 [1.61 GB]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=RXllIGZvciBhbiBFeWUgMiAyMDI0IDEwODBw" target="_blank" rel="noopener noreferrer">1080p x264 [1.61 GB]</a></h5>
+    """ % (_TOK("A"), _TOK("B"), _TOK("C"))},
+    "date": "2026-11-12T10:00:00",
+}
+
+SAMPLE_MD_WP_POST_DIRECT_SERIES = {
+    "id": 65297,
+    "slug": "the-pitt-season-2-2026-dual-audio-hindi-english-s01-ep01-added-hbo-series-480p-720p-1080p-web-dl",
+    "link": "https://new3.moviesdrive.cyou/the-pitt-season-2-2026-dual-audio-hindi-english-s01-ep01-added-hbo-series-480p-720p-1080p-web-dl/",
+    "title": {"rendered": "The Pitt (Season 2) 2026 Dual Audio [Hindi – English] (S02 Ep15 Added) HBO Series 480p 720p 1080p 2160p 4K – WEB-DL"},
+    "content": {"rendered": """
+        <h5 style="text-align: center;">The Pitt (Season 2) [Ep15 Added] [Hindi – English] 480p x264 [250MB/E]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=VGhlIFBpdHQgNDgwcA">480p Single Episode</a></h5>
+        <h5 style="text-align: center;">The Pitt (Season 2) [Ep15 Added] [Hindi – English] 480p x264 [3.01GB]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=VGhlIFBpdHQgNDgwcCB6aXA">Zip [3.01GB]</a></h5>
+        <h5 style="text-align: center;">The Pitt (Season 2) [Ep15 Added] [Hindi – English] 720p x264 [500MB/E]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=VGhlIFBpdHQgNzIwcA">720p Single Episode</a></h5>
+        <h5 style="text-align: center;">The Pitt (Season 2) [Ep15 Added] [Hindi – English] 720p x264 [6.74GB]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=VGhlIFBpdHQgNzIwcCB6aXA">Zip [6.74GB]</a></h5>
+        <h5 style="text-align: center;">The Pitt (Season 2) [Ep15 Added] [Hindi – English] 1080p x264 [900MB/E]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=VGhlIFBpdHQgMTA4MHA">1080p Single Episode</a></h5>
+        <h5 style="text-align: center;">The Pitt (Season 2) [Ep15 Added] [Hindi – English] 1080p x264 [14.86GB]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=VGhlIFBpdHQgMTA4MHAgemlw">Zip [14.86GB]</a></h5>
+        <h5 style="text-align: center;">The Pitt (Season 2) [Ep15 Added] [Hindi – English] 4K x264 [250MB/E]</h5>
+        <h5 style="text-align: center;"><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=VGhlIFBpdHQgNEs">4K 2160p Single Episode</a></h5>
+    """ % (_TOK("D"), _TOK("E"), _TOK("F"), _TOK("G"), _TOK("H"), _TOK("I"), _TOK("J"))},
+    "date": "2026-11-12T10:00:00",
+}
+
+
+class TestDirectHubcloudExtract(unittest.TestCase):
+    def test_direct_links_one_per_quality_with_size_and_codec(self):
+        links = import_moviesdrive.extract_direct_hubcloud_links(
+            SAMPLE_MD_WP_POST_DIRECT["content"]["rendered"])
+        self.assertEqual(len(links), 3)
+        by_quality = {g["quality"]: g for g in links}
+        self.assertEqual(by_quality["480p"]["size"], "310.53 MB")
+        self.assertEqual(by_quality["480p"]["codec"], "")
+        self.assertEqual(by_quality["720p"]["size"], "908.16 MB")
+        self.assertEqual(by_quality["720p"]["codec"], "X264")
+        self.assertEqual(by_quality["1080p"]["size"], "1.61 GB")
+        self.assertEqual(by_quality["1080p"]["codec"], "X264")
+        for g in links:
+            self.assertEqual(len(g["sources"]), 1)
+            src = g["sources"][0]
+            self.assertEqual(src["service"], "hubcloud")
+            self.assertEqual(src["playback_type"], "download")
+            self.assertTrue(src["source_url"].startswith(
+                "https://hubcloud.test/drive/search-recover.php?"))
+            self.assertEqual(src["final_url"], src["source_url"])
+        self.assertEqual(by_quality["480p"]["sources"][0]["resource_id"],
+                         "Eye for an Eye 2 2024 480p")
+        self.assertEqual(by_quality["480p"]["sources"][0]["source_name"],
+                         "480p [310.53 MB]")
+
+    def test_direct_links_series_zip_and_4k(self):
+        links = import_moviesdrive.extract_direct_hubcloud_links(
+            SAMPLE_MD_WP_POST_DIRECT_SERIES["content"]["rendered"])
+        self.assertEqual(len(links), 7)
+        by_key = {(g["quality"], g["is_zip"]): g for g in links}
+        self.assertFalse(by_key[("480p", False)]["is_zip"])
+        self.assertTrue(by_key[("480p", True)]["is_zip"])
+        self.assertEqual(by_key[("480p", True)]["size"], "3.01GB")
+        self.assertEqual(by_key[("720p", True)]["size"], "6.74GB")
+        self.assertEqual(by_key[("1080p", True)]["size"], "14.86GB")
+        # Bare "4K" in the anchor/`q` normalises to the 2160p tier, and the
+        # size/codec come from the <h5> heading (the anchor carries none).
+        self.assertIn(("2160p", False), by_key)
+        self.assertEqual(by_key[("2160p", False)]["size"], "250MB/E")
+        self.assertEqual(by_key[("2160p", False)]["codec"], "X264")
+        # The zip quality comes from `q` when the anchor text has none.
+        self.assertEqual(by_key[("720p", True)]["sources"][0]["resource_id"],
+                         "The Pitt 720p zip")
+
+    def test_direct_links_ignore_mdrive_and_noise(self):
+        # The classic fixture carries mdrive archive links, Telegram and
+        # IMDb — none of them is a direct-hubcloud link.
+        links = import_moviesdrive.extract_direct_hubcloud_links(
+            SAMPLE_MD_WP_POST["content"]["rendered"])
+        self.assertEqual(links, [])
+
+    def test_direct_link_without_any_quality_is_dropped(self):
+        content = (
+            '<h5><a href="https://hubcloud.test/drive/search-recover.php'
+            '?from_ac=AAAA&amp;q=U29tZSBUaXRsZQ">Download</a></h5>'
+        )
+        self.assertEqual(
+            import_moviesdrive.extract_direct_hubcloud_links(content), [])
+
+    def test_direct_links_same_file_twice_is_one_release_two_sources(self):
+        content = """
+            <h5>Film (2026) 480p [100 MB]</h5>
+            <h5><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=RmlsbSAyMDI2IDQ4MHA">480p [100 MB]</a></h5>
+            <h5><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=RmlsbSAyMDI2IDQ4MHA">480p [100 MB]</a></h5>
+        """ % (_TOK("K"), _TOK("L"))
+        links = import_moviesdrive.extract_direct_hubcloud_links(content)
+        self.assertEqual(len(links), 1)
+        self.assertEqual(len(links[0]["sources"]), 2)
+        self.assertNotEqual(links[0]["sources"][0]["source_url"],
+                            links[0]["sources"][1]["source_url"])
+
+
+class TestDirectHubcloudPostData(unittest.TestCase):
+    def test_direct_only_post_yields_one_release_per_quality(self):
+        data = import_moviesdrive.extract_post_data_moviesdrive(
+            SAMPLE_MD_WP_POST_DIRECT, {})
+        self.assertIsNotNone(data)
+        self.assertEqual(data["source_site"], "moviesdrive")
+        self.assertEqual(data["year"], 2024)
+        self.assertEqual(data["clean_title"], "Eye for an Eye 2 (2024)")
+        self.assertEqual(data["content_type"], "movie")
+        self.assertEqual(len(data["releases"]), 3)
+        by_quality = {r["quality"]: r for r in data["releases"]}
+        self.assertEqual(by_quality["480p"]["size"], "310.53 MB")
+        self.assertEqual(by_quality["720p"]["size"], "908.16 MB")
+        self.assertEqual(by_quality["720p"]["codec"], "X264")
+        self.assertEqual(by_quality["1080p"]["size"], "1.61 GB")
+        for r in data["releases"]:
+            self.assertEqual(r["source_site"], "moviesdrive")
+            self.assertEqual(len(r["sources"]), 1)
+            self.assertEqual(r["sources"][0]["service"], "hubcloud")
+            self.assertEqual(r["sources"][0]["playback_type"], "download")
+            self.assertTrue(r["intermediate_url"].startswith(
+                "https://hubcloud.test/drive/search-recover.php?"))
+
+    def test_direct_series_post_zip_is_batch_and_season_is_kept(self):
+        data = import_moviesdrive.extract_post_data_moviesdrive(
+            SAMPLE_MD_WP_POST_DIRECT_SERIES, {})
+        self.assertIsNotNone(data)
+        self.assertEqual(data["content_type"], "series")
+        self.assertEqual(len(data["releases"]), 7)
+        by_key = {}
+        for r in data["releases"]:
+            by_key[(r["quality"], r.get("episode"))] = r
+        self.assertEqual(by_key[("480p", "Batch")]["size"], "3.01GB")
+        self.assertEqual(by_key[("720p", "Batch")]["size"], "6.74GB")
+        self.assertEqual(by_key[("1080p", "Batch")]["size"], "14.86GB")
+        self.assertEqual(by_key[("2160p", None)]["quality"], "2160p")
+        for r in data["releases"]:
+            self.assertEqual(r["season"], "S02")
+
+    def test_direct_only_post_without_quality_is_none(self):
+        post = dict(SAMPLE_MD_WP_POST_DIRECT)
+        post["content"] = {"rendered":
+            '<h5><a href="https://hubcloud.test/drive/search-recover.php'
+            '?from_ac=AAAA&amp;q=U29tZSBUaXRsZQ">Download</a></h5>'}
+        self.assertIsNone(
+            import_moviesdrive.extract_post_data_moviesdrive(post, {}))
+
+    def test_mixed_post_keeps_mdrive_and_direct_releases(self):
+        archive_pages = {
+            "https://mdrive.lol/archive/25388/": SAMPLE_MD_ARCH_480_HTML,
+        }
+        post = dict(SAMPLE_MD_WP_POST)
+        post["content"] = {"rendered": SAMPLE_MD_WP_POST["content"]["rendered"] + """
+            <h5>WWE Crown Jewel (2026) 1080p x264 [1.61 GB]</h5>
+            <h5><a href="https://hubcloud.test/drive/search-recover.php?from_ac=%s&amp;q=V1dFIENyb3duIEpld2VsIDIwMjYgMTA4MHA">1080p x264 [1.61 GB]</a></h5>
+        """ % _TOK("M")}
+        data = import_moviesdrive.extract_post_data_moviesdrive(post, archive_pages)
+        self.assertIsNotNone(data)
+        qualities = sorted(r["quality"] for r in data["releases"])
+        self.assertEqual(qualities, ["1080p", "480p"])
+        services = {r["quality"]: r["sources"][0]["service"]
+                    for r in data["releases"]}
+        self.assertEqual(services["480p"], "hubcloud")
+        self.assertEqual(services["1080p"], "hubcloud")
+        titles = [r["release_title"] for r in data["releases"]]
+        self.assertEqual(len(titles), len(set(titles)))
+
+
+class TestDirectHubcloudSave(unittest.TestCase):
+    def test_saved_direct_only_post_and_resave_does_not_duplicate(self):
+        data = import_moviesdrive.extract_post_data_moviesdrive(
+            SAMPLE_MD_WP_POST_DIRECT, {})
+        self.assertIsNotNone(data)
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "moviesdrive.db"
+            fast_fetch.DB_PATH = db_path
+            fast_fetch.init_db()
+            post_id = import_moviesdrive.save_post_record(data, db_path)
+            self.assertGreater(post_id, 0)
+            import_moviesdrive.save_post_record(data, db_path)
+            with sqlite3.connect(str(db_path)) as conn:
+                n_rel = conn.execute(
+                    "SELECT count(*) FROM releases WHERE post_id = ?",
+                    (post_id,)).fetchone()[0]
+                n_src = conn.execute(
+                    "SELECT count(*) FROM download_sources").fetchone()[0]
+                rows = conn.execute(
+                    "SELECT quality, intermediate_url FROM releases "
+                    "WHERE post_id = ? ORDER BY quality", (post_id,)).fetchall()
+            self.assertEqual(n_rel, 3)
+            self.assertEqual(n_src, 3)
+            self.assertEqual([r[0] for r in rows], ["1080p", "480p", "720p"])
+            self.assertTrue(all("search-recover.php" in r[1] for r in rows))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
