@@ -342,10 +342,18 @@ class SearchViewModel @Inject constructor(
         recompute()
     }
 
+    /**
+     * Clear every filter, including the Type chip: the empty state's "Clear
+     * filters" button and the sheet's "Reset" both call this, and a reset
+     * that keeps the type re-runs the same filtered search — the button
+     * looks dead (Samsung RTL retest, Issue 6: Series stayed on, so the
+     * list stayed at "No matches"). The sort resets too, for the same
+     * reason: a "clear" that keeps a non-default sort is not a clear.
+     */
     fun resetFilters() {
         _uiState.update {
             it.copy(
-                filters = SearchFilters(type = it.filters.type),
+                filters = SearchFilters(),
                 sort = SearchSort.DEFAULT,
             )
         }
@@ -357,10 +365,29 @@ class SearchViewModel @Inject constructor(
     /** True once a search has loaded from v2: the list must never mix sources. */
     private var onV2: Boolean = false
 
+    /**
+     * Monotonic id of the latest scheduled search. A search job that is no
+     * longer the latest must never write results: `Job.cancel()` only takes
+     * effect at the next suspension point, so a job whose network call
+     * already returned keeps running through its (non-suspending) write —
+     * and a slow earlier search then overwrites the newer one's list.
+     * That is the Samsung RTL retest's Issue 6 flip: the same query with
+     * the Series filter answered 1 result once and "No matches" on
+     * repeats, and a tap on the result card was followed by the stale
+     * job landing and the list going empty — the order the two in-flight
+     * searches finished in decided what the viewer saw. Every write
+     * below is gated on still being the latest generation.
+     */
+    private var searchGeneration = 0
+
     fun loadMore() {
         val state = _uiState.value
         if (!state.hasMore || state.isLoadingMore || !state.hasSearchIntent) return
         moreJob?.cancel()
+        // The generation this page belongs to: a fresh search scheduled
+        // while the page is in flight supersedes it, and the page must
+        // never append its rows onto the new search's list (Issue 6).
+        val generation = searchGeneration
         moreJob = viewModelScope.launch {
             _uiState.update { it.copy(isLoadingMore = true, error = null) }
             val next = state.page + 1
@@ -376,6 +403,7 @@ class SearchViewModel @Inject constructor(
                         industries = state.filters.industry.wireValue?.let { listOf(it) },
                         qualities = state.filters.quality.wireValue?.let { listOf(it) },
                     )
+                    if (generation != searchGeneration) return@launch
                     if (page != null) {
                         v2Cursor = page.nextCursor
                         rawResults = (rawResults + page.posts).distinctById()
@@ -404,6 +432,7 @@ class SearchViewModel @Inject constructor(
                     page = next,
                     limit = PAGE_SIZE,
                 )
+                if (generation != searchGeneration) return@launch
                 rawResults = (rawResults + resp.results).distinctById()
                 _uiState.update {
                     it.copy(
@@ -417,7 +446,9 @@ class SearchViewModel @Inject constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
-                _uiState.update { it.copy(error = friendlyNetworkError(error, "Could not load more.")) }
+                if (generation == searchGeneration) {
+                    _uiState.update { it.copy(error = friendlyNetworkError(error, "Could not load more.")) }
+                }
             } finally {
                 _uiState.update { it.copy(isLoadingMore = false) }
             }
@@ -426,6 +457,13 @@ class SearchViewModel @Inject constructor(
 
     private fun scheduleSearch(reset: Boolean, immediate: Boolean = false) {
         searchJob?.cancel()
+        // A fresh search supersedes a page load too: the page would append
+        // its rows onto the new search's list (Issue 6, same stale-write
+        // class as the search job itself).
+        moreJob?.cancel()
+        // This schedule is the latest search from here on; an older job
+        // still in flight must not write anything when it lands.
+        val generation = ++searchGeneration
         val state = _uiState.value
         val query = state.query.trim()
         val filters = state.filters
@@ -458,6 +496,7 @@ class SearchViewModel @Inject constructor(
         if (reset) _uiState.update { it.copy(page = 1) }
         searchJob = viewModelScope.launch {
             if (!immediate) delay(DEBOUNCE_MS)
+            if (generation != searchGeneration) return@launch
             _uiState.update { it.copy(isLoading = true, error = null) }
             v2Cursor = null
             onV2 = false
@@ -479,6 +518,7 @@ class SearchViewModel @Inject constructor(
                         industries = filters.industry.wireValue?.let { listOf(it) },
                         qualities = filters.quality.wireValue?.let { listOf(it) },
                     )
+                    if (generation != searchGeneration) return@launch
                     if (page != null && page.posts.isNotEmpty()) {
                         onV2 = true
                         v2Cursor = page.nextCursor
@@ -515,6 +555,7 @@ class SearchViewModel @Inject constructor(
                     page = 1,
                     limit = PAGE_SIZE,
                 )
+                if (generation != searchGeneration) return@launch
                 rawResults = resp.results.distinctById()
                 _uiState.update {
                     it.copy(
@@ -538,6 +579,10 @@ class SearchViewModel @Inject constructor(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: Exception) {
+                // A superseded search must not paint its failure over the
+                // newer search's list either (Issue 6, same stale-write
+                // class as the success path above).
+                if (generation != searchGeneration) return@launch
                 rawResults = emptyList()
                 _uiState.update {
                     it.copy(
@@ -574,6 +619,10 @@ class SearchViewModel @Inject constructor(
             // server, dead socket) — the screen says so, instead of
             // silently showing no chips as if nothing matched.
             val items = catalogRepository.suggest(query)
+            // Same stale-write class as the search job (Issue 6): a
+            // cancelled suggest whose call already returned must not paint
+            // chips for a query the viewer has already edited past.
+            if (query != _uiState.value.query.trim()) return@launch
             _uiState.update {
                 it.copy(
                     suggestions = items ?: emptyList(),

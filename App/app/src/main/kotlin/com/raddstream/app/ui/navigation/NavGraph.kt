@@ -320,7 +320,20 @@ fun RaddStreamNavGraph(
                             icon = item.icon,
                             selected = selected,
                             onClick = {
-                                if (currentRoute != item.route) {
+                                // Samsung RTL retest (Issue 8): a tab tap
+                                // must never be gated on the composition-time
+                                // route snapshot — after failed playback
+                                // cycles (rapid push/pop sequences through
+                                // the player, with the main thread busy on
+                                // resolve retries) the snapshot can lag the
+                                // back stack, and a stale read turns every
+                                // tap on that tab into a silent no-op until
+                                // something else recomposes the bar. Read
+                                // the controller's live destination at tap
+                                // time instead; launchSingleTop keeps a
+                                // same-tab tap a harmless no-op at the
+                                // controller level.
+                                if (navController.currentDestination?.route != item.route) {
                                     navController.navigate(item.navigateRoute) {
                                         popUpTo(Screen.Home.route) {
                                             saveState = true

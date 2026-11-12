@@ -651,6 +651,18 @@ private fun PlayerScreenContent(
             }
         }
 
+        // Samsung RTL retest (Issue 7): "Back to details" must dismiss the
+        // card even when the pop itself cannot run yet. Clearing the card's
+        // own state first means the tap is visibly answered at once — the
+        // card is gone whatever the pop does — and the pop then leaves the
+        // player. A tap that only pops leaves the same card on screen
+        // whenever the pop is swallowed, or when the Detail underneath
+        // re-pushes the player on return (its autoplay effect re-fires on
+        // a fresh composition), which reads exactly as "the button did
+        // nothing". Both give-up sources clear here: the handoff card is
+        // store-driven, the deadline card is state-driven.
+        val backToDetails = { vm.dismissGiveUp(); vm.dismissDeadlineGiveUp(); onBackClick() }
+
         state.giveUp?.let { (message, why) ->
             GiveUpCard(
                 message = message,
@@ -658,7 +670,7 @@ private fun PlayerScreenContent(
                 onRetry = { vm.retryCurrentCandidates() },
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissGiveUp() },
-                onBackToDetails = onBackClick,
+                onBackToDetails = backToDetails,
                 // NAV-4: an expired shared link gets its own way home.
                 onHomeClick = onHomeClick,
                 // Session 120: the deadline card offered this and the handoff
@@ -683,7 +695,7 @@ private fun PlayerScreenContent(
                 onRetry = { vm.retryCurrentCandidates() },
                 onExternal = { vm.openWithExternalPlayer() },
                 onDismiss = { vm.dismissDeadlineGiveUp() },
-                onBackToDetails = onBackClick,
+                onBackToDetails = backToDetails,
                 onHomeClick = onHomeClick,
                 onTryAnother = if (state.canTryAnotherPrint) {
                     { vm.tryNextPrint() }
@@ -2642,6 +2654,15 @@ private fun StartNoticeCard(
     }
 }
 
+/**
+ * How tall the give-up card's action stack may grow before it scrolls.
+ * Four and a half 48dp actions: on a ~360dp landscape screen the icon,
+ * title and text above the stack leave about this much room, so the
+ * fifth action ("Keep waiting") stays one scroll away instead of off
+ * the bottom edge. See the confirmButton note in [GiveUpCard].
+ */
+private val GiveUpActionsMaxHeight = 216.dp
+
 @Composable
 private fun GiveUpCard(
     message: String,
@@ -2727,8 +2748,22 @@ private fun GiveUpCard(
         // fully visible and tappable no matter which subset is offered.
         // The dismiss slot stays empty: "Back to details" and "Close" are
         // actions in the same stack, not a second row fighting for width.
+        // Samsung RTL retest (Issue 7): the player forces landscape, so
+        // this dialog is short — up to six full-width 48dp actions plus
+        // icon, title and two text blocks can exceed a ~360dp landscape
+        // screen, and the lower actions ("Back to details", "Keep
+        // waiting") fall off the bottom edge, where a tap hits the scrim
+        // and — dismissOnClickOutside is false — does nothing at all.
+        // The stack scrolls inside a cap, so every action stays reachable
+        // on a short screen; on a tall one the cap never binds and the
+        // list shows whole, exactly as before.
         confirmButton = {
-            Column(Modifier.fillMaxWidth()) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = GiveUpActionsMaxHeight)
+                    .verticalScroll(rememberScrollState()),
+            ) {
                 // Session 121 (P-33): five green buttons shout at once, so the two
                 // recoveries that end the failure (retry the same print, or leave
                 // for the title) stay green and the two alternates read as
