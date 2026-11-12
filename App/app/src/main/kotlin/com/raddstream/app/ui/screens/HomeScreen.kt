@@ -32,7 +32,6 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
@@ -105,7 +104,7 @@ private const val HERO_LIMIT = 6
 @Composable
 fun HomeScreen(
     onSearchClick: () -> Unit,
-    /** The omnibox's submit: a query goes straight to Search with it applied. */
+    /** The search bar's submit: a query goes straight to Search with it applied. */
     onSearchQuery: (String) -> Unit = { onSearchClick() },
     /** False when the operator's `feature_flags.search` is off: the entry point disappears. */
     searchEnabled: Boolean = true,
@@ -200,10 +199,13 @@ fun HomeScreen(
                 LinearProgressIndicator(Modifier.fillMaxWidth())
             }
 
-            // Search first: a REAL omnibox (audit #17) — the viewer types here,
-            // and Enter opens Search with the query applied. The top-bar icon
-            // stays as the empty-search door, and the bar hides with the
-            // operator's search flag, exactly like the icon does.
+            // Search first: a plain movie-search bar (audit #17, reworked
+            // 2026-11-12: the browser identity is dropped — this searches the
+            // catalog only, it takes no address and opens no web page). The
+            // viewer types here, and Enter opens Search with the query
+            // applied. The top-bar icon stays as the empty-search door, and
+            // the bar hides with the operator's search flag, exactly like
+            // the icon does.
             if (searchEnabled) {
                 var homeQuery by remember { mutableStateOf("") }
                 SearchField(
@@ -211,7 +213,7 @@ fun HomeScreen(
                     onQueryChanged = { homeQuery = it },
                     onSubmit = { onSearchQuery(homeQuery) },
                     modifier = Modifier.padding(horizontal = 16.dp),
-                    label = "Search titles, actors, or paste a link",
+                    label = "Search movies and shows",
                 )
                 Spacer(Modifier.height(12.dp))
             }
@@ -260,11 +262,12 @@ fun HomeScreen(
                 Spacer(Modifier.height(12.dp))
             }
 
-            // The browser identity, on Home where it can be seen: three doors
-            // that already exist. Nothing here promises general web browsing.
+            // Your library, on Home where it can be seen: the two doors
+            // that already exist — the phone's own videos, and kept
+            // downloads. This is a streaming app, not a browser: there is
+            // no paste-a-link door here any more.
             if (searchEnabled) {
-                BrowserStrip(
-                    onPlayVideoLink = onSearchClick,
+                LibraryStrip(
                     onOpenLocalFiles = onOpenLocalFiles,
                     onOpenDownloads = onOpenDownloads,
                 )
@@ -900,14 +903,11 @@ private fun DailyCheckInCard(
 }
 
 /**
- * The media-browser strip: three doors that already exist — paste a direct
- * video link in Search, the phone's own videos, and kept downloads. The link
- * door plays direct video links only, and says so on the Search screen that
- * opens it; nothing here promises general web browsing.
+ * Your library: the phone's own videos, and kept downloads. Two doors, both
+ * inside the app — no pasted-link door, no web browsing.
  */
 @Composable
-internal fun BrowserStrip(
-    onPlayVideoLink: () -> Unit,
+internal fun LibraryStrip(
     onOpenLocalFiles: () -> Unit,
     onOpenDownloads: () -> Unit,
 ) {
@@ -919,19 +919,13 @@ internal fun BrowserStrip(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            BrowserTile(
-                label = "Paste a video link",
-                icon = Icons.Default.Link,
-                onClick = onPlayVideoLink,
-                modifier = Modifier.weight(1f),
-            )
-            BrowserTile(
+            LibraryTile(
                 label = "On this phone",
                 icon = Icons.Default.Folder,
                 onClick = onOpenLocalFiles,
                 modifier = Modifier.weight(1f),
             )
-            BrowserTile(
+            LibraryTile(
                 label = "Downloads",
                 icon = Icons.Default.Download,
                 onClick = onOpenDownloads,
@@ -942,7 +936,7 @@ internal fun BrowserStrip(
 }
 
 @Composable
-private fun BrowserTile(
+private fun LibraryTile(
     label: String,
     icon: ImageVector,
     onClick: () -> Unit,

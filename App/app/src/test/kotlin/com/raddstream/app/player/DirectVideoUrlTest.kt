@@ -97,8 +97,8 @@ class DirectVideoUrlTest {
     @Test
     fun pageUrlWithoutAVideoExtensionIsAPageLink() {
         // Session 122: a page address is no longer "not a URL" — the
-        // omnibox offers it to the system browser instead of searching it
-        // as a title.
+        // search screen tells the viewer web links don't play instead of
+        // searching it as a title (and never offers a browser for it).
         val first = classifyPastedText("https://example.com/watch/movie/123")
         assertTrue(first is PastedText.PageLink)
         assertEquals(

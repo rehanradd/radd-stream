@@ -98,6 +98,21 @@ class ApiProviderTest {
     }
 
     @Test
+    fun `in-app downloads fetch through the download endpoint, never the play redirector`() {
+        // 2026-11-12 rework: the device download URL is /api/v1/download,
+        // not /api/v1/stream — same 302 semantics, but the download leg
+        // answers the download contract (and the play leg stays play-only).
+        assertEquals(
+            "https://raddstream.duckdns.org/api/v1/download?id=tok1",
+            downloadRedirectUrl("https://raddstream.duckdns.org/", "tok1"),
+        )
+        assertEquals(
+            "https://raddstream.duckdns.org/api/v1/download?id=a%2Bb%3D",
+            downloadRedirectUrl("https://raddstream.duckdns.org", "a+b="),
+        )
+    }
+
+    @Test
     fun `a vip pass appends to a redirector url and nothing without one`() {
         val url = streamRedirectUrl("http://92.4.95.252", "tok1")
         assertEquals(

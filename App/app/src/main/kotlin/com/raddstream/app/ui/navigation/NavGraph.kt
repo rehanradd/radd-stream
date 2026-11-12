@@ -369,7 +369,7 @@ fun RaddStreamNavGraph(
             composable(Screen.Home.route) {
                 HomeScreen(
                     onSearchClick = { navController.navigate(Screen.Search.PLAIN_ROUTE) },
-                    // Audit #17: the omnibox's submit carries the typed query
+                    // Audit #17: the search bar's submit carries the typed query
                     // into Search, so the viewer never retypes it there.
                     onSearchQuery = { query ->
                         navController.navigate(Screen.Search.createRoute(query))

@@ -1046,7 +1046,7 @@ private fun ExpandableSynopsis(text: String) {
  * The cast row: one tappable chip per actor, in the order the catalog
  * lists them. Six chips, then a plain count of the rest: the row is a
  * doorway to the actor's titles, not a full cast list, and there is no
- * cast screen to open. A tap searches the actor in the omnibox, which
+ * cast screen to open. A tap searches the actor in the search bar, which
  * matches `cast_names` server-side.
  */
 @OptIn(ExperimentalLayoutApi::class)

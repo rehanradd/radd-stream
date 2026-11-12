@@ -115,6 +115,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import retrofit2.HttpException
 
 /**
@@ -786,7 +787,10 @@ class PlayerViewModel @Inject constructor(
             // position may have moved on another device since this handle was opened,
             // and the old code returned without ever asking. The seed only writes
             // when the fresh row is strictly later (see ResumeSeed.newerSeed).
-            seedResumeFromStoredPositions(streamId, startOverrideMs)
+            // A hung resume lookup must never hold back Play: the seed is a
+            // nicety, and five seconds without an answer means playing from
+            // the start instead of waiting on a row.
+            withTimeoutOrNull(5_000) { seedResumeFromStoredPositions(streamId, startOverrideMs) }
             if (_ui.value.bundle?.renditions?.firstOrNull()?.playback?.streamId == streamId) return@launch
             // A pasted direct link, staged under its opaque key by the search
             // screen: no redirector, no server round-trip, no resume history —

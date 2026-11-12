@@ -46,7 +46,7 @@ import java.util.concurrent.TimeUnit
  * `DownloadManager` because the platform's public API has no pause/resume (only remove),
  * while the requirement is an honest pause that keeps its bytes.
  *
- * Every request goes to our own `/api/v1/stream?id=<handle>` redirector; OkHttp follows the
+ * Every request goes to our own `/api/v1/download?id=<handle>` endpoint; OkHttp follows the
  * 302, so the upstream location never reaches this process. Bytes land in
  * `Movies/RaddStream/` — through MediaStore on Android 10+, through the public directory on
  * older devices. The notification carries real progress and Pause / Resume / Cancel.

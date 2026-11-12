@@ -124,6 +124,15 @@ class StartDeadlineTest {
     }
 
     @Test
+    fun `the stall watchdog fires before the thirty second give-up`() {
+        // 2026-11-12 rework, audit #1: a load that never errors and never
+        // renders fails over on its own at eight seconds — the automatic
+        // failover — while the thirty-second card stays the last resort.
+        assertTrue(StartDeadline.START_WATCHDOG_MS < StartDeadline.GIVE_UP_AFTER_MS)
+        assertEquals(StartDeadlineStage.ACTIONS, StartDeadline.stage(StartDeadline.START_WATCHDOG_MS, firstFrame = false))
+    }
+
+    @Test
     fun `the print sheet timing reads as seconds with one decimal`() {
         assertEquals("1.4 s", StartDeadline.formatSeconds(1_400))
         assertEquals("0.0 s", StartDeadline.formatSeconds(0))

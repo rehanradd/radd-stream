@@ -33,6 +33,7 @@ import com.raddstream.app.data.Telemetry
 import com.raddstream.app.player.subtitles.OffsetSubtitleDecoderFactory
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
@@ -73,6 +74,15 @@ class PlaybackService : MediaSessionService() {
     private val store: PlayerSessionStore = PlayerSessionStore.Instance
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var failover: FailoverStateMachine? = null
+
+    /**
+     * The stall watchdog (2026-11-12 rework, audit #1): one job per load,
+     * armed by [loadRenditionOf], disarmed by the first frame. The
+     * generation stops a stale watchdog from failing a load that already
+     * replaced it.
+     */
+    private var watchdogJob: Job? = null
+    private var watchdogGeneration = 0
 
     /** Resume target for the rendition currently being loaded (seek once READY). */
     private var pendingResumeMs: Long? = null
@@ -207,6 +217,7 @@ class PlaybackService : MediaSessionService() {
             // NAV-4: a stale bundle is an expired shared link, not a dead print — the
             // card says the link expired and offers Home, so the viewer fetches a fresh
             // link instead of tapping "try another print" at a rotted handle.
+            disarmStartWatchdog()
             store.markGaveUp(
                 "Play bundle expired — fetch a fresh link",
                 HandoffWhy.EXPIRED_LINK,
@@ -226,6 +237,7 @@ class PlaybackService : MediaSessionService() {
             // provider-page screen for it before playback is launched — so these two exits are
             // the whole answer here, and there is no in-player escape hatch to fall back to.
             val keepOnly = machine.keepOnlyFallback()
+            disarmStartWatchdog()
             store.markGaveUp(
                 if (keepOnly != null) {
                     "$NOT_PLAYABLE_HERE — this rank can only be kept on the device"
@@ -361,6 +373,7 @@ class PlaybackService : MediaSessionService() {
         rendition: PlaybackRendition?,
         countAsAttempt: Boolean = true,
     ) {
+        disarmStartWatchdog()
         val exo = player ?: return
         rendition ?: return
         if (rendition.playback.isExpired(System.currentTimeMillis())) {
@@ -395,6 +408,41 @@ class PlaybackService : MediaSessionService() {
         // from disk is not: its address is our loopback proxy, which names no handle of the
         // redirector's, so the ask falls through to nothing.
         seedPreviewFor(rendition)
+        // The stall watchdog: a load that never errors and never renders
+        // must fail over on its own at eight seconds, not sit on the
+        // "Warming the link" notice until the thirty-second card.
+        armStartWatchdog(bundle, rendition)
+    }
+
+    /**
+     * The stall watchdog (2026-11-12 rework, audit #1): a load that never
+     * errors and never renders — a hung resolve, a stalled CDN, a playlist
+     * that never arrives — used to sit on the "Warming the link" notice
+     * until the thirty-second card, and nothing ever advanced it. After
+     * [StartDeadline.START_WATCHDOG_MS] with no first frame, the attempt
+     * is failed over exactly as a player error would be: retry the same
+     * rung once, then a silent hop, then the next rank, then the honest
+     * give-up. A first frame disarms it; a new load re-arms it.
+     */
+    private fun armStartWatchdog(bundle: PlaybackBundle, rendition: PlaybackRendition) {
+        watchdogJob?.cancel()
+        val generation = ++watchdogGeneration
+        watchdogJob = scope.launch {
+            delay(StartDeadline.START_WATCHDOG_MS)
+            if (generation != watchdogGeneration) return@launch
+            val exo = player ?: return@launch
+            if (StartDeadline.hasFirstFrame(exo.playbackState)) return@launch
+            val machine = failover ?: return@launch
+            val decision = machine.onFailure(
+                "start timed out after ${StartDeadline.START_WATCHDOG_MS / 1_000} s with no first frame",
+            )
+            applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
+        }
+    }
+
+    private fun disarmStartWatchdog() {
+        watchdogJob?.cancel()
+        watchdogJob = null
     }
 
     private fun applyDecision(
@@ -683,6 +731,10 @@ class PlaybackService : MediaSessionService() {
         override fun onPlaybackStateChanged(playbackState: Int) {
             when (playbackState) {
                 Player.STATE_READY -> {
+                    // A first frame disarms the stall watchdog: the load
+                    // landed, and a later rebuffer is the buffering spinner's
+                    // job, not a failed start.
+                    disarmStartWatchdog()
                     pendingResumeMs?.let { pos ->
                         player?.seekTo(pos)
                         pendingResumeMs = null

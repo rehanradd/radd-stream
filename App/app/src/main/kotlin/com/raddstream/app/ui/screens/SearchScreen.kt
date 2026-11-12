@@ -1,7 +1,5 @@
 package com.raddstream.app.ui.screens
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,7 +28,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -60,7 +57,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -226,21 +222,27 @@ fun SearchScreen(
                     Spacer(Modifier.height(8.dp))
                 }
                 is PastedText.PageLink -> {
-                    PageLinkRow(url = pasted.url)
+                    // A web page is not a title and not a video: this app
+                    // plays catalog titles and direct video files, it opens
+                    // no web page and hands nothing to a browser. Say so
+                    // plainly instead of offering an Open button.
+                    Text(
+                        text = "Web links don't play in Radd. Search the catalog for the title instead.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    )
                     Spacer(Modifier.height(8.dp))
                 }
                 PastedText.NotAUrl -> {
-                    // The Home tile says "Paste a video link", but nothing on
-                    // this screen said a link could be pasted here — the field
-                    // only reacts once a URL is typed. One honest line: a
-                    // direct .mp4 or .m3u8 link plays in the app, any other
-                    // web link opens in the browser. It stays up while the
-                    // field holds a half-typed address, not only while it is
-                    // empty — a hint that vanishes the moment typing starts
-                    // teaches nothing.
+                    // A direct .mp4 or .m3u8 link plays in the app — the
+                    // field only reacts once a URL is typed. One honest
+                    // line, while the field holds a half-typed address, not
+                    // only while it is empty — a hint that vanishes the
+                    // moment typing starts teaches nothing.
                     if (state.query.isEmpty() || looksLikeUrlPrefix(state.query)) {
                         Text(
-                            text = "You can also paste a direct video link (.mp4 or .m3u8) here to play it — or any web link to open it in your browser.",
+                            text = "You can also paste a direct video link (.mp4 or .m3u8) here to play it.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -320,7 +322,7 @@ fun SearchScreen(
 }
 
 /**
- * The omnibox field, extracted so its hint behaviour is unit-testable
+ * The search field, extracted so its hint behaviour is unit-testable
  * (see SearchFieldHintTest): a filled rounded pill whose prompt is a
  * PLACEHOLDER only. A label with the same text used to float above the
  * typed text (audit #33) — the placeholder vanishes the moment the first
@@ -334,8 +336,8 @@ internal fun SearchField(
     onQueryChanged: (String) -> Unit,
     onSubmit: () -> Unit,
     modifier: Modifier = Modifier,
-    // Audit #17: the Home omnibox spells out what it takes — titles,
-    // actors, or a pasted link — while Search keeps the shorter hint.
+    // Audit #17: the Home search bar names what it takes — titles and
+    // shows — while Search keeps the shorter hint.
     label: String = "Search movies and shows",
 ) {
     TextField(
@@ -401,65 +403,6 @@ private fun DirectVideoRow(url: String, title: String, onPlay: () -> Unit) {
         }
         Button(onClick = onPlay) {
             Text("Play")
-        }
-    }
-}
-
-/**
- * One pasted page address: what it is, the address itself, and the one
- * honest action — open it in the system browser. The app never renders the
- * page: that is the browser's job, and this row is the handoff to it. When
- * no browser on the device can take the link, the row says so instead of
- * failing silently.
- */
-@Composable
-private fun PageLinkRow(url: String) {
-    val context = LocalContext.current
-    var openFailed by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Icon(
-                Icons.Default.OpenInNew,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Column(Modifier.weight(1f)) {
-                Text(
-                    text = "This looks like a web page",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                Text(
-                    text = url,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Button(onClick = {
-                openFailed = try {
-                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
-                    false
-                } catch (_: Exception) {
-                    true
-                }
-            }) {
-                Text("Open")
-            }
-        }
-        if (openFailed) {
-            Text(
-                text = "No browser on this device could open the link.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
-            )
         }
     }
 }

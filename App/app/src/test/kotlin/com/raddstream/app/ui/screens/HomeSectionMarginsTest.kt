@@ -27,10 +27,10 @@ class HomeSectionMarginsTest {
     val compose = createComposeRule()
 
     @Test
-    fun browserStripHeadingHasThePhoneMargin() {
+    fun libraryStripHeadingHasThePhoneMargin() {
         compose.setContent {
             RaddStreamTheme {
-                BrowserStrip(onPlayVideoLink = {}, onOpenLocalFiles = {}, onOpenDownloads = {})
+                LibraryStrip(onOpenLocalFiles = {}, onOpenDownloads = {})
             }
         }
         compose.onNodeWithText("Your library").assertLeftPositionInRootIsEqualTo(16.dp)

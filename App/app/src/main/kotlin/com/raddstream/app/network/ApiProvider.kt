@@ -151,6 +151,22 @@ fun streamRedirectUrl(baseUrl: String, streamId: String): String {
 }
 
 /**
+ * Our own download address for an opaque stream handle: `<server>/api/v1/download?id=<handle>`.
+ * The in-app device-download path fetches through this, never through the
+ * play redirector and never through a browser: the server answers it with
+ * a 302 to the file, exactly like `/api/v1/stream`, and the download
+ * client follows it with Range resume. (The HLS keep engine still fetches
+ * its playlist through the play redirector — a segmented keep, not a file
+ * download.) The `via=web` form (ShrinkMe interstitial) is a different
+ * route — a separate external-browser flow — and is never built here.
+ */
+fun downloadRedirectUrl(baseUrl: String, streamId: String): String {
+    val origin = baseUrl.trim().run { if (endsWith("/")) dropLast(1) else this }
+    val handle = URLEncoder.encode(streamId.trim(), StandardCharsets.UTF_8.name())
+    return "$origin/api/v1/download?id=$handle"
+}
+
+/**
  * Appends a signed VIP pass to one of our own redirector/download URLs
  * (Session 123): `…?vip=<pass>`. A null or blank pass leaves the URL
  * untouched, so guests and free accounts send exactly what they sent

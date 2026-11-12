@@ -10,7 +10,7 @@ import androidx.core.content.ContextCompat
 import com.google.gson.Gson
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.buildRaddGson
-import com.raddstream.app.network.streamRedirectUrl
+import com.raddstream.app.network.downloadRedirectUrl
 import com.raddstream.app.network.withVipPass
 import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -210,10 +210,13 @@ class DeviceDownloadsRepository @Inject constructor(
             id = UUID.randomUUID().toString(),
             handle = handle,
             url = withVipPass(
-                streamRedirectUrl(baseUrl, handle),
-                // Session 123: the device download follows the same
-                // redirector the player uses, so the same pass rides it — a
-                // VIP download of a premium print saves instead of 402ing.
+                // 2026-11-12 rework: in-app downloads fetch through our own
+                // `/api/v1/download` endpoint, not the play redirector and
+                // never a browser — the server 302s to the file and the
+                // download service follows it with Range resume.
+                downloadRedirectUrl(baseUrl, handle),
+                // Session 123: the same VIP pass rides the download URL, so
+                // a VIP download of a premium print saves instead of 402ing.
                 syncAccountRepository.currentVipPass(),
             ),
             title = cleanTitle,
