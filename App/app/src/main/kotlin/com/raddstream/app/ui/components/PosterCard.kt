@@ -118,12 +118,18 @@ fun PosterCard(
                     onClick != null && onLongClick != null ->
                         Modifier.combinedClickable(
                             interactionSource = pressSource,
+                            // 1.7.0 has no interactionSource-only overload:
+                            // the indication is required, and null is right
+                            // here — pressScale is the tile's feedback now,
+                            // not the Material ripple.
+                            indication = null,
                             onClick = onClick,
                             onLongClick = onLongClick,
                         )
                     onClick != null ->
                         Modifier.combinedClickable(
                             interactionSource = pressSource,
+                            indication = null,
                             onClick = onClick,
                         )
                     else -> Modifier
