@@ -4307,6 +4307,40 @@ def _works_sort_groups(groups, sort_key: str):
     return sorted(groups, key=lambda g: -int(g["work_id"]))
 
 
+#: Cap on the detail group scan's trigram candidate set: under
+#: SQLite's 999-variable cap with room for the query's other params.
+#: A set that hits the cap falls back to the full LIKE scan.
+_WORKS_GROUP_TRIGRAM_LIMIT = 900
+
+
+def _works_title_candidate_ids(conn, token: str) -> list[int] | None:
+    """Post ids sharing a 3-gram with `token`, or None to scan instead.
+
+    The detail group scan's candidate pass (the fuzzy path's cure for
+    the same cost class): the trigram index (`fts_posts_tri`) names
+    every row sharing at least one of the token's 3-grams, best first.
+    A row whose clean_title contains the token contains every gram,
+    so the candidate set is a superset of the LIKE matches — unless
+    it was truncated at the limit, in which case None says "scan the
+    whole table instead" rather than risk dropping a member. None
+    also when the index cannot answer (absent/empty on a pre-migration
+    database): the LIKE scan is the exact fallback. An empty list is
+    a real answer: no row shares a gram, so no row can contain the
+    token. The limit stays under SQLite's 999-variable cap with room
+    for the query's other params.
+    """
+    import search_fuzzy
+    grams = search_fuzzy.candidate_grams(token)
+    if not grams:
+        return None
+    ids = fts_posts.trigram_candidate_ids(
+        conn, fts_posts.trigram_match(grams),
+        _WORKS_GROUP_TRIGRAM_LIMIT)
+    if ids is None or len(ids) >= _WORKS_GROUP_TRIGRAM_LIMIT:
+        return None
+    return ids
+
+
 def _works_search_candidate_ids(conn, query: str) -> list[int]:
     """The post ids a works search query names, before grouping.
 
@@ -4628,6 +4662,27 @@ def api_v1_get_work_detail(work_id, full: bool = False,
                 like_params.extend([year - 1, year + 1])
         imdb_id = (seed["imdb_id"] or "").strip()
         tmdb_id = seed["tmdb_id"]
+        # The trigram candidate pass: the LIKE branch only runs over
+        # rows sharing a 3-gram with the token (the fuzzy path's cure
+        # for the same scan), so the group scan stops walking all
+        # 224k posts. The imdb/tmdb branches are indexed equalities
+        # and stay unrestricted. A None candidate set (no index, or
+        # truncated) keeps the exact full scan — never a dropped
+        # member for speed.
+        like_ids = _works_title_candidate_ids(conn, token) if token else None
+        if like_ids is not None:
+            if like_ids:
+                like_sql = (f"p.id IN ({', '.join('?' for _ in like_ids)})"
+                            f" AND ({like_sql})")
+                like_params = [int(pid) for pid in like_ids] + like_params
+            else:
+                # No row shares a gram with the token, so no row can
+                # contain it: the LIKE branch matches nothing. (Not
+                # reachable from a real seed — the seed's own title
+                # contains the token — but `IN ()` is a syntax error,
+                # so say so explicitly rather than building one.)
+                like_sql = "1 = 0"
+                like_params = []
         rows = conn.execute(
             "SELECT " + _WORKS_GROUP_COLS + " FROM posts p WHERE"
             " ((p.imdb_id = ? AND p.imdb_id <> '')"
@@ -4987,6 +5042,34 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
         return result
 
 
+_SOURCE_SERVICE_RANK = {"pixeldrain": 1, "vegadrive": 2, "hubcloud_10g": 3,
+                        "fsl_r2": 4, "fastdl": 5, "google_cdn": 6}
+
+
+def _source_ladder_key(s):
+    """The evidence ladder as a sort key — the same order the per-release
+    query's ORDER BY used to give, now applied in Python over one
+    batched fetch: a probe-confirmed live copy (0), then an unprobed
+    claim (1), then expired (2), then dead last (3); then
+    non-temporary before temporary (SQL ASC puts NULL first); then the
+    server preference. Stable sort over id-ordered input keeps ties in
+    the order the old query returned them.
+    """
+    status = s["status"]
+    if status in ("dead", "broken", "gone", "quarantined"):
+        rank = 3
+    elif status == "expired":
+        rank = 2
+    elif (status == "active" and s["last_checked_at"] is not None
+          and s["http_status"] is not None and s["http_status"] != 0):
+        rank = 0
+    else:
+        rank = 1
+    temp = s["is_temporary"]
+    return (rank, (temp is not None, temp or 0),
+            _SOURCE_SERVICE_RANK.get(s["service"], 99))
+
+
 def _fetch_releases_with_sources(conn, post_ids, full: bool = False,
                                  base_url: str = ""):
     """The releases of one or more posts, with their sources, in the
@@ -4996,7 +5079,10 @@ def _fetch_releases_with_sources(conn, post_ids, full: bool = False,
     copy, then an unprobed claim, then expired, then dead last — and
     the projection is the same (`release` view + `link_view`), so a
     work's print is indistinguishable from its post's print. Returns
-    (release_rows, rel_list), ordered by post id, then release id."""
+    (release_rows, rel_list), ordered by post id, then release id. The
+    sources come in one query for all releases (the old code asked
+    once per release — 109 queries for a 109-release work) and are
+    grouped and ladder-sorted in Python."""
     ids = [int(pid) for pid in post_ids]
     if not ids:
         return [], []
@@ -5004,31 +5090,19 @@ def _fetch_releases_with_sources(conn, post_ids, full: bool = False,
         "SELECT * FROM releases WHERE post_id IN ("
         + ", ".join("?" for _ in ids) + ") ORDER BY post_id ASC, id ASC",
         ids).fetchall()
+    rel_ids = [int(rel["id"]) for rel in releases]
+    sources_by_rel: dict[int, list] = {rid: [] for rid in rel_ids}
+    if rel_ids:
+        for s in conn.execute(
+                "SELECT * FROM download_sources WHERE release_id IN ("
+                + ", ".join("?" for _ in rel_ids)
+                + ") ORDER BY release_id ASC, id ASC",
+                rel_ids).fetchall():
+            sources_by_rel[int(s["release_id"])].append(s)
     rel_list = []
     for rel in releases:
-        sources = conn.execute("""
-            SELECT * FROM download_sources
-            WHERE release_id = ?
-            ORDER BY
-                CASE
-                    WHEN status IN ('dead', 'broken', 'gone', 'quarantined') THEN 3
-                    WHEN status = 'expired' THEN 2
-                    WHEN status = 'active'
-                         AND last_checked_at IS NOT NULL
-                         AND http_status IS NOT NULL AND http_status <> 0 THEN 0
-                    ELSE 1
-                END ASC,
-                is_temporary ASC,
-                CASE service
-                    WHEN 'pixeldrain' THEN 1
-                    WHEN 'vegadrive' THEN 2
-                    WHEN 'hubcloud_10g' THEN 3
-                    WHEN 'fsl_r2' THEN 4
-                    WHEN 'fastdl' THEN 5
-                    WHEN 'google_cdn' THEN 6
-                    ELSE 99
-                END ASC
-        """, (rel["id"],)).fetchall()
+        sources = sorted(sources_by_rel[int(rel["id"])],
+                         key=_source_ladder_key)
         # The ordering above is our own preference between servers; it is a
         # query, not a field. Nothing that names a hoster leaves this box.
         # The first key is audit critical 10's evidence ladder — a probe-
@@ -5114,7 +5188,7 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
         return p_dict
 
 
-def _verify_tier_link(link, conn):
+def _verify_tier_link(link, conn, *, live: bool = True):
     """Verify one ladder candidate; the default `_option_groups` verifier.
 
     Cached-first (research fold-in §1): the ledger row's own measured
@@ -5125,6 +5199,15 @@ def _verify_tier_link(link, conn):
     ``{verified, reason, verified_at, source_id, evidence}``; failure
     evidence is returned, NOT written — `_verify_option_tiers` applies
     the poison-cache guard first and records afterwards.
+
+    `live=False` is the detail fast path: cached verdicts only, never
+    a network probe. A candidate with no cached verdict answers
+    ``unchecked`` (keepable — its band stays, the press re-verifies
+    live), and one whose ledger row is already dead answers ``dead``
+    (a band of nothing but dead links is hidden). The live pass is
+    the detail routes' `_preresolve_for_detail` warm (background
+    threads, banks via `_resolve_and_bank`) and the press-time
+    re-verify — never this call.
     """
     import serve_verify
     try:
@@ -5149,11 +5232,24 @@ def _verify_tier_link(link, conn):
                 stamp = serve_verify._epoch_of(cached["last_checked_at"])
                 return {"verified": True, "reason": "cached",
                         "verified_at": stamp, "source_id": source_id}
+            if not live and str(row[0] or "").lower() in serve_verify.DEAD_STATES:
+                return {"verified": False, "reason": "dead",
+                        "source_id": source_id}
     result = serve_verify.verify_candidate(
         source_id, resolver=_resolve_coalesced, conn=conn,
-        record_evidence=False)
+        record_evidence=False, live=live)
     result["source_id"] = source_id
     return result
+
+
+def _verify_tier_link_cached(link, conn):
+    """The detail fast path's verifier: cached verdicts only, no network.
+
+    `_option_groups` answers from this synchronously; the live pass
+    (`_verify_tier_link`, live=True) runs at press time and in the
+    detail routes' `_preresolve_for_detail` warm.
+    """
+    return _verify_tier_link(link, conn, live=False)
 
 
 def _source_host(conn, stream_id: str) -> str:
@@ -5185,7 +5281,8 @@ def _source_host(conn, stream_id: str) -> str:
 
 def _verify_option_tiers(tier_rows, *, timeout: float = 10.0,
                          verifier=None, conn=None, host_of=None):
-    """Verify every tier's candidates; hide bands with no verified link.
+    """Verify every tier's candidates; hide bands with no verified link
+    and no unchecked candidate.
 
     All candidates (top 3 per band, across all bands) probe concurrently
     under one `timeout` deadline — the wait is ~one probe, not the sum.
@@ -5198,7 +5295,13 @@ def _verify_option_tiers(tier_rows, *, timeout: float = 10.0,
     unchanged and nothing is recorded. Otherwise failure evidence is
     recorded for every failed candidate, the first verified candidate
     wins its band (stamped `verified_at`), verified runners-up stay as
-    backups, and a band with no verified candidate is dropped.
+    backups, and a band with no verified candidate is dropped — unless
+    a candidate in it is merely ``unchecked`` (no cached verdict either
+    way, e.g. the detail fast path's cached-only pass): an unchecked
+    candidate keeps its band, because it is not known dead, only never
+    checked, and the press re-verifies it live before serving bytes.
+    A band whose candidates are all hard-failed (or timed out with no
+    answer at all) is still hidden.
     """
     import concurrent.futures
     import serve_verify
@@ -5279,15 +5382,23 @@ def _verify_option_tiers(tier_rows, *, timeout: float = 10.0,
     kept = []
     for tier_index, tier in enumerate(tier_rows):
         verified = []
+        unchecked = []
         for rank, link in enumerate(by_tier[tier_index]):
             result = results.get((tier_index, rank))
             if result and result.get("verified"):
                 link["verified_at"] = result.get("verified_at") or time.time()
                 verified.append(link)
-        if not verified:
+            elif result and str(result.get("reason") or "") == "unchecked":
+                # No cached verdict either way — not known dead, only
+                # never checked. It keeps its band; a verified candidate
+                # still wins the band outright, and the press re-verifies
+                # an unchecked winner live before serving bytes.
+                unchecked.append(link)
+        ordered = verified + unchecked
+        if not ordered:
             continue
-        tier["link"] = verified[0]
-        tier["backups"] = verified[1:1 + tiers.BACKUP_LIMIT]
+        tier["link"] = ordered[0]
+        tier["backups"] = ordered[1:1 + tiers.BACKUP_LIMIT]
         kept.append(tier)
     return kept, False
 
@@ -5299,26 +5410,36 @@ def _option_groups(releases, rel_list, *, vip: bool = False,
     """One best and fastest copy per quality band, for the player and the card.
 
     `verify` is the Player Fix v2 serve-time rule (diagnosis §6.2 as refined
-    by the research fold-in): a band is served only when a link in it is
-    verified playable. The check is cached-first — a fresh banked resolution
-    or a measured-active verdict inside the hot TTL serves immediately —
-    and a live probe runs, in parallel with a bounded wait, only when the
-    band has no cached verdict at all (never-checked). The first verified
-    candidate wins its band — ordered by measured host priority first
-    (best/most-active hosts first, weak hosts last; user-ordered host
-    ranking, seeded from a link check) — and a band with no verified
-    candidate is hidden entirely (no row, no Play, no Download). The
-    served link carries a `verified_at` stamp. Gated tiers are verified
-    the same way — a VIP press gets a working link too — and an unverified
-    gated tier is hidden rather than served dead. `verify` defaults off:
-    direct callers (tests, offline builders) keep the unverified ladder;
-    the HTTP detail routes pass True.
+    by the research fold-in), split for speed: the response answers from
+    cached verdicts only — a fresh banked resolution or a measured-active
+    verdict inside the hot TTL stamps the winner `verified_at` at once —
+    and never waits on a live probe, so a cold title opens in under a
+    second instead of paying the whole 10 s verify batch. Warming is the
+    detail routes' `_preresolve_for_detail`: after the response is built
+    it resolves each band's winner in a background thread and banks the
+    success, so the next open / Play press finds it warm. (A separate
+    background batch used to run here too; it was removed — it verified
+    every candidate including backups, banked nothing, and left the
+    cache exactly as it found it, while burning a 10 s thread per detail
+    call on a 1-vCPU box.) The first verified candidate wins its band —
+    ordered by measured host priority first (best/most-active hosts first,
+    weak hosts last; user-ordered host ranking, seeded from a link check) —
+    and a band with no verified candidate is hidden only when every
+    candidate in it is known-dead from cache; an unchecked candidate
+    keeps its band, because it is not known dead, only never checked.
+    The served link carries a `verified_at` stamp when one exists.
+    Gated tiers are verified the same way — a VIP press gets a working
+    link too — and an unverified gated tier is hidden rather than served
+    dead. The rule that only verified links play is enforced where bytes
+    are served: `/api/v1/stream` re-verifies live at press time and
+    refuses a dead or stale link. `verify` defaults off: direct callers
+    (tests, offline builders) keep the unverified ladder; the HTTP
+    detail routes pass True.
 
-    The verification never lets a detail call hang: all candidates across
-    all bands probe concurrently under one `verify_timeout` deadline, and
-    a poisoned batch (over half the candidates with no answer at all —
-    our network is down, not the internet) leaves the ladder untouched
-    and records nothing.
+    The cached pass never lets a detail call hang: it reads the ledger
+    only, and a poisoned batch (over half the candidates with no answer
+    at all — our network is down, not the internet) leaves the ladder
+    untouched and records nothing.
 
     The ledger holds up to six copies of the same print on six servers; a viewer
     wants one row per quality (the owner's "Auto default + visible quality
@@ -5359,16 +5480,21 @@ def _option_groups(releases, rel_list, *, vip: bool = False,
         merged = tiers.merge(ladders)
         if merged["tiers"]:
             if verify:
-                # Player Fix v2 serve-time rule: verify (cached-first,
-                # bounded live probe when never-checked) before the
-                # projection, so the detail response, the ladder and
-                # `auto` all agree on the same verified winner. A
-                # poisoned batch leaves the ladder untouched.
+                # Player Fix v2 serve-time rule, split for speed: the
+                # response answers from cached verdicts only (never a
+                # live probe — a cold title used to wait out the whole
+                # 10 s verify batch before the app saw it), so the
+                # ladder and `auto` agree on the best cached winner.
+                # Warming is the detail routes' `_preresolve_for_detail`
+                # (background threads, banks successes); a band is
+                # hidden only on cached hard evidence, an unchecked
+                # candidate keeps its band, and the press re-verifies
+                # it live before serving bytes.
                 with get_db() as _verify_conn:
                     merged["tiers"], _poisoned = _verify_option_tiers(
                         merged["tiers"], timeout=verify_timeout,
-                        verifier=_verifier, conn=_verify_conn,
-                        host_of=_host_of)
+                        verifier=_verifier or _verify_tier_link_cached,
+                        conn=_verify_conn, host_of=_host_of)
                 if not merged["tiers"]:
                     continue
             for tier in merged["tiers"]:

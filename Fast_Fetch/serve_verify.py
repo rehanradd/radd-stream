@@ -835,7 +835,8 @@ def record_probe_failure(conn, source_id: int, reason: str, *,
 
 def verify_candidate(source_id: int, *, resolver=None, prober=None,
                      conn=None, now: float | None = None,
-                     record_evidence: bool = True) -> dict:
+                     record_evidence: bool = True,
+                     live: bool = True) -> dict:
     """Verify one link (a ``download_sources`` id) is playable right now.
 
     Order: (1) a fresh banked resolution — no network; (2) the host
@@ -847,6 +848,12 @@ def verify_candidate(source_id: int, *, resolver=None, prober=None,
     are returned with their evidence payload but not written — the caller
     (serve-time batch) applies the poison-cache guard first and records
     afterwards.
+
+    ``live=False`` is the detail fast path: steps (1)–(2) are the whole
+    verdict, and a link with neither a fresh banked resolution nor a
+    known-down host answers ``unchecked`` — no network is touched, so
+    the caller never waits on a probe. The live pass runs in the
+    background and banks its verdicts for the next call.
     """
     moment = time.time() if now is None else float(now)
     source_id = int(source_id)
@@ -894,6 +901,12 @@ def verify_candidate(source_id: int, *, resolver=None, prober=None,
         if bridge_host and circuit_open(conn, bridge_host, now=moment):
             result.update({"verified": False, "reason": "host_circuit_open"})
             return result
+    if not live:
+        # Cached-only call (the detail fast path): steps (1)–(2) are
+        # the whole verdict — a fresh banked resolution or a known-down
+        # host — and a link with neither is "unchecked", not failed.
+        # No network is touched, so the caller never waits on a probe.
+        return result
     # 3. Live re-resolve, then probe the final file.
     if resolver is None:
         import viewer as _viewer

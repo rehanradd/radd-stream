@@ -767,6 +767,49 @@ class WorksDetailTests(Fixture):
     def test_non_integer_work_id_is_none(self):
         self.assertIsNone(viewer.api_v1_get_work_detail("abc"))
 
+    def test_trigram_candidates_cover_the_like_matches(self):
+        # The trigram candidate pass is a SUPERSET of the LIKE scan:
+        # every Salaar-titled post shares the token's grams. Other
+        # titles may share a single gram too (the exact LIKE check
+        # still runs in the caller), so this asserts containment, not
+        # equality.
+        import fts_posts
+        fts_posts.rebuild_fts(self.conn)
+        ids = viewer._works_title_candidate_ids(self.conn, "salaar")
+        self.assertIsNotNone(ids)
+        self.assertTrue({self.salaar_a, self.salaar_b,
+                         self.salaar_c, self.salaar_flagged} <= set(ids))
+
+    def test_trigram_candidates_return_none_without_the_index(self):
+        # No fts_posts_tri (pre-migration database): fall back to the
+        # full LIKE scan rather than guessing.
+        self.assertIsNone(
+            viewer._works_title_candidate_ids(self.conn, "salaar"))
+
+    def test_trigram_candidates_empty_when_no_row_shares_a_gram(self):
+        # A real answer, not a fallback: no row shares a gram with a
+        # nonsense token, so the candidate set is empty (the caller
+        # turns that into `1 = 0`, never `IN ()`).
+        import fts_posts
+        fts_posts.rebuild_fts(self.conn)
+        self.assertEqual(
+            viewer._works_title_candidate_ids(self.conn, "zzzqqq"), [])
+
+    def test_detail_group_is_the_same_with_and_without_the_trigram_index(self):
+        # The candidate pass must not change the group: the same three
+        # members, the same release count, before (full LIKE scan) and
+        # after (trigram candidates). The flagged twin stays out both
+        # ways.
+        import fts_posts
+        before = viewer.api_v1_get_work_detail(self.salaar_a)
+        self.assertIsNotNone(before)
+        fts_posts.rebuild_fts(self.conn)
+        after = viewer.api_v1_get_work_detail(self.salaar_a)
+        self.assertIsNotNone(after)
+        self.assertEqual(after["post_ids"], before["post_ids"])
+        self.assertEqual(after["post_count"], before["post_count"])
+        self.assertEqual(after["release_count"], before["release_count"])
+
 
 class WorksHttpTests(Fixture):
     @classmethod

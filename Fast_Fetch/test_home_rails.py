@@ -610,6 +610,23 @@ class DetailWarmTests(Fixture):
         detail = viewer.api_v1_get_post_detail(self.seed_id)
         self.assertNotIn("preresolve", detail)
 
+    def test_verified_detail_returns_without_a_live_resolve(self):
+        # Detail fast path: the response answers from cached verdicts
+        # only, so a cold title opens without paying a live resolve —
+        # the resolver must never be called on the request path, even
+        # with verify=True. The seed's links are unchecked (fixture DB,
+        # no probe evidence), so every band stays and the detail still
+        # answers.
+        with mock.patch.object(
+                viewer, "_resolve_coalesced",
+                side_effect=AssertionError("live resolve on fast path")):
+            detail = viewer.api_v1_get_post_detail(self.seed_id, verify=True)
+        self.assertIsNotNone(detail)
+        self.assertTrue(detail["option_groups"])
+        bands = [t["band"] for g in detail["option_groups"]
+                 for t in g["tiers"]]
+        self.assertEqual(bands, ["720p", "1080p"])
+
     def test_preresolve_thread_calls_the_resolver(self):
         calls = []
         with mock.patch.object(viewer, "_resolve_and_bank",
@@ -626,6 +643,88 @@ class DetailWarmTests(Fixture):
             "VIP",
             viewer._plain_stream_error(
                 "premium_quality_requires_vip")["message"])
+
+
+class FetchReleasesTests(Fixture):
+    """The batched releases fetch keeps the evidence ladder order."""
+
+    def test_ladder_key_orders_verified_before_unprobed_before_dead(self):
+        rows = [
+            {"status": "dead", "http_status": 404,
+             "last_checked_at": "2026-11-13 00:00:00", "is_temporary": 0,
+             "service": "pixeldrain"},
+            {"status": "expired", "http_status": None,
+             "last_checked_at": None, "is_temporary": 0,
+             "service": "pixeldrain"},
+            {"status": "active", "http_status": None,
+             "last_checked_at": None, "is_temporary": 0,
+             "service": "pixeldrain"},
+            {"status": "active", "http_status": 200,
+             "last_checked_at": "2026-11-13 00:00:00", "is_temporary": 0,
+             "service": "pixeldrain"},
+        ]
+        ordered = sorted(rows, key=viewer._source_ladder_key)
+        self.assertEqual([r["status"] for r in ordered],
+                         ["active", "active", "expired", "dead"])
+        self.assertEqual(ordered[0]["http_status"], 200)
+
+    def test_ladder_key_prefers_pixeldrain_and_non_temporary(self):
+        rows = [
+            {"status": "active", "http_status": 200,
+             "last_checked_at": "2026-11-13 00:00:00", "is_temporary": 1,
+             "service": "pixeldrain"},
+            {"status": "active", "http_status": 200,
+             "last_checked_at": "2026-11-13 00:00:00", "is_temporary": 0,
+             "service": "other"},
+            {"status": "active", "http_status": 200,
+             "last_checked_at": "2026-11-13 00:00:00", "is_temporary": 0,
+             "service": "pixeldrain"},
+        ]
+        ordered = sorted(rows, key=viewer._source_ladder_key)
+        self.assertEqual(ordered[0]["service"], "pixeldrain")
+        self.assertEqual(ordered[0]["is_temporary"], 0)
+        self.assertEqual(ordered[1]["service"], "other")
+        self.assertEqual(ordered[2]["is_temporary"], 1)
+
+    def test_batched_fetch_keeps_the_ladder_order_per_release(self):
+        # The seed has two releases, two sources each. Shuffle their
+        # ledger statuses, then the batched fetch must still order each
+        # release's sources by the ladder the old per-release query's
+        # ORDER BY gave — verified-active first, dead last — and must
+        # keep each source under its own release.
+        rels = self.conn.execute(
+            "SELECT id FROM releases WHERE post_id = ? ORDER BY id",
+            (self.seed_id,)).fetchall()
+        self.assertEqual(len(rels), 2)
+        sources = self.conn.execute(
+            "SELECT id, release_id FROM download_sources"
+            " WHERE release_id IN (?, ?) ORDER BY release_id, id",
+            (int(rels[0]["id"]), int(rels[1]["id"]))).fetchall()
+        self.assertEqual(len(sources), 4)
+        by_rel = {}
+        for s in sources:
+            by_rel.setdefault(int(s["release_id"]), []).append(int(s["id"]))
+        first, second = by_rel[int(rels[0]["id"])], by_rel[int(rels[1]["id"])]
+        self.conn.execute(
+            "UPDATE download_sources SET status='dead', http_status=404,"
+            " last_checked_at='2026-11-13 00:00:00' WHERE id = ?",
+            (first[0],))
+        self.conn.execute(
+            "UPDATE download_sources SET status='active', http_status=200,"
+            " last_checked_at='2026-11-13 00:00:00' WHERE id = ?",
+            (first[1],))
+        self.conn.execute(
+            "UPDATE download_sources SET status='expired', http_status=NULL,"
+            " last_checked_at=NULL WHERE id = ?", (second[0],))
+        self.conn.commit()
+        _releases, rel_list = viewer._fetch_releases_with_sources(
+            self.conn, [self.seed_id])
+        self.assertEqual(len(rel_list), 2)
+        got = [[redact.parse_token(s["stream_id"], viewer.signing_secret(),
+                                   signed_only=True)
+                for s in r["sources"]] for r in rel_list]
+        self.assertEqual(got, [[first[1], first[0]],
+                                [second[1], second[0]]])
 
 
 class RailDedupeTests(Fixture):

@@ -367,6 +367,30 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(result["reason"], "host_circuit_open")
         self.assertEqual(calls, [])
 
+    def test_cached_only_candidate_returns_unchecked_without_a_resolve(self):
+        # Detail fast path: no fresh banked resolution, no open circuit,
+        # no live probe — the link is "unchecked", not failed, and the
+        # resolver is never called.
+        calls = []
+        result = serve_verify.verify_candidate(
+            11, resolver=lambda sid: calls.append(sid) or {"success": False},
+            prober=self._ok_prober, conn=self.conn, live=False)
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["reason"], "unchecked")
+        self.assertEqual(calls, [])
+
+    def test_cached_only_candidate_still_serves_a_fresh_banked_resolution(self):
+        resolved_cache.record_resolved_cache(
+            self.conn, 11, {"url": "https://good.example/f.mp4",
+                            "resolved_at": time.time()})
+        self.conn.commit()
+        result = serve_verify.verify_candidate(
+            11, resolver=lambda sid: (_ for _ in ()).throw(
+                AssertionError("live resolve on fast path")),
+            prober=self._ok_prober, conn=self.conn, live=False)
+        self.assertTrue(result["verified"])
+        self.assertEqual(result["reason"], "banked")
+
 
 class HostPriorityTests(unittest.TestCase):
     def setUp(self):
@@ -776,6 +800,89 @@ class OptionGroupsVerifyTests(unittest.TestCase):
         # measured ranking promotes the good host's link to winner.
         self.assertEqual(groups[0]["tiers"][0]["link"]["stream_id"],
                          "good-link")
+
+    def test_unchecked_candidate_keeps_its_band(self):
+        # Detail fast path: a candidate with no cached verdict either
+        # way is not known dead, only never checked — its band stays,
+        # and the press re-verifies it live.
+        def unchecked(link, conn):
+            return {"verified": False, "reason": "unchecked"}
+        groups = self._groups(
+            [self._release("720p", ["a"]),
+             self._release("480p", ["b"])],
+            verify=True, _verifier=unchecked)
+        self.assertEqual([t["band"] for t in groups[0]["tiers"]],
+                         ["720p", "480p"])
+        self.assertEqual(groups[0]["tiers"][0]["link"]["stream_id"], "a")
+        self.assertNotIn("verified_at", groups[0]["tiers"][0]["link"])
+        self.assertEqual(groups[0]["auto"]["band"], "720p")
+
+    def test_unchecked_winner_yields_to_a_verified_backup(self):
+        def mixed(link, conn):
+            if link["stream_id"] == "warm":
+                return {"verified": True, "reason": "ok",
+                        "verified_at": NOW}
+            return {"verified": False, "reason": "unchecked"}
+        groups = self._groups(
+            [self._release("720p", ["cold", "warm"])],
+            verify=True, _verifier=mixed)
+        tier = groups[0]["tiers"][0]
+        self.assertEqual(tier["link"]["stream_id"], "warm")
+        self.assertEqual(tier["link"]["verified_at"], NOW)
+        self.assertEqual(tier["backup_handles"], ["cold"])
+
+    def test_dead_band_is_hidden_but_unchecked_band_stays(self):
+        def mixed(link, conn):
+            if link["stream_id"] == "dead":
+                return {"verified": False, "reason": "http_404"}
+            return {"verified": False, "reason": "unchecked"}
+        groups = self._groups(
+            [self._release("720p", ["dead"]),
+             self._release("480p", ["cold"])],
+            verify=True, _verifier=mixed)
+        self.assertEqual([t["band"] for t in groups[0]["tiers"]], ["480p"])
+
+    def _token(self, source_id):
+        os.environ["RADD_STREAM_SECRET"] = "test-secret-for-serve-verify"
+        self.addCleanup(os.environ.pop, "RADD_STREAM_SECRET", None)
+        viewer._SIGNING_SECRET = None
+        self.addCleanup(setattr, viewer, "_SIGNING_SECRET", None)
+        return redact.mint_token(source_id, viewer.signing_secret())
+
+    def test_cached_only_verifier_never_resolves_live(self):
+        conn = sqlite3.connect(str(self.db_path))
+        self.addCleanup(conn.close)
+        token = self._token(111)
+        with mock.patch.object(
+                viewer, "_resolve_coalesced",
+                side_effect=AssertionError("live resolve on fast path")):
+            result = viewer._verify_tier_link(
+                {"stream_id": token}, conn, live=False)
+        self.assertEqual(result["verified"], False)
+        self.assertEqual(result["reason"], "unchecked")
+        self.assertEqual(result["source_id"], 111)
+
+    def test_cached_only_verifier_reports_a_dead_ledger_row(self):
+        conn = sqlite3.connect(str(self.db_path))
+        self.addCleanup(conn.close)
+        conn.execute("ALTER TABLE download_sources ADD COLUMN status TEXT")
+        conn.execute("ALTER TABLE download_sources ADD COLUMN http_status INT")
+        conn.execute(
+            "ALTER TABLE download_sources ADD COLUMN last_checked_at TEXT")
+        conn.execute(
+            "INSERT INTO download_sources (id, source_url, service, status,"
+            " http_status, last_checked_at) VALUES (111,"
+            " 'https://dead.example/x', 'svc', 'dead', 404,"
+            " '2026-11-13 00:00:00')")
+        conn.commit()
+        token = self._token(111)
+        with mock.patch.object(
+                viewer, "_resolve_coalesced",
+                side_effect=AssertionError("live resolve on fast path")):
+            result = viewer._verify_tier_link(
+                {"stream_id": token}, conn, live=False)
+        self.assertEqual(result["verified"], False)
+        self.assertEqual(result["reason"], "dead")
 
 
 class WarmAllBandsTests(unittest.TestCase):
