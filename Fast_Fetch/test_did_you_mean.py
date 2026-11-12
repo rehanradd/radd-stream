@@ -133,8 +133,14 @@ class DidYouMeanTests(unittest.TestCase):
                 "INSERT INTO posts (id, clean_title, is_18_plus)"
                 " VALUES (?, ?, 0)", (post_id, title))
         self.conn.commit()
+        # Ambiguity, benchmark §3 fix 1 (FTS5 search, 2026-11-12):
+        # both are one edit away, but `Salaar` IS a whole title and
+        # `Salary Man` is not — exact-title evidence wins even
+        # without an exclude list. (This assertion used to expect
+        # `salary`: the old window-order ranking served the wrong
+        # film first, which is exactly the bug the fix removes.)
         self.assertEqual(did_you_mean.correct_token(self.conn, "salar"),
-                         "salary")
+                         "salaar")
         self.assertEqual(
             did_you_mean.correct_token(
                 self.conn, "salar", exclude=frozenset({"salary"})),
@@ -143,6 +149,13 @@ class DidYouMeanTests(unittest.TestCase):
             self.conn, "salar", exclude=frozenset({"salary"}))
         self.assertEqual(suggestion["query"], "salaar")
         self.assertEqual(suggestion["corrected_tokens"], {"salar": "salaar"})
+
+    def test_transposition_corrects(self):
+        # Benchmark §3 fix 2: a transposition is one Damerau edit,
+        # so `inceptoin` corrects to `inception` where plain
+        # Levenshtein (distance 2) refused it.
+        self.assertEqual(did_you_mean.correct_token(self.conn, "inceptoin"),
+                         "inception")
 
     def test_a_database_without_a_posts_table_has_no_suggestion(self):
         empty = sqlite3.connect(":memory:")

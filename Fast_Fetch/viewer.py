@@ -37,6 +37,7 @@ import admin_panel
 import media_search
 import panel_feed
 import contact_intake
+import fts_posts
 import search_fuzzy
 import did_you_mean
 import title_clean
@@ -3005,10 +3006,12 @@ POSTS_MAX_OFFSET = 10_000
 def _fuzzy_post_ids(conn, query):
     """Post ids whose title is one edit away from the query, token by token.
 
-    The candidate pass is one scan: every 3-gram of every query token, OR'd
-    into a single LIKE query, capped. The true check is in Python, so a
-    shared gram never smuggles in a title that is two edits away. The adult
-    clause applies here too; the operator's hides apply in the caller, where
+    The candidate pass is one trigram MATCH (`fts_posts_tri`, 15–52 ms)
+    when the index exists — or one LIKE scan over the same 3-grams when
+    it does not — capped at 200 rows. The true check is in Python
+    (Damerau ≤ 1, so a transposition counts), so a shared gram never
+    smuggles in a title that is two edits away. The adult clause
+    applies here too; the operator's hides apply in the caller, where
     the ids only ever replace the LIKE clause.
     """
     tokens = search_fuzzy.fuzzy_tokens(query)
@@ -3017,11 +3020,25 @@ def _fuzzy_post_ids(conn, query):
     grams = sorted({gram for token in tokens for gram in search_fuzzy.candidate_grams(token)})
     if not grams:
         return []
-    like_sql = " OR ".join("lower(p.clean_title) LIKE ?" for _ in grams)
-    rows = conn.execute(
-        f"SELECT p.id, p.clean_title FROM posts p WHERE {redact.adult_clause('p')}"
-        f" AND ({like_sql}) ORDER BY p.id DESC LIMIT {search_fuzzy.CANDIDATE_LIMIT}",
-        [f"%{gram}%" for gram in grams]).fetchall()
+    ids = fts_posts.trigram_candidate_ids(
+        conn, fts_posts.trigram_match(grams), search_fuzzy.CANDIDATE_LIMIT)
+    if ids is not None:
+        if not ids:
+            return []
+        placeholders = ", ".join("?" for _ in ids)
+        rows = conn.execute(
+            f"SELECT p.id, p.clean_title FROM posts p"
+            f" WHERE {redact.adult_clause('p')}"
+            f" AND p.id IN ({placeholders})",
+            ids).fetchall()
+        order = {pid: i for i, pid in enumerate(ids)}
+        rows = sorted(rows, key=lambda row: order.get(int(row["id"]), len(ids)))
+    else:
+        like_sql = " OR ".join("lower(p.clean_title) LIKE ?" for _ in grams)
+        rows = conn.execute(
+            f"SELECT p.id, p.clean_title FROM posts p WHERE {redact.adult_clause('p')}"
+            f" AND ({like_sql}) ORDER BY p.id DESC LIMIT {search_fuzzy.CANDIDATE_LIMIT}",
+            [f"%{gram}%" for gram in grams]).fetchall()
     matched = []
     for row in rows:
         title_tokens = search_fuzzy.tokenize(row["clean_title"] or "")
@@ -4115,16 +4132,32 @@ def _works_search_candidate_ids(conn, query: str) -> list[int]:
     benchmark winner (FTS5, a title index, whatever the
     search-performance agent recommends) lands here and nowhere else
     — same contract in, same contract out: a query string in, the
-    post ids it names literally out. Today that is the posts route's
-    own literal match: whole-word title matching for a single
-    stopword / 1–2 letter token (`the` must not match `other`), else
-    the substring LIKE over title/slug/cast. No adult clause here —
-    the grouping scan reads flagged rows deliberately and applies the
-    work-level corroborated rule itself. The fuzzy fallback and the
-    mood fallback live in the caller, not here: this is the literal
-    pass only.
+    post ids it names literally out. The winner is FTS5
+    (`fts_posts`): `token1 AND token2 AND ... AND last_token*` over
+    `clean_title` + `cast_names`, so actor search keeps working and
+    multi-word queries stay precise; a whole-word query (`the` must
+    not match `other`) is one quoted token, which is the whole-word
+    rule by construction — FTS5 tokenizes on word boundaries. A
+    query with no tokens at all (empty / punctuation-only) answers
+    [] without ever running a scan: that is the empty-query guard.
+    No adult clause here — the grouping scan reads flagged rows
+    deliberately and applies the work-level corroborated rule
+    itself. The fuzzy fallback and the mood fallback live in the
+    caller, not here: this is the literal pass only.
+
+    When the FTS5 index is absent or empty (the migration has not
+    built it on this database yet) the function falls back to the
+    old literal match — whole-word title clause for a single
+    stopword / 1–2 letter token, else the substring LIKE over
+    title/slug/cast — so a pre-migration database answers exactly
+    as it did before, only slower.
     """
-    if works.is_whole_word_query(query):
+    whole_word = works.is_whole_word_query(query)
+    ids = fts_posts.search_candidate_ids(
+        conn, query, whole_word=whole_word)
+    if ids is not None:
+        return ids
+    if whole_word:
         clause, clause_params = works.whole_word_title_clause(query)
         rows = conn.execute(
             f"SELECT p.id FROM posts p WHERE {clause}",

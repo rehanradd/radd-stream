@@ -32,6 +32,17 @@ class FuzzyHelpersTests(unittest.TestCase):
         self.assertFalse(search_fuzzy.edit_distance_le1("abc", "xyz"))
         self.assertFalse(search_fuzzy.edit_distance_le1("avengers", "av"))
 
+    def test_damerau_le1_counts_a_transposition_as_one_edit(self):
+        # The correction check (FTS5 search, 2026-11-12): `inceptoin`
+        # is two Levenshtein edits from `inception` but one Damerau
+        # edit, and transpositions are one of the most common typos.
+        self.assertTrue(search_fuzzy.damerau_le1("inceptoin", "inception"))
+        self.assertTrue(search_fuzzy.damerau_le1("abdc", "abcd"))
+        self.assertTrue(search_fuzzy.damerau_le1("avngers", "avengers"))
+        self.assertFalse(search_fuzzy.damerau_le1("incepto", "inception"))
+        self.assertFalse(search_fuzzy.damerau_le1("abc", "xyz"))
+        self.assertFalse(search_fuzzy.damerau_le1("avengers", "av"))
+
     def test_tokenize(self):
         self.assertEqual(search_fuzzy.tokenize("Avengers: Endgame!"), ["avengers", "endgame"])
         self.assertEqual(search_fuzzy.tokenize(""), [])
@@ -42,6 +53,12 @@ class FuzzyHelpersTests(unittest.TestCase):
         self.assertFalse(
             search_fuzzy.fuzzy_match(["avngers", "endgame"], ["avengers", "infinity"]))
         self.assertFalse(search_fuzzy.fuzzy_match([], ["avengers"]))
+        # A transposition matches: the fuzzy fallback serves
+        # `Inception` for `inceptoin`.
+        self.assertTrue(
+            search_fuzzy.fuzzy_match(["inceptoin"], ["inception"]))
+        self.assertFalse(
+            search_fuzzy.fuzzy_match(["incepto"], ["inception"]))
 
     def test_fuzzy_tokens_refuses_short_and_long(self):
         self.assertEqual(search_fuzzy.fuzzy_tokens("Avngers"), ["avngers"])

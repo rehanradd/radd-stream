@@ -5,6 +5,14 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-12 — FTS5 search [SEARCH-PERFORMANCE]: the benchmark winner
+  (`fts_posts` on `clean_title` + `cast_names`, trigram correction with
+  Damerau transpositions and exact-title evidence ranking) landed in the
+  works search swap point (`_works_search_candidate_ids`), LIKE fallback
+  kept. Tests: `test_fts_posts.py` (30, new), `test_works_api.py` (40),
+  `test_migrate_search_indexes.py` (20). NOT committed — the exec channel
+  lost data-write permission mid-session (EPERM), so commit/push + CI are
+  the parent's job. Full note: `20261112-fts5-search.md`.
 - 2026-11-12 — self-check [LIVE-TV-503]: the six test channels (ids 36–41) shipped
   with empty `logo_url`, and `validate_registry()` fails closed, so the whole Live
   TV list 503'd since 2026-11-11. Logos fixed (verified 200 + image/*); repo

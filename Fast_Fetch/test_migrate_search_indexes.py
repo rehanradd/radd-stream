@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).parent.resolve()))
 
 import catalog_v2                  # noqa: E402
 import fast_fetch                  # noqa: E402
+import fts_posts                   # noqa: E402
 import migrate_search_indexes as mig  # noqa: E402
 
 
@@ -270,6 +271,77 @@ class Scope(MigrationFixture):
                 self.assertIn(root, ("argparse", "os", "re", "shutil", "sqlite3",
                                      "sys", "time", "pathlib", "__future__"),
                               f"non-stdlib import: {line}")
+
+
+class FtsPostsStep(MigrationFixture):
+    """Step 3 (`--with-fts-posts`): the `fts_posts` + `fts_posts_tri`
+    pair the works search and the correction layer read. Unlike step
+    2, code reads these tables the moment they exist — so the tests
+    pin the build, the triggers, the verify failure, and the
+    rollback, the same way the step-2 tests do for `posts_fts`."""
+
+    def test_plan_with_fts_posts_prints_step_three_and_writes_nothing(self):
+        before_bytes = self.db.read_bytes()
+        before_names = self.table_names()
+        code, text = self.cli("plan", "--with-fts-posts")
+        self.assertEqual(code, 0, text)
+        self.assertEqual(self.db.read_bytes(), before_bytes, "plan modified the file")
+        self.assertEqual(self.table_names(), before_names, "plan created schema")
+        self.assertIn("STEP 3", text)
+        self.assertIn("estimate", text.lower())
+
+    def test_apply_builds_the_pair_and_verify_passes(self):
+        code, text = self.cli("apply", "--with-fts-posts", "--execute")
+        self.assertEqual(code, 0, text)
+        names = self.table_names()
+        self.assertIn(fts_posts.FTS_TABLE, names)
+        self.assertIn(fts_posts.TRI_TABLE, names)
+        for trigger in fts_posts.TRIGGERS:
+            self.assertIn(trigger, names, "no triggers means the index can lie")
+        self.assertNotIn(mig.FTS_TABLE, names,
+                         "step 3 alone must never create the step-2 table")
+        verify_code, verify_text = self.cli("verify", "--with-fts-posts")
+        self.assertEqual(verify_code, 0, verify_text)
+
+    def test_apply_twice_is_not_an_error(self):
+        first, first_text = self.cli("apply", "--with-fts-posts", "--execute")
+        second, second_text = self.cli("apply", "--with-fts-posts", "--execute")
+        self.assertEqual((first, second), (0, 0), second_text)
+
+    def test_the_pair_answers_a_search_and_a_trigram(self):
+        self.cli("apply", "--with-fts-posts", "--execute")
+        hit = self.conn.execute(
+            "SELECT rowid FROM fts_posts WHERE fts_posts MATCH ?",
+            ('"Seeded"',)).fetchall()
+        self.assertGreater(len(hit), 0, "the rebuilt index cannot find its own content")
+        tri = self.conn.execute(
+            "SELECT rowid FROM fts_posts_tri WHERE fts_posts_tri MATCH ?",
+            ('"see"',)).fetchall()
+        self.assertGreater(len(tri), 0, "the trigram index cannot find its own content")
+
+    def test_verify_fails_on_a_dropped_trigger(self):
+        self.cli("apply", "--with-fts-posts", "--execute")
+        self.conn.execute("DROP TRIGGER fts_posts_ai")
+        self.conn.execute(
+            "INSERT INTO posts (url, slug, title, clean_title, year, content_type)"
+            " VALUES ('https://seed.test/orphan', 'orphan', 'Orphaned Record (2024)',"
+            " 'Orphaned Record', 2024, 'movie')")
+        self.conn.commit()
+        code, text = self.cli("verify", "--with-fts-posts")
+        self.assertEqual(code, 1, text)
+        self.assertIn("trigger", text)
+
+    def test_rollback_drops_the_pair_and_keeps_the_bridge(self):
+        self.cli("apply", "--with-fts-posts", "--execute")
+        code, text = self.cli("rollback", "--execute")
+        self.assertEqual(code, 0, text)
+        names = self.table_names()
+        self.assertNotIn(fts_posts.FTS_TABLE, names)
+        self.assertNotIn(fts_posts.TRI_TABLE, names)
+        for trigger in fts_posts.TRIGGERS:
+            self.assertNotIn(trigger, names)
+        self.assertIn(mig.BRIDGE_INDEX, names,
+                      "the read-side index is not part of the rollback")
 
 
 if __name__ == "__main__":

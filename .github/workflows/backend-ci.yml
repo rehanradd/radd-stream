@@ -44,6 +44,9 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       work-level adult rule)
 #     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
 #       nothing without --execute, is idempotent, and fails verify on a drifted index)
+#     - Fast_Fetch/test_fts_posts.py      (the FTS5 search index over posts: fts_posts
+#       + fts_posts_tri, the works search swap point, the trigram correction layer with
+#       Damerau transpositions and exact-title evidence ranking, and the LIKE fallback)
 #     - Fast_Fetch/test_bounded_ledger.py    (/api/data: page ceiling, operator-only
 #       stats=full, and a scan-free default path proven by a trace callback)
 #     - Fast_Fetch/test_project_readonly.py  (v2 rebuild over an ATTACHed mode=ro ledger:
@@ -397,6 +400,15 @@ jobs:
       # the projector. Offline, stdlib, in-memory fixture, no network.
       - name: 🧪 test_fts_search.py
         run: python3 -S Fast_Fetch/test_fts_search.py
+
+      # The FTS5 search index over posts (search-performance benchmark,
+      # 2026-11-12): fts_posts (clean_title + cast_names) behind the
+      # works search swap point, fts_posts_tri behind the trigram
+      # correction layer (Damerau transpositions, exact-title evidence
+      # ranking), and the LIKE fallback when the index is absent.
+      # Offline, stdlib, temp SQLite fixtures; no network.
+      - name: 🧪 test_fts_posts.py
+        run: python3 -S Fast_Fetch/test_fts_posts.py
 
       # Scale quick wins (Session 125): the serve-path pragmas in one
       # helper + every call site applying them, the search limit clamp,

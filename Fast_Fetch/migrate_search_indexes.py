@@ -20,18 +20,33 @@ Two steps, deliberately separated because they are not the same kind of change:
    it, and an index that drifts from its content table answers *wrong* rather than
    slowly. It therefore ships with a `verify` that fails loudly, and with the rule
    below.
+3. **`fts_posts` + `fts_posts_tri` (FTS5, external content) + six sync triggers** —
+   the search-performance benchmark's winner (2026-11-12): the works search
+   (`viewer._works_search_candidate_ids`) answers from `fts_posts`
+   (`clean_title`, `cast_names`), and `did_you_mean` / the fuzzy fallback
+   answer candidates from `fts_posts_tri` (trigram over `clean_title`).
+   Unlike step 2, code DOES read these tables — so a stale pair changes
+   answers, and the step is not a pure capability. Its safety argument
+   is the same triggers + `verify` (run at the end of every apply, and
+   re-runnable after any bulk write), plus the search path's LIKE
+   fallback when the tables are absent or empty. Build it while the
+   service is stopped (the gate deploy already stops it for the swap);
+   a live apply is guarded by `verify`, which fails on a missed row
+   (the `_docsize` counts diverge) and the re-run heals it.
 
 **`media_search` does not read `posts_fts`.** Deliberate, and it is the reason this can
 be scheduled at leisure: an FTS index the code cannot query cannot be wrong in a way a
 user sees, so a half-built or stale index during the rollout window is an operational
 non-event. Switching the matcher over is a separate reviewed change with its own tests.
+Step 3 is the opposite case, stated plainly above: the works search reads `fts_posts`
+the moment it exists, so its rollout is the gate deploy, not leisure.
 
 Additive only. No table is dropped, altered or recreated, every statement is
 `IF NOT EXISTS`, and the target path must be named on the command line — this tool
 never guesses where the catalog lives.
 
     python3 -S Fast_Fetch/migrate_search_indexes.py plan    --target PATH
-    python3 -S Fast_Fetch/migrate_search_indexes.py apply   --target PATH [--with-fts] --execute
+    python3 -S Fast_Fetch/migrate_search_indexes.py apply   --target PATH [--with-fts] [--with-fts-posts] --execute
     python3 -S Fast_Fetch/migrate_search_indexes.py verify  --target PATH
     python3 -S Fast_Fetch/migrate_search_indexes.py rollback --target PATH --execute
 
@@ -59,6 +74,16 @@ MEASURED_FTS_ROWS_PER_SECOND = 3_260        # measured, copy of production, load
 MEASURED_BRIDGE_INDEX_SECONDS = 0.9         # 275,488 cat_work_sites rows, load 7.3
 #: Extra bytes the FTS index cost on the copy, per indexed row.
 MEASURED_FTS_BYTES_PER_ROW = 61             # 9.2 MB for 150,799 rows
+#: Step 3 (`fts_posts` + `fts_posts_tri`), measured by the search-performance
+#: benchmark on a `.backup` copy of the live catalog (224,081 posts, 1 vCPU):
+#: main rebuild 7.6 s, trigram rebuild 5.1 s, the pair ≈ 40 MB on disk.
+MEASURED_FTS_POSTS_SECONDS = 12.7           # 7.6 + 5.1 s for 224,081 rows
+MEASURED_FTS_POSTS_ROWS = 224_081
+MEASURED_FTS_POSTS_BYTES_PER_ROW = 178      # ≈ 40 MB for 224,081 rows
+#: The step-3 trigger cost was NOT measured separately: six triggers over
+#: three indexed columns against step 2's three over two. Budget roughly
+#: twice step 2's per-insert cost and measure it on the copy before
+#: approving — `plan` prints that estimate, not a measurement.
 #: Microseconds added to one `posts` INSERT by the three sync triggers, measured as
 #: 5,000 inserts on the copy: 5,308 us/row with triggers against 412 us/row without.
 #: This is the migration's cost to the ingest path and the owner has to see it before
@@ -199,7 +224,7 @@ def _free_bytes(path: Path) -> int:
     return shutil.disk_usage(str(path)).free
 
 
-def plan(conn, target: Path, with_fts: bool) -> int:
+def plan(conn, target: Path, with_fts: bool, with_fts_posts: bool = False) -> int:
     posts = _count(conn, "posts")
     bridge = _count(conn, "cat_work_sites")
     print(f"target        : {_fingerprint(target)}")
@@ -218,31 +243,60 @@ def plan(conn, target: Path, with_fts: bool) -> int:
     print()
     if not with_fts:
         print("STEP 2  FTS5     : not requested (pass --with-fts to include it)")
-        return 0
-    if not fts5_available():
-        print("STEP 2  REFUSE: this SQLite build cannot create an fts5 virtual table")
-        return 1
-    print("STEP 2  FTS5 over (clean_title, title), external content, with sync triggers")
-    print(f"        fts5 in build: yes")
-    print(f"        present now : {'yes' if _has_table(conn, FTS_TABLE) else 'no'}")
-    print(f"        triggers    : "
-          f"{', '.join(t + ('=yes' if _has_trigger(conn, t) else '=no') for t in TRIGGERS)}")
-    print(f"        statement   : {FTS_SQL}")
-    for statement in TRIGGER_SQL:
-        print(f"                      {statement}")
-    if posts > 0:
-        if MEASURED_FTS_ROWS_PER_SECOND > 0:
-            est = posts / MEASURED_FTS_ROWS_PER_SECOND
-            print(f"        estimate    : ~{est / 60:.1f} min at load 1"
-                  f" (measured {MEASURED_FTS_ROWS_PER_SECOND:,.0f} rows/s on this VM)")
-            need = posts * max(MEASURED_FTS_BYTES_PER_ROW, 1) * DISK_SAFETY_FACTOR
+    else:
+        if not fts5_available():
+            print("STEP 2  REFUSE: this SQLite build cannot create an fts5 virtual table")
+            return 1
+        print("STEP 2  FTS5 over (clean_title, title), external content, with sync triggers")
+        print(f"        fts5 in build: yes")
+        print(f"        present now : {'yes' if _has_table(conn, FTS_TABLE) else 'no'}")
+        print(f"        triggers    : "
+              f"{', '.join(t + ('=yes' if _has_trigger(conn, t) else '=no') for t in TRIGGERS)}")
+        print(f"        statement   : {FTS_SQL}")
+        for statement in TRIGGER_SQL:
+            print(f"                      {statement}")
+        if posts > 0:
+            if MEASURED_FTS_ROWS_PER_SECOND > 0:
+                est = posts / MEASURED_FTS_ROWS_PER_SECOND
+                print(f"        estimate    : ~{est / 60:.1f} min at load 1"
+                      f" (measured {MEASURED_FTS_ROWS_PER_SECOND:,.0f} rows/s on this VM)")
+                need = posts * max(MEASURED_FTS_BYTES_PER_ROW, 1) * DISK_SAFETY_FACTOR
+                print(f"        disk headroom required: ~{need / 1e9:.2f} GB "
+                      f"(have {_free_bytes(target) / 1e9:.1f} GB)")
+                if need > _free_bytes(target):
+                    print("        REFUSE: not enough free space for the build")
+                    return 1
+            else:
+                print("        estimate    : NOT MEASURED — run the copy measurement first")
+    if with_fts_posts:
+        # Deferred import: the top-level import list is pinned stdlib-only by
+        # test_migrate_search_indexes.py, and fts_posts is a first-party module.
+        import fts_posts
+        print()
+        print("STEP 3  FTS5 posts pair: the works search + correction indexes")
+        print(f"        tables      : {fts_posts.FTS_TABLE} (clean_title, cast_names),"
+              f" {fts_posts.TRI_TABLE} (clean_title, trigram)")
+        print(f"        present now : {fts_posts.FTS_TABLE}="
+              f"{'yes' if _has_table(conn, fts_posts.FTS_TABLE) else 'no'}, "
+              f"{fts_posts.TRI_TABLE}="
+              f"{'yes' if _has_table(conn, fts_posts.TRI_TABLE) else 'no'}")
+        print(f"        triggers    : "
+              f"{', '.join(t + ('=yes' if _has_trigger(conn, t) else '=no') for t in fts_posts.TRIGGERS)}")
+        if posts > 0:
+            est = MEASURED_FTS_POSTS_SECONDS * (posts / MEASURED_FTS_POSTS_ROWS)
+            print(f"        estimate    : ~{est:.0f} s at load 1"
+                  f" (measured {MEASURED_FTS_POSTS_SECONDS:.1f} s for"
+                  f" {MEASURED_FTS_POSTS_ROWS:,} rows on this VM)")
+            need = posts * MEASURED_FTS_POSTS_BYTES_PER_ROW * DISK_SAFETY_FACTOR
             print(f"        disk headroom required: ~{need / 1e9:.2f} GB "
                   f"(have {_free_bytes(target) / 1e9:.1f} GB)")
             if need > _free_bytes(target):
                 print("        REFUSE: not enough free space for the build")
                 return 1
-        else:
-            print("        estimate    : NOT MEASURED — run the copy measurement first")
+            print("        trigger cost: NOT separately measured — budget ~2x the"
+                  " step-2 per-insert cost (six triggers, three indexed columns)")
+    else:
+        print("STEP 3  FTS5 posts: not requested (pass --with-fts-posts to include it)")
     print()
     print("Cost outside itself: every INSERT/UPDATE/DELETE on `posts` gains trigger")
     print("work, so the ingest path pays it. Measured on the copy, 5,000 post inserts:")
@@ -256,19 +310,33 @@ def plan(conn, target: Path, with_fts: bool) -> int:
     print("an index that drifts answers wrong.")
     print("Nothing in `Fast_Fetch` reads `posts_fts` yet, so step 2 is a pure capability:")
     print("it can be approved and rolled back without touching a live code path.")
+    print("Step 3 is different: the works search reads `fts_posts` the moment it")
+    print("exists, so build it while the service is stopped and let `verify` pass")
+    print("before the service restarts.")
     return 0
 
 
-def _sqls(with_fts):
+def _sqls(with_fts, with_fts_posts=False):
     out = [BRIDGE_SQL]
     if with_fts:
         out.append("INSERT INTO " + FTS_TABLE + "(" + FTS_TABLE + ") VALUES('rebuild')")
         out.extend(TRIGGER_SQL)
+    if with_fts_posts:
+        # Deferred import: the top-level import list is pinned stdlib-only.
+        import fts_posts
+        out.append(fts_posts.FTS_SQL)
+        out.append(fts_posts.TRI_SQL)
+        out.append("INSERT INTO " + fts_posts.FTS_TABLE + "("
+                   + fts_posts.FTS_TABLE + ") VALUES('rebuild')")
+        out.append("INSERT INTO " + fts_posts.TRI_TABLE + "("
+                   + fts_posts.TRI_TABLE + ") VALUES('rebuild')")
+        out.extend(fts_posts.TRIGGER_SQL)
     return out
 
 
-def apply_migration(conn, target: Path, with_fts: bool, execute: bool) -> int:
-    statements = _sqls(with_fts)
+def apply_migration(conn, target: Path, with_fts: bool, execute: bool,
+                    with_fts_posts: bool = False) -> int:
+    statements = _sqls(with_fts, with_fts_posts)
     if not execute:
         print("DRY RUN — nothing was written. Re-run with --execute to apply.")
         for statement in statements:
@@ -304,10 +372,21 @@ def apply_migration(conn, target: Path, with_fts: bool, execute: bool) -> int:
             conn.execute(statement)
         conn.commit()
         print(f"                triggers {', '.join(TRIGGERS)} installed")
-    return verify(conn, target, with_fts)
+    if with_fts_posts:
+        # Deferred import: the top-level import list is pinned stdlib-only.
+        import fts_posts
+        started = time.perf_counter()
+        result = fts_posts.rebuild_fts(conn)
+        took = time.perf_counter() - started
+        print(f"step 3        : rebuild of {result['posts']:,} rows took {took:.1f} s"
+              f" ({result['posts'] / max(took, 0.001):,.0f} rows/s)")
+        print(f"                {fts_posts.FTS_TABLE} rows {result['fts_rows']:,},"
+              f" {fts_posts.TRI_TABLE} rows {result['tri_rows']:,}")
+        print(f"                triggers {', '.join(fts_posts.TRIGGERS)} installed")
+    return verify(conn, target, with_fts, with_fts_posts)
 
 
-def verify(conn, target: Path, with_fts: bool) -> int:
+def verify(conn, target: Path, with_fts: bool, with_fts_posts: bool = False) -> int:
     """The index must be provably in step with the ledger, or it is a liability."""
     failures = []
     print()
@@ -318,44 +397,65 @@ def verify(conn, target: Path, with_fts: bool) -> int:
         failures.append(f"{BRIDGE_INDEX} missing")
     if not with_fts:
         print("  posts_fts              not part of this run")
-        print("  RESULT                 " + ("OK" if not failures else "; ".join(failures)))
-        return 1 if failures else 0
-    if not _has_table(conn, FTS_TABLE):
-        failures.append("posts_fts missing")
     else:
-        posts = _count(conn, "posts")
-        print(f"  rows in posts          {posts:,}")
-        # Two measured facts, both of which retire a check a reviewer would ask for:
-        #
-        #   `SELECT COUNT(*) FROM posts_fts` reads `posts`, not the index. Inserting
-        #   past a dropped trigger left it at 21 while the index held 20.
-        #   `INSERT INTO posts_fts(posts_fts) VALUES('integrity-check')` returned no
-        #   error on that same mismatched database.
-        #
-        # So the honest number is the shadow table's own row count, and a token from a
-        # sampled row is the proof — deleting the index outright corrupts the shadow
-        # tables, which the sample catches as an exception rather than as a clean pass.
-        docsize = _count(conn, f"{FTS_TABLE}_docsize")
-        print(f"  index rows ({FTS_TABLE}_docsize): {docsize:,}")
-        if posts >= 0 and docsize >= 0 and posts != docsize:
-            failures.append(f"index holds {docsize} rows, posts holds {posts}")
-        for t in TRIGGERS:
-            if not _has_trigger(conn, t):
-                failures.append(f"trigger {t} missing")
-        misses = _sample_tokens(conn, posts)
-        print(f"  token spot check       {misses[1]} rows sampled, {len(misses[0])} not findable")
-        if misses[0]:
-            failures.append(f"FTS cannot find a token from rows {misses[0][:6]}"
-                            + (f" (+{len(misses[0]) - 6} more)"
-                               if len(misses[0]) > 6 else ""))
+        if not _has_table(conn, FTS_TABLE):
+            failures.append("posts_fts missing")
+        else:
+            posts = _count(conn, "posts")
+            print(f"  rows in posts          {posts:,}")
+            # Two measured facts, both of which retire a check a reviewer would ask for:
+            #
+            #   `SELECT COUNT(*) FROM posts_fts` reads `posts`, not the index. Inserting
+            #   past a dropped trigger left it at 21 while the index held 20.
+            #   `INSERT INTO posts_fts(posts_fts) VALUES('integrity-check')` returned no
+            #   error on that same mismatched database.
+            #
+            # So the honest number is the shadow table's own row count, and a token from a
+            # sampled row is the proof — deleting the index outright corrupts the shadow
+            # tables, which the sample catches as an exception rather than as a clean pass.
+            docsize = _count(conn, f"{FTS_TABLE}_docsize")
+            print(f"  index rows ({FTS_TABLE}_docsize): {docsize:,}")
+            if posts >= 0 and docsize >= 0 and posts != docsize:
+                failures.append(f"index holds {docsize} rows, posts holds {posts}")
+            for t in TRIGGERS:
+                if not _has_trigger(conn, t):
+                    failures.append(f"trigger {t} missing")
+            misses = _sample_tokens(conn, posts)
+            print(f"  token spot check       {misses[1]} rows sampled, {len(misses[0])} not findable")
+            if misses[0]:
+                failures.append(f"FTS cannot find a token from rows {misses[0][:6]}"
+                                + (f" (+{len(misses[0]) - 6} more)"
+                                   if len(misses[0]) > 6 else ""))
+    if with_fts_posts:
+        # Deferred import: the top-level import list is pinned stdlib-only.
+        import fts_posts
+        pair_failures = fts_posts.verify_fts(conn)
+        if pair_failures:
+            failures.extend(pair_failures)
+        else:
+            print(f"  {fts_posts.FTS_TABLE} + {fts_posts.TRI_TABLE}"
+                  "  in step (docsize, triggers, token spot check)")
+    else:
+        print("  fts_posts pair         not part of this run")
     print("  RESULT                 " + ("OK" if not failures else "; ".join(failures)))
     return 1 if failures else 0
 
 
 def rollback(conn, target: Path, execute: bool) -> int:
-    """Only safe because nothing reads `posts_fts`: see the module docstring."""
+    """Only safe because the search falls back to LIKE when the tables are gone.
+
+    Step 2 was safe because nothing read `posts_fts` at all; step 3 drops
+    back to the same LIKE scan the pre-migration code ran, so the rollback
+    is a slowdown, never a wrong answer. (The bridge index is left in
+    place: it is a plain read-side index.)
+    """
+    # Deferred import: the top-level import list is pinned stdlib-only.
+    import fts_posts
     statements = [f"DROP TRIGGER IF EXISTS {t}" for t in TRIGGERS]
     statements.append(f"DROP TABLE IF EXISTS {FTS_TABLE}")
+    statements.extend(f"DROP TRIGGER IF EXISTS {t}" for t in fts_posts.TRIGGERS)
+    statements.append(f"DROP TABLE IF EXISTS {fts_posts.FTS_TABLE}")
+    statements.append(f"DROP TABLE IF EXISTS {fts_posts.TRI_TABLE}")
     if not execute:
         print("DRY RUN — nothing was dropped. Re-run with --execute.")
         for statement in statements:
@@ -365,7 +465,9 @@ def rollback(conn, target: Path, execute: bool) -> int:
     for statement in statements:
         conn.execute(statement)
     conn.commit()
-    print(f"dropped: {', '.join(TRIGGERS)}, {FTS_TABLE}")
+    print(f"dropped: {', '.join(TRIGGERS)}, {FTS_TABLE},"
+          f" {', '.join(fts_posts.TRIGGERS)},"
+          f" {fts_posts.FTS_TABLE}, {fts_posts.TRI_TABLE}")
     return 0
 
 
@@ -376,6 +478,8 @@ def main(argv=None) -> int:
                         help="path to the catalog database — required, never guessed")
     parser.add_argument("--with-fts", action="store_true",
                         help="include step 2 (FTS5 + triggers); default is step 1 only")
+    parser.add_argument("--with-fts-posts", action="store_true",
+                        help="include step 3 (fts_posts + fts_posts_tri + triggers)")
     parser.add_argument("--execute", action="store_true",
                         help="actually write; without it apply/rollback are dry runs")
     args = parser.parse_args(argv)
@@ -384,11 +488,12 @@ def main(argv=None) -> int:
     conn = sqlite3.connect(str(target))
     try:
         if args.action == "plan":
-            return plan(conn, target, args.with_fts)
+            return plan(conn, target, args.with_fts, args.with_fts_posts)
         if args.action == "apply":
-            return apply_migration(conn, target, args.with_fts, args.execute)
+            return apply_migration(conn, target, args.with_fts, args.execute,
+                                   args.with_fts_posts)
         if args.action == "verify":
-            return verify(conn, target, args.with_fts)
+            return verify(conn, target, args.with_fts, args.with_fts_posts)
         return rollback(conn, target, args.execute)
     finally:
         conn.close()

@@ -54,12 +54,37 @@ def edit_distance_le1(a, b):
     return prev[lb] <= 1
 
 
+def damerau_le1(a, b):
+    """True when the Damerau-Levenshtein distance between a and b is at most 1.
+
+    Levenshtein ≤ 1, or one adjacent transposition: `inceptoin` is one
+    transposition from `inception`, so it is one Damerau edit (and two
+    Levenshtein edits, which is why `edit_distance_le1` rejects it).
+    Transpositions are one of the most common typo types, so the
+    correction check uses this and not plain Levenshtein. For a
+    distance of ≤ 1 the restricted form (one transposition, checked
+    directly) and full Damerau-Levenshtein agree.
+    """
+    if edit_distance_le1(a, b):
+        return True
+    if len(a) != len(b):
+        return False
+    diffs = [i for i, (ca, cb) in enumerate(zip(a, b)) if ca != cb]
+    return (len(diffs) == 2 and diffs[1] == diffs[0] + 1
+            and a[diffs[0]] == b[diffs[1]] and a[diffs[1]] == b[diffs[0]])
+
+
 def fuzzy_match(query_tokens, title_tokens):
-    """Every query token must match some title token within one edit."""
+    """Every query token must match some title token within one edit.
+
+    One edit in the Damerau sense: a transposition counts, so
+    `inceptoin` matches `inception` while `avngrzx` still matches
+    nothing two edits away.
+    """
     if not query_tokens:
         return False
     for qt in query_tokens:
-        if not any(edit_distance_le1(qt, tt) for tt in title_tokens):
+        if not any(damerau_le1(qt, tt) for tt in title_tokens):
             return False
     return True
 
