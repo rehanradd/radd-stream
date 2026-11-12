@@ -53,6 +53,13 @@ BASE_DIR = Path(__file__).parent.resolve()
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+# config lives in this same directory (sys.path fixed above); _probe_dir is the
+# one permission-safe Path.exists() — see config.py. site_scout must not probe
+# /home/ubuntu with a raw .exists(): on CI runners where that dir exists but is
+# unreadable it raises PermissionError instead of answering False (same
+# runner-pool lottery be0aae77 fixed for the 17 site importers).
+from config import _probe_dir
+
 REGISTRY_PATH = BASE_DIR / "domain_registry.json"
 
 BROWSER_UA = (
@@ -73,7 +80,7 @@ def project_data_dir() -> Path:
     if env:
         return Path(env)
     oracle = Path("/home/ubuntu/radd-stream-data")
-    if oracle.exists():
+    if _probe_dir(oracle):
         return oracle
     return BASE_DIR
 
