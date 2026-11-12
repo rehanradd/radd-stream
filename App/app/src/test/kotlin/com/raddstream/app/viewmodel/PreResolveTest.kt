@@ -343,7 +343,7 @@ class PreResolveTest {
             downloadOnlyBands = emptyList(),
         )
 
-        assertEquals("720p", stepDownRung(ladder, failedBand = "2160p", premiumAccess = false, freeQualityCap = "720p")?.band)
+        assertEquals("720p", stepDownRung(ladder, failed = rung("2160p", "h2160", true), premiumAccess = false, freeQualityCap = "720p")?.band)
     }
 
     @Test
@@ -358,7 +358,7 @@ class PreResolveTest {
             downloadOnlyBands = listOf("1080p"),
         )
 
-        assertEquals("480p", stepDownRung(ladder, failedBand = "2160p", premiumAccess = false, freeQualityCap = "720p")?.band)
+        assertEquals("480p", stepDownRung(ladder, failed = rung("2160p", "h2160", true), premiumAccess = false, freeQualityCap = "720p")?.band)
     }
 
     @Test
@@ -369,7 +369,7 @@ class PreResolveTest {
             downloadOnlyBands = emptyList(),
         )
 
-        assertNull(stepDownRung(ladder, failedBand = "2160p", premiumAccess = false, freeQualityCap = "720p"))
+        assertNull(stepDownRung(ladder, failed = rung("2160p", "h2160", true), premiumAccess = false, freeQualityCap = "720p"))
     }
 
     @Test
@@ -380,6 +380,6 @@ class PreResolveTest {
             downloadOnlyBands = emptyList(),
         )
 
-        assertNull(stepDownRung(ladder, failedBand = "2160p", premiumAccess = true, freeQualityCap = "720p"))
+        assertNull(stepDownRung(ladder, failed = rung("2160p", "h2160", true), premiumAccess = true, freeQualityCap = "720p"))
     }
 }

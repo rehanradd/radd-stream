@@ -221,6 +221,5 @@ class SilentFailoverTest {
             androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
         )
         assertFalse(isGateRefusalError(timeout))
-        assertFalse(isGateRefusalError(null))
     }
 }
