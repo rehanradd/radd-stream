@@ -1441,7 +1441,13 @@ def link_is_adult(source_id: int, db_path) -> bool:
 
 BUCKET_LIMITS = {
     "play": (30, 60.0),      # /stream, /art, /m3u — the expensive ones
-    "browse": (60, 60.0),    # /posts, /api/data, search, sitemap
+    # Verified 2026-11-12 (baseline): browse is 60/min, NOT 10/min —
+    # the 10 only ever applied to /stats. 60 stays: a CGNAT IPv4
+    # carries ~75 users, but no starvation has been measured, and the
+    # token bucket already absorbs bursts. If CGNAT starvation is ever
+    # observed, doubling this bucket is the first step — not a blind
+    # raise on a stale "10/min" reading.
+    "browse": (60, 60.0),    # /posts, /works, /api/data, search, sitemap
     "reports": (10, 60.0),   # /stats
     "account": (30, 60.0),   # /api/v2/account* — cheap calls, but they carry a key
     # Sign-in attempts, and the number is a cost argument rather than a guess.

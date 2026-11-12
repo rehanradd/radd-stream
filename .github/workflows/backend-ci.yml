@@ -36,6 +36,12 @@ name: 🐍 Backend CI — Stdlib Python Tests
 #       window, the no-SQL floor on short tokens, EXPLAIN QUERY PLAN assertions)
 #     - Fast_Fetch/test_home_rails.py        (Home rails: /api/v1/trending,
 #       /api/v1/related, /api/v1/facets, and the genre/language filters)
+#     - Fast_Fetch/test_works_api.py         (the work-centric API: /api/v1/works
+#       list/detail — read-time grouping of posts into one work per
+#       movie/series, season/episode normalisation, the episode guide
+#       with gaps and pack-covered gaps, language buckets, region
+#       filters, the poor-match did_you_mean, and the corroborated
+#       work-level adult rule)
 #     - Fast_Fetch/test_migrate_search_indexes.py (the reviewed index migration: writes
 #       nothing without --execute, is idempotent, and fails verify on a drifted index)
 #     - Fast_Fetch/test_bounded_ledger.py    (/api/data: page ceiling, operator-only
@@ -813,6 +819,17 @@ jobs:
         run: python3 -S Fast_Fetch/test_search_fuzzy.py
       - name: 🧪 test_work_ref.py
         run: python3 -S Fast_Fetch/test_work_ref.py
+
+      # The work-centric API (`/api/v1/works`): one work per movie/series
+      # grouped at read time from the posts ledger (fuzzy title + year,
+      # sequel guard), season/episode normalised to S01/E01, the episode
+      # guide with gaps and pack-covered gaps, language buckets and
+      # region filters shared with /api/v1/posts, the poor-match
+      # `did_you_mean` (served words excluded), and the corroborated
+      # work-level adult rule. Offline — temp SQLite files, one real
+      # loopback server for the route heads.
+      - name: 🧪 test_works_api.py
+        run: python3 -S Fast_Fetch/test_works_api.py
 
       # The public contact intake (`POST /api/v1/contact`): the panel's
       # categories, validation, masking and limits, writing the panel's

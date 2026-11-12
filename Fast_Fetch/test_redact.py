@@ -637,6 +637,9 @@ class RateLimiterTests(unittest.TestCase):
 
     def test_documented_budgets(self):
         self.assertEqual(redact.BUCKET_LIMITS["play"][0], 30)
+        # Verified 2026-11-12 (baseline): browse is 60/min, NOT 10/min
+        # — the 10 only ever applied to /stats. 60 stays; see the
+        # BUCKET_LIMITS comment for the CGNAT reasoning.
         self.assertEqual(redact.BUCKET_LIMITS["browse"][0], 60)
         self.assertEqual(redact.BUCKET_LIMITS["reports"][0], 10)
 

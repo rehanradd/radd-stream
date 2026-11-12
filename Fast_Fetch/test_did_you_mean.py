@@ -123,6 +123,27 @@ class DidYouMeanTests(unittest.TestCase):
         self.assertIsNone(
             did_you_mean.suggest_correction(self.conn, "secrt adult film"))
 
+    def test_exclude_skips_words_already_served(self):
+        # The poor-match path: `salar` is one edit from the served
+        # `salary` too, and offering that back would be no correction
+        # at all. Excluding the served words lets the next closest
+        # word win.
+        for post_id, title in ((10, "Salary Man"), (11, "Salaar")):
+            self.conn.execute(
+                "INSERT INTO posts (id, clean_title, is_18_plus)"
+                " VALUES (?, ?, 0)", (post_id, title))
+        self.conn.commit()
+        self.assertEqual(did_you_mean.correct_token(self.conn, "salar"),
+                         "salary")
+        self.assertEqual(
+            did_you_mean.correct_token(
+                self.conn, "salar", exclude=frozenset({"salary"})),
+            "salaar")
+        suggestion = did_you_mean.suggest_correction(
+            self.conn, "salar", exclude=frozenset({"salary"}))
+        self.assertEqual(suggestion["query"], "salaar")
+        self.assertEqual(suggestion["corrected_tokens"], {"salar": "salaar"})
+
     def test_a_database_without_a_posts_table_has_no_suggestion(self):
         empty = sqlite3.connect(":memory:")
         try:

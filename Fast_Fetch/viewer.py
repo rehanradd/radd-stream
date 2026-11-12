@@ -41,6 +41,7 @@ import search_fuzzy
 import did_you_mean
 import title_clean
 import mood_search
+import works
 import usage_stats
 
 if sys.platform.startswith("win"):
@@ -3155,6 +3156,26 @@ INDUSTRY_FILTER_SQL = {
                      " OR lower(p.language) LIKE '%malayalam%'"
                      " OR lower(p.language) LIKE '%kannada%')"),
     "anime": "(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')",
+    # Region keys (work-centric API): the ledger files these three
+    # regions across industry / country / language with no single
+    # column to trust — industry says `china` (1,385 rows), country
+    # says `china` (1,870), language says `chinese` (695) — so the
+    # predicate is the union, measured live 2026-11-12. Turkish is
+    # the same shape (588 rows across the three columns).
+    "chinese": ("(lower(p.industry) LIKE '%chinese%'"
+                " OR lower(p.industry) LIKE '%china%'"
+                " OR lower(p.country) LIKE '%china%'"
+                " OR lower(p.language) LIKE '%chinese%'"
+                " OR lower(p.language) LIKE '%mandarin%'"
+                " OR lower(p.language) LIKE '%cantonese%')"),
+    "korean": ("(lower(p.industry) LIKE '%korean%'"
+               " OR lower(p.industry) LIKE '%korea%'"
+               " OR lower(p.country) LIKE '%korea%'"
+               " OR lower(p.language) LIKE '%korean%')"),
+    "turkish": ("(lower(p.industry) LIKE '%turkish%'"
+                " OR lower(p.industry) LIKE '%turkey%'"
+                " OR lower(p.country) LIKE '%turk%'"
+                " OR lower(p.language) LIKE '%turkish%')"),
 }
 
 INDUSTRY_KEYS = tuple(INDUSTRY_FILTER_SQL)
@@ -3165,6 +3186,9 @@ INDUSTRY_LABELS = {
     "pakistani": "Pakistani",
     "south_indian": "South Indian",
     "anime": "Anime",
+    "chinese": "Chinese",
+    "korean": "Korean",
+    "turkish": "Turkish",
 }
 
 #: content_type -> display label for the facets types group. A type the
@@ -3317,11 +3341,161 @@ def _dedupe_search_page(conn, where_sql, params, step1_order, page, limit):
     return [int(title_clean.representative(g)["id"]) for g in page_groups], total
 
 
+def _facet_filter_clauses(*, content_type: str = "", industry: str = "",
+                          genre: str = "", language: str = "",
+                          quality: str = "", free_only: bool = False):
+    """The browse facet filters as WHERE clauses on alias `p`, shared by
+    `/api/v1/posts` and `/api/v1/works` so a chip means the same rows on
+    both surfaces. Returns (clauses, params), in the posts route's
+    historical order: type, industry, genre, language, quality,
+    free-only. Every value is matched against a column the ledger
+    already writes, and only the fixed clauses below are interpolated
+    — the request string never reaches the SQL. An unknown value is
+    ignored (the honest answer is the unfiltered list), not guessed at.
+
+    `industry` is already resolved by the caller (`industry=` wins,
+    `region=` is its alias). The language value is a bucket when it
+    names one (`works.language_sql`: `hindi`, `dual`, `unknown`, …)
+    and falls back to the old substring LIKE otherwise, so facet chips
+    (`original audio`) and old clients keep working."""
+    clauses: list = []
+    params: list = []
+    if content_type:
+        # `type=anime` is the one filter value that is not a `content_type`: the
+        # ledger stores animation as a flag on the post (`is_animated`, plus an
+        # `industry` of Anime) and only ever writes movie / series /
+        # complete_season / ongoing_season to `content_type`. Exact equality on
+        # the type column therefore answered that chip with zero rows forever.
+        # Answer it from the flag the data actually carries, the way the
+        # operator dashboard already counts animated titles.
+        if content_type.strip().lower() == "anime":
+            clauses.append("(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')")
+        else:
+            clauses.append("p.content_type = ?")
+            params.append(content_type)
+
+    industry_key = industry.strip().lower()
+    industry_sql = INDUSTRY_FILTER_SQL.get(industry_key)
+    if industry_sql:
+        clauses.append(industry_sql)
+
+    genre_key = genre.strip().lower()
+    genre_sql = GENRE_FILTER_SQL.get(genre_key)
+    if genre_sql:
+        clauses.append(genre_sql[0])
+        params.extend(genre_sql[1])
+
+    # Language is a property of the post row, like genre. A bucket value
+    # (`hindi`, `dual`, `unknown`, …) uses the normalised predicate, so a
+    # Hindi+English row answers both `language=hindi` and
+    # `language=dual`; anything else keeps the old substring match.
+    language_key = language.strip().lower()
+    if language_key:
+        bucket_sql = works.language_sql(language_key)
+        if bucket_sql is not None:
+            clauses.append(bucket_sql[0])
+            params.extend(bucket_sql[1])
+        else:
+            clauses.append(r"lower(p.language) LIKE ? ESCAPE '\'")
+            params.append("%" + _like_escape(language_key) + "%")
+
+    # Quality is a property of a release, not of the post row, so it is an
+    # existence test over the prints: "this work has at least one 4K/1080p/720p
+    # release", not "its single best release is exactly this tier".
+    quality_key = quality.strip().lower()
+    quality_sql = {
+        "4k": "(upper(rq.quality) LIKE '%2160%' OR upper(rq.quality) LIKE '%4K%'"
+              " OR upper(rq.quality) LIKE '%UHD%')",
+        "1080p": "upper(rq.quality) LIKE '%1080%'",
+        "720p": "upper(rq.quality) LIKE '%720%'",
+    }.get(quality_key)
+    if quality_sql:
+        clauses.append(
+            "EXISTS (SELECT 1 FROM releases rq"
+            f" WHERE rq.post_id = p.id AND rq.quality IS NOT NULL AND {quality_sql})")
+
+    if free_only:
+        # "Included in my plan" for a free viewer: the work has at least
+        # one print the free gate lets through. Mirrors the client's
+        # VipQualityGate — 1080p/2160p/4K/UHD/Full-HD are premium, and
+        # under a 480p operator cap 720p joins them. A print with no
+        # quality label counts as free, the same as the client treats an
+        # unknown band.
+        premium_markers = ["%1080%", "%2160%", "%4K%", "%UHD%",
+                           "%FULL HD%", "%FULLHD%", "%FHD%"]
+        if panel_feed.read_free_quality_cap() == "480p":
+            premium_markers.append("%720%")
+        premium_sql = " OR ".join(
+            "upper(rq.quality) LIKE ?" for _ in premium_markers)
+        clauses.append(
+            "EXISTS (SELECT 1 FROM releases rq WHERE rq.post_id = p.id AND"
+            f" (rq.quality IS NULL OR TRIM(rq.quality) = '' OR NOT ({premium_sql})))")
+        params.extend(premium_markers)
+    return clauses, params
+
+
+def _newest_suggestions(conn, base_url: str = "", limit: int = 5) -> list[dict]:
+    """The empty-search fallback: the newest public posts, so a query
+    that matches nothing still offers something to try instead of a
+    bare zero. Two-step like the list route: the ids first, from
+    `posts` alone (cheap), then the counts for just those ids — the
+    one-query grouped shape over the whole catalog is the ~4.8 s shape
+    the two-step exists to avoid. The adult clause and the panel hides
+    apply exactly as on the list."""
+    hidden = panel_feed.hidden_work_ids()
+    hidden_sql = ""
+    hidden_params: list = []
+    if hidden:
+        ids = sorted(hidden)[:panel_feed.HIDDEN_IDS_CAP]
+        hidden_sql = " AND p.id NOT IN (%s)" % ",".join("?" for _ in ids)
+        hidden_params = ids
+    id_rows = conn.execute(
+        "SELECT p.id FROM posts p"
+        f" WHERE {redact.adult_clause('p')}{hidden_sql}"
+        f" ORDER BY {_NEWEST_YEAR_SQL} DESC, p.id DESC LIMIT ?",
+        hidden_params + [limit]).fetchall()
+    ids = [int(r["id"]) for r in id_rows]
+    if not ids:
+        return []
+    rows = conn.execute(
+        "SELECT p.id, p.clean_title, p.title, p.year, p.content_type, p.seasons,"
+        " p.poster_url, p.backdrop_urls, p.imdb_rating, p.imdb_id, p.tmdb_id,"
+        " p.genres, p.is_animated, p.industry, p.country, p.language,"
+        " COUNT(DISTINCT r.id) as release_count,"
+        " COUNT(DISTINCT s.id) as source_count"
+        " FROM posts p"
+        " LEFT JOIN releases r ON r.post_id = p.id"
+        " LEFT JOIN download_sources s ON s.release_id = r.id"
+        " WHERE p.id IN (" + ", ".join("?" for _ in ids) + ") GROUP BY p.id",
+        ids).fetchall()
+    by_id = {int(r["id"]): r for r in rows}
+    ordered = [by_id[i] for i in ids if i in by_id]
+    return _enrich_post_rows(conn, ordered, base_url)
+
+
+def _poor_match_correction(conn, query: str, result_titles) -> str | None:
+    """The correction for a typo that still returned rows — or None.
+
+    The served titles' own words are excluded from the correction:
+    `salar` is one edit from the served `salary` too, and offering
+    that back would be no correction at all. The next closest word
+    (`salaar`) is the one worth surfacing. A correction whose every
+    token is already an exact result token adds nothing and is not
+    offered either — the caller only calls this after
+    `works.is_poor_match` said the results match no query token."""
+    exclude = set()
+    for title in result_titles:
+        exclude.update(search_fuzzy.tokenize(title or ""))
+    correction = did_you_mean.suggest_correction(
+        conn, query, exclude=frozenset(exclude))
+    return correction["query"] if correction is not None else None
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
                      quality: str = "", sort: str = "", free_only: bool = False,
-                     work_ref: str = "", language: str = "") -> dict:
+                     work_ref: str = "", language: str = "", region: str = "") -> dict:
     _ensure_schema()
     try:
         limit = int(limit)
@@ -3348,6 +3522,11 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # Adult-flagged posts are stored in the DB but never exposed via the API
         where_clauses = [redact.adult_clause("p")]
         params = []
+        # How many params the search clause (index 1) owns. The fallbacks
+        # below slice `params` at this count, so it is the count of the
+        # clause actually appended — 4 for the LIKE, 1 for a work_ref id,
+        # 12 for a whole-word clause — never a hardcoded 4.
+        search_param_count = 4
         if work_ref:
             # A minted handle names one work: the title search is not consulted
             # at all, and a handle that resolves to nothing answers an empty
@@ -3366,90 +3545,43 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 }
             where_clauses.append("p.id = ?")
             params.append(post_id)
+            search_param_count = 1
         elif query:
-            # The omnibox matches actors too: `cast_names` is the scraped
-            # cast list on the post, so "Shah Rukh Khan" finds his films the
-            # same way a title does. The fuzzy fallback below stays
-            # title-only — a mistyped actor name falls back to close titles,
-            # not to guessed names.
-            where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
-            q_param = f"%{query}%"
-            params.extend([q_param, q_param, q_param, q_param])
-        if content_type:
-            # `type=anime` is the one filter value that is not a `content_type`: the
-            # ledger stores animation as a flag on the post (`is_animated`, plus an
-            # `industry` of Anime) and only ever writes movie / series /
-            # complete_season / ongoing_season to `content_type`. Exact equality on
-            # the type column therefore answered that chip with zero rows forever.
-            # Answer it from the flag the data actually carries, the way the
-            # operator dashboard already counts animated titles.
-            if content_type.strip().lower() == "anime":
-                where_clauses.append("(p.is_animated = 1 OR lower(p.industry) LIKE '%anime%')")
+            if works.is_whole_word_query(query):
+                # A single stopword ("the") or a 1–2 letter token matches
+                # whole words only: `the` as a substring matches `other`,
+                # `together`, `them` — 43,577 rows of junk live. Cast
+                # names are excluded here: a stopword inside a cast list
+                # is junk, not a match.
+                clause, clause_params = works.whole_word_title_clause(query)
+                where_clauses.append(clause)
+                params.extend(clause_params)
+                search_param_count = len(clause_params)
             else:
-                where_clauses.append("p.content_type = ?")
-                params.append(content_type)
-
-        # Facet filters. Every value is matched against a column the ledger already
-        # writes, and only the fixed clauses below are interpolated — the request
-        # string never reaches the SQL. An unknown value is ignored (the honest
-        # answer is the unfiltered list), not guessed at.
-        industry_key = industry.strip().lower()
-        industry_sql = INDUSTRY_FILTER_SQL.get(industry_key)
-        if industry_sql:
-            where_clauses.append(industry_sql)
-
-        genre_key = genre.strip().lower()
-        genre_sql = GENRE_FILTER_SQL.get(genre_key)
-        if genre_sql:
-            where_clauses.append(genre_sql[0])
-            params.extend(genre_sql[1])
-
-        # Language is a property of the post row, like genre: one token
-        # matched as a substring, so a Hindi+English row answers both
-        # `language=hindi` and `language=english` — the same rows the
-        # facets language counts name. The value is caller-supplied, so it
-        # is escaped before it reaches the LIKE pattern.
-        language_key = language.strip().lower()
-        if language_key:
-            where_clauses.append(r"lower(p.language) LIKE ? ESCAPE '\'")
-            params.append("%" + _like_escape(language_key) + "%")
-
-        # Quality is a property of a release, not of the post row, so it is an
-        # existence test over the prints: "this work has at least one 4K/1080p/720p
-        # release", not "its single best release is exactly this tier".
-        quality_key = quality.strip().lower()
-        quality_sql = {
-            "4k": "(upper(rq.quality) LIKE '%2160%' OR upper(rq.quality) LIKE '%4K%'"
-                  " OR upper(rq.quality) LIKE '%UHD%')",
-            "1080p": "upper(rq.quality) LIKE '%1080%'",
-            "720p": "upper(rq.quality) LIKE '%720%'",
-        }.get(quality_key)
-        if quality_sql:
-            where_clauses.append(
-                "EXISTS (SELECT 1 FROM releases rq"
-                f" WHERE rq.post_id = p.id AND rq.quality IS NOT NULL AND {quality_sql})")
-
-        if free_only:
-            # "Included in my plan" for a free viewer: the work has at least
-            # one print the free gate lets through. Mirrors the client's
-            # VipQualityGate — 1080p/2160p/4K/UHD/Full-HD are premium, and
-            # under a 480p operator cap 720p joins them. A print with no
-            # quality label counts as free, the same as the client treats an
-            # unknown band.
-            premium_markers = ["%1080%", "%2160%", "%4K%", "%UHD%",
-                               "%FULL HD%", "%FULLHD%", "%FHD%"]
-            if panel_feed.read_free_quality_cap() == "480p":
-                premium_markers.append("%720%")
-            premium_sql = " OR ".join(
-                "upper(rq.quality) LIKE ?" for _ in premium_markers)
-            where_clauses.append(
-                "EXISTS (SELECT 1 FROM releases rq WHERE rq.post_id = p.id AND"
-                f" (rq.quality IS NULL OR TRIM(rq.quality) = '' OR NOT ({premium_sql})))")
-            params.extend(premium_markers)
+                # The omnibox matches actors too: `cast_names` is the scraped
+                # cast list on the post, so "Shah Rukh Khan" finds his films the
+                # same way a title does. The fuzzy fallback below stays
+                # title-only — a mistyped actor name falls back to close titles,
+                # not to guessed names.
+                where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
+                q_param = f"%{query}%"
+                params.extend([q_param, q_param, q_param, q_param])
+        # Facet filters, shared with /api/v1/works (see
+        # `_facet_filter_clauses`). `region=` is the alias for
+        # `industry=`; an explicit `industry=` wins.
+        facet_clauses, facet_params = _facet_filter_clauses(
+            content_type=content_type,
+            industry=industry.strip() or region.strip(),
+            genre=genre, language=language, quality=quality,
+            free_only=free_only)
+        where_clauses.extend(facet_clauses)
+        params.extend(facet_params)
 
         # No play-count column exists, so "trending" cannot be invented from views.
         # Rank instead by the only popularity-adjacent figure the ledger carries:
         # how many prints and mirrors the catalog has for the work.
+        # `most_copies` is the honest alias for the same order; `trending`
+        # stays as the back-compatible name.
         sort_key = sort.strip().lower()
         if sort_key == "rating":
             order_sql = ("(p.imdb_rating IS NULL OR TRIM(p.imdb_rating) = '') ASC,"
@@ -3457,7 +3589,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         elif sort_key == "title":
             order_sql = ("lower(COALESCE(NULLIF(TRIM(p.clean_title), ''), p.title)) ASC,"
                          " p.id DESC")
-        elif sort_key == "trending":
+        elif sort_key in ("trending", "most_copies"):
             order_sql = "(release_count + source_count) DESC, p.id DESC"
         elif sort_key in ("", "newest"):
             # Newest-first is the default: the list walks down through time.
@@ -3491,11 +3623,13 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         mood_words = mood_search.moods_for_query(query) if query else []
         mood_genres = mood_search.genres_for_query(query) if query else []
         # The title LIKE is always clause 1; how many leading params it
-        # owns (4 for the LIKE, N for a replacement clause). Every
-        # fallback below replaces clause 1 and must slice the params at
-        # this count, not at a hardcoded 4 — a replacement clause owns a
-        # different number of params than the LIKE it replaced.
-        title_param_count = 4
+        # owns. Every fallback below replaces clause 1 and must slice the
+        # params at this count, not at a hardcoded 4 — a replacement
+        # clause owns a different number of params than the LIKE it
+        # replaced. The count is the search clause's own (see
+        # `search_param_count` above): 4 for the LIKE, 1 for a work_ref
+        # id, 12 for a whole-word clause.
+        title_param_count = search_param_count
         # The exact search missed: the fallbacks below run from this, and
         # the correction is offered whenever it did — even when the fuzzy
         # fallback already found rows, so the UI can say what produced them.
@@ -3558,6 +3692,15 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             if correction is not None:
                 did_you_mean_query = correction["query"]
 
+        # Nothing matched at all — no exact, no fuzzy, no correction, no
+        # mood: offer the newest additions instead of a bare zero. Only
+        # on the miss path, and only for a real query: an unfiltered
+        # empty list is normal browsing, not a failed search.
+        suggestions = None
+        if query and not work_ref and total == 0 and not fuzzy \
+                and did_you_mean_query is None:
+            suggestions = _newest_suggestions(conn, base_url)
+
         # Two-step page resolution: the page's ids first, from `posts` alone,
         # then the counts for just those ids. The one-query shape groups the
         # release/source fan-out for EVERY matching post before sorting, so a
@@ -3611,7 +3754,7 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 params + [limit + 1, offset]).fetchall()
             page_ids = [int(r["id"]) for r in page_rows[:limit]]
             if not page_ids:
-                return {
+                answer = {
                     "page": page,
                     "limit": limit,
                     "total": total,
@@ -3623,6 +3766,9 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                     "did_you_mean": did_you_mean_query,
                     "suggestion": did_you_mean_query,
                 }
+                if suggestions is not None:
+                    answer["suggestions"] = suggestions
+                return answer
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
         # it came from and the page we took it off. Both are our bookkeeping, so
@@ -3650,11 +3796,13 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             sql = (select_sql + f" WHERE {where_sql} GROUP BY p.id"
                    f" ORDER BY {order_sql} LIMIT ? OFFSET ?")
             rows = conn.execute(sql, params + [limit, offset]).fetchall()
-        if sort_key == "trending":
+        if sort_key in ("trending", "most_copies"):
             # Audit #17: the trending rail is the one-query path, so the
             # search dedupe above never runs on it — collapse the page
             # to one row per work here instead. `total` still counts
-            # rows (see _dedupe_page_rows).
+            # rows (see _dedupe_page_rows). `most_copies` is the same
+            # order under its honest name, so it dedupes identically —
+            # the two sorts must answer the same page.
             rows = _dedupe_page_rows(rows)
         if full:
             results = [dict(r) for r in rows]
@@ -3666,8 +3814,28 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             for item in results:
                 by_id[int(item["id"])] = item
             results = [by_id[i] for i in page_ids if i in by_id]
+        # The typo case with hits: the exact search returned rows, but
+        # none of them contains any query token exactly (`salar` → salary
+        # anime) while a correction exists — surface it instead of
+        # silently serving the wrong thing. The exact results stay
+        # served; only the suggestion is added. Bounded to small result
+        # sets: the correction pass is an extra title scan. This
+        # OVERRIDES the generic correction above when the served rows
+        # are a poor match: the generic pass offers the served word
+        # itself (`salary`, one edit from `salar`), which is no
+        # correction at all — the poor-match pass excludes the served
+        # words, so the next closest word (`salaar`) wins. When the
+        # served rows are a good match (`avtar` → old `Avtar` rows,
+        # correction `avatar`) `is_poor_match` is False and the generic
+        # correction stands untouched.
+        if (query and not work_ref and not exact_missed
+                and 0 < total <= 500 and results):
+            titles = [(item.get("clean_title") or item.get("title") or "")
+                      for item in results]
+            if works.is_poor_match(query, titles):
+                did_you_mean_query = _poor_match_correction(conn, query, titles)
         total_pages = max(1, (total + limit - 1) // limit)
-        return {
+        answer = {
             "page": page,
             "limit": limit,
             "total": total,
@@ -3679,6 +3847,9 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             "did_you_mean": did_you_mean_query,
             "suggestion": did_you_mean_query,
         }
+        if suggestions is not None:
+            answer["suggestions"] = suggestions
+        return answer
 
 
 def api_v1_get_trending(page: int = 1, limit: int = 20,
@@ -3690,9 +3861,650 @@ def api_v1_get_trending(page: int = 1, limit: int = 20,
     the same page through a dedicated route, so the rail and any other
     consumer read one contract. Delegating keeps the 10 s deadline, the
     adult clause, the hides and the envelope identical to /api/v1/posts.
+    `basis` says what the order is, so no client has to guess whether
+    "trending" means views: it means most copies (`sort=most_copies`
+    is the same order under its honest name).
     """
-    return api_v1_get_posts(page=page, limit=limit, content_type=content_type,
-                            sort="trending", base_url=base_url)
+    answer = api_v1_get_posts(page=page, limit=limit, content_type=content_type,
+                              sort="trending", base_url=base_url)
+    answer["basis"] = "most_copies"
+    answer["label"] = "Most copies"
+    return answer
+
+
+#: How long a grouped works list lives in-process. Grouping is a full
+#: scan of the filtered post set plus a Python union-find; the catalog
+#: changes only on batched merges, so a 120 s stale window on a browse
+#: list is the right trade for not paying that scan on every page.
+#: Keyed by the exact filter tuple (the candidate ids are a pure
+#: function of the query, so they are not part of the key).
+_WORKS_CACHE_TTL_SECONDS = 120.0
+_WORKS_CACHE_MAX_ENTRIES = 32
+_WORKS_LIST_CACHE: dict = {}
+
+#: The columns the grouping scan needs: identity for `works.group_posts`
+#: plus the display columns the representative is picked from. `slug`
+#: and `source_site` are there for one server-side decision only — the
+#: adult corroboration gate (`fast_fetch.adult_rule_agrees` reads the
+#: row's own texts) — and never reach a response: the views drop them.
+_WORKS_GROUP_COLS = (
+    "p.id, p.clean_title, p.title, p.year, p.content_type, p.is_animated,"
+    " p.imdb_id, p.tmdb_id, p.is_18_plus, p.poster_url, p.imdb_rating,"
+    " p.genres, p.language, p.industry, p.country, p.slug, p.source_site,"
+    " p.seasons"
+)
+
+
+def _adult_rule_agrees(row) -> bool:
+    """The adult fold's corroboration gate, applied at read time to the
+    works grouping: a flagged member hides its work only when the
+    shared rule re-derives the flag from the row's own texts. A flag
+    no rule can reproduce (a misflagged twin — Salaar carries one
+    live) excludes that member but does not hide the work. The import
+    is local, the way `_ensure_schema` does it: `fast_fetch` is the
+    ledger module, not a route dependency."""
+    import fast_fetch
+    return fast_fetch.adult_rule_agrees(row)
+
+
+def _works_cache_get(key):
+    entry = _WORKS_LIST_CACHE.get(key)
+    if entry is None:
+        return None
+    expires, value = entry
+    if time.monotonic() > expires:
+        del _WORKS_LIST_CACHE[key]
+        return None
+    return value
+
+
+def _works_cache_put(key, value):
+    if len(_WORKS_LIST_CACHE) >= _WORKS_CACHE_MAX_ENTRIES:
+        oldest = min(_WORKS_LIST_CACHE,
+                     key=lambda k: _WORKS_LIST_CACHE[k][0])
+        del _WORKS_LIST_CACHE[oldest]
+    _WORKS_LIST_CACHE[key] = (time.monotonic() + _WORKS_CACHE_TTL_SECONDS, value)
+
+
+def _works_pick_representative(rows_by_id, post_ids):
+    """The member post whose fields a work displays: has a poster, then
+    has a rating, then the most canonical title (fewest clean-title
+    tokens — the bare title beats its editioned copies, so the work
+    reads `Salaar`, not `Salaar - 1 - Ceasefire`), then the lowest id.
+    Deterministic; the work's numeric id stays the MINIMUM member post
+    id regardless of who represents it."""
+    best = None
+    best_key = None
+    for pid in post_ids:
+        row = rows_by_id.get(int(pid))
+        if row is None:
+            continue
+        tokens = works.work_title_tokens(
+            row["clean_title"] or row["title"] or "")
+        key = (1 if str(row["poster_url"] or "").strip() else 0,
+               1 if str(row["imdb_rating"] or "").strip() else 0,
+               -len(tokens),
+               -int(pid))
+        if best_key is None or key > best_key:
+            best, best_key = row, key
+    return best
+
+
+def _works_best_rating(rows_by_id, post_ids):
+    """The best-known rating of a work: the max parseable imdb_rating
+    across its members, or None when no member carries one."""
+    best = None
+    for pid in post_ids:
+        row = rows_by_id.get(int(pid))
+        if row is None:
+            continue
+        try:
+            value = float(str(row["imdb_rating"] or "").strip())
+        except (TypeError, ValueError):
+            continue
+        if best is None or value > best:
+            best = value
+    return best
+
+
+def _works_best_ids(rows_by_id, post_ids, rep_id=None):
+    """The best-known external ids of a work: the representative's when
+    it carries one, else the lowest-id member's. One member in ten
+    carries an id (Salaar: 1 of 9 live) — the work's face is the bare
+    title, which is usually the id-less copy, so the work would
+    otherwise answer with no ids at all. Deterministic; ids are
+    display data, never a grouping key here."""
+    best_imdb = ""
+    best_tmdb = None
+    ordered = []
+    if rep_id is not None:
+        ordered.append(int(rep_id))
+    ordered.extend(sorted(int(pid) for pid in post_ids
+                          if rep_id is None or int(pid) != int(rep_id)))
+    for pid in ordered:
+        row = rows_by_id.get(int(pid))
+        if row is None:
+            continue
+        if not best_imdb:
+            try:
+                best_imdb = (row["imdb_id"] or "").strip()
+            except (KeyError, IndexError, TypeError):
+                best_imdb = ""
+        if best_tmdb in (None, "", 0):
+            try:
+                best_tmdb = row["tmdb_id"]
+            except (KeyError, IndexError, TypeError):
+                best_tmdb = None
+        if best_imdb and best_tmdb not in (None, "", 0):
+            break
+    return best_imdb, best_tmdb
+
+
+def _works_post_counts(conn, post_ids):
+    """{post_id: (release_count, source_count, language)} for the given
+    ids — the page's members only, never the whole catalog."""
+    ids = [int(pid) for pid in post_ids]
+    if not ids:
+        return {}
+    rows = conn.execute(
+        "SELECT p.id, p.language,"
+        " COUNT(DISTINCT r.id) as release_count,"
+        " COUNT(DISTINCT s.id) as source_count"
+        " FROM posts p"
+        " LEFT JOIN releases r ON r.post_id = p.id"
+        " LEFT JOIN download_sources s ON s.release_id = r.id"
+        " WHERE p.id IN (" + ", ".join("?" for _ in ids) + ") GROUP BY p.id",
+        ids).fetchall()
+    return {int(r["id"]): (int(r["release_count"] or 0),
+                           int(r["source_count"] or 0),
+                           r["language"]) for r in rows}
+
+
+def _works_enrich_page(conn, groups, base_url: str) -> list[dict]:
+    """Project one page of grouped works in the posts list's shape.
+
+    Each work is its representative post's `post_brief` item (same
+    view, same art pair, same work handle, same subtitled flag), with
+    `id` replaced by the work id (minimum member post id) and the
+    work's own counts: `post_ids`, `post_count`, `release_count` /
+    `source_count` summed over members, and `languages`, the union of
+    the members' language buckets."""
+    member_ids: list[int] = []
+    for group in groups:
+        member_ids.extend(group["post_ids"])
+    counts = _works_post_counts(conn, member_ids)
+    id_rows = conn.execute(
+        "SELECT p.id, p.imdb_id, p.tmdb_id FROM posts p WHERE p.id IN ("
+        + ", ".join("?" for _ in member_ids) + ")",
+        member_ids).fetchall() if member_ids else []
+    ids_by_id = {int(r["id"]): r for r in id_rows}
+    rep_ids = sorted({int(g["rep_id"]) for g in groups})
+    rep_rows = conn.execute(
+        "SELECT " + _WORKS_GROUP_COLS + " FROM posts p WHERE p.id IN ("
+        + ", ".join("?" for _ in rep_ids) + ")",
+        rep_ids).fetchall() if rep_ids else []
+    rep_by_id = {int(r["id"]): r for r in rep_rows}
+    enriched = _enrich_post_rows(conn, [rep_by_id[i] for i in rep_ids
+                                        if i in rep_by_id], base_url)
+    enriched_by_id = {int(item["id"]): item for item in enriched}
+    out = []
+    for group in groups:
+        item = enriched_by_id.get(int(group["rep_id"]))
+        if item is None:
+            continue
+        item = dict(item)
+        item["id"] = int(group["work_id"])
+        item["post_ids"] = list(group["post_ids"])
+        item["post_count"] = int(group["post_count"])
+        release_count = 0
+        source_count = 0
+        buckets: set = set()
+        for pid in group["post_ids"]:
+            entry = counts.get(int(pid))
+            if entry is None:
+                continue
+            release_count += entry[0]
+            source_count += entry[1]
+            buckets |= works.language_buckets(entry[2])
+        item["release_count"] = release_count
+        item["source_count"] = source_count
+        item["languages"] = sorted(buckets)
+        # The work's external ids come from its best-known member, not
+        # only from the representative (which is usually the id-less
+        # bare title): Salaar's ids live on 1 of its 9 posts.
+        best_imdb, best_tmdb = _works_best_ids(
+            ids_by_id, group["post_ids"], rep_id=int(group["rep_id"]))
+        if best_imdb:
+            item["imdb_id"] = best_imdb
+        if best_tmdb not in (None, "", 0):
+            item["tmdb_id"] = best_tmdb
+        out.append(item)
+    return out
+
+
+def _works_sort_groups(groups, sort_key: str):
+    """Order grouped works the way the posts list orders posts."""
+    if sort_key == "rating":
+        return sorted(groups,
+                      key=lambda g: (-(g["best_rating"]
+                                       if g["best_rating"] is not None else -1.0),
+                                     -int(g["work_id"])))
+    if sort_key == "title":
+        return sorted(groups,
+                      key=lambda g: (tuple(g["title_tokens"]), -int(g["work_id"])))
+    if sort_key in ("trending", "most_copies"):
+        return sorted(groups,
+                      key=lambda g: (-int(g.get("copies") or 0),
+                                     -int(g["work_id"])))
+    if sort_key in ("", "newest"):
+        def year_of(group):
+            try:
+                return int(group["year"])
+            except (TypeError, ValueError):
+                return 0
+        return sorted(groups,
+                      key=lambda g: (-year_of(g), -max(g["post_ids"])))
+    return sorted(groups, key=lambda g: -int(g["work_id"]))
+
+
+def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
+                     limit: int = 20, full: bool = False,
+                     base_url: str = "", industry: str = "", genre: str = "",
+                     quality: str = "", sort: str = "", free_only: bool = False,
+                     work_ref: str = "", language: str = "", region: str = "") -> dict:
+    """GET /api/v1/works — one work per movie/series.
+
+    The same envelope and the same query params as `/api/v1/posts`
+    (plus `region=`, the alias for `industry=`), but the rows are
+    grouped first (`works.group_posts`: fuzzy title + year, never ids
+    alone) and the page is a page of WORKS. The adult rule is applied
+    at work level, in the grouping: a group is dropped whole only
+    when a flagged member's flag is corroborated
+    (`fast_fetch.adult_rule_agrees` — the rule re-derived from the
+    row's own texts). A flagged member that does not corroborate is
+    excluded from the work but does not hide it — Salaar carries one
+    such twin live. That is why the grouping scan reads flagged rows
+    too instead of filtering them out first. A query matching only
+    flagged rows answers an empty page, indistinguishable from no
+    match.
+
+    Search reuses the posts machinery exactly: the LIKE (actors
+    included), the whole-word rule for single stopwords, the mood
+    fallback, the one-edit fuzzy fallback, and `did_you_mean` — on a
+    miss and, for small result sets, on a poor match. The grouped
+    list is cached 120 s per filter tuple (see `_WORKS_CACHE_*`).
+    `full` is accepted for signature parity with the posts route and
+    ignored: the works list never publishes provenance in either mode.
+    """
+    _ensure_schema()
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(100, limit))
+    offset = max(0, (page - 1) * limit)
+    with get_db() as conn:
+        deadline = time.monotonic() + SEARCH_DEADLINE_SECONDS
+
+        def _search_deadline():
+            return 1 if time.monotonic() > deadline else 0
+
+        conn.set_progress_handler(_search_deadline, 1000)
+        effective_industry = industry.strip() or region.strip()
+        sort_key = sort.strip().lower()
+        empty_page = {
+            "page": page,
+            "limit": limit,
+            "total": 0,
+            "total_pages": 1,
+            "results": [],
+            "fuzzy": False,
+        }
+
+        # A minted handle names one work: resolve it to its post, then
+        # keep only the group holding that post. An unresolvable handle
+        # answers an empty page, never an error.
+        work_ref_post_id = None
+        if work_ref:
+            work_ref_post_id = _resolve_work_ref(conn, work_ref)
+            if work_ref_post_id is None:
+                return dict(empty_page)
+
+        # Search candidates: the post ids the query names, before
+        # grouping. None means "no title restriction" (no query, or a
+        # mood query answered from genres instead).
+        candidate_ids = None
+        fuzzy = False
+        did_you_mean_query = None
+        mood_words = mood_search.moods_for_query(query) if query else []
+        mood_genres = mood_search.genres_for_query(query) if query else []
+        mood_clause = None
+        mood_params: list = []
+        exact_missed = False
+        if query and not work_ref:
+            if works.is_whole_word_query(query):
+                clause, clause_params = works.whole_word_title_clause(query)
+                candidate_ids = [int(r["id"]) for r in conn.execute(
+                    f"SELECT p.id FROM posts p WHERE {clause}",
+                    clause_params).fetchall()]
+            else:
+                candidate_ids = [int(r["id"]) for r in conn.execute(
+                    "SELECT p.id FROM posts p WHERE"
+                    " (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?"
+                    " OR p.cast_names LIKE ?)",
+                    [f"%{query}%"] * 4).fetchall()]
+            exact_missed = not candidate_ids
+            if exact_missed and mood_genres \
+                    and not mood_search.strip_mood_words(query):
+                # Pure mood query: answer from the genre facet, like the
+                # posts route — no title restriction, a genre clause
+                # instead.
+                genre_clauses = []
+                for mood_genre in mood_genres:
+                    if mood_genre == "science fiction":
+                        genre_clauses.append(
+                            "(lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?"
+                            " OR lower(p.genres) LIKE ? OR lower(p.genres) LIKE ?)")
+                        mood_params.extend(["%sci-fi%", "%sci fi%", "%scifi%",
+                                            "%science fiction%"])
+                    else:
+                        genre_clauses.append("lower(p.genres) LIKE ?")
+                        mood_params.append(f"%{mood_genre}%")
+                mood_clause = "(" + " OR ".join(genre_clauses) + ")"
+                candidate_ids = None
+            elif exact_missed:
+                fuzzy_ids = _fuzzy_post_ids(conn, query)
+                if fuzzy_ids:
+                    candidate_ids = fuzzy_ids
+                    fuzzy = True
+            if exact_missed:
+                correction = did_you_mean.suggest_correction(conn, query)
+                if correction is not None:
+                    did_you_mean_query = correction["query"]
+
+        cache_key = (query, content_type, effective_industry, genre,
+                     language, quality, sort_key, free_only, work_ref)
+        groups = _works_cache_get(cache_key)
+        if groups is None:
+            facet_clauses, facet_params = _facet_filter_clauses(
+                content_type=content_type, industry=effective_industry,
+                genre=genre, language=language, quality=quality,
+                free_only=free_only)
+            clauses = list(facet_clauses)
+            params = list(facet_params)
+            if mood_clause is not None:
+                clauses.append(mood_clause)
+                params.extend(mood_params)
+            if candidate_ids is not None:
+                if not candidate_ids:
+                    # The title restriction names nothing: the grouping
+                    # scan is skipped outright — there is no work to find.
+                    groups = []
+                else:
+                    clauses.append("p.id IN (%s)"
+                                   % ", ".join("?" for _ in candidate_ids))
+                    params.extend(candidate_ids)
+            if groups is None:
+                hidden = panel_feed.hidden_work_ids()
+                if hidden:
+                    ids = sorted(hidden)[:panel_feed.HIDDEN_IDS_CAP]
+                    clauses.append("p.id NOT IN (%s)"
+                                   % ",".join("?" for _ in ids))
+                    params.extend(ids)
+                where_sql = " AND ".join(clauses) if clauses else "1 = 1"
+                rows = conn.execute(
+                    "SELECT " + _WORKS_GROUP_COLS + " FROM posts p"
+                    f" WHERE {where_sql}", params).fetchall()
+                rows_by_id = {int(r["id"]): r for r in rows}
+                groups = [g for g in works.group_posts(
+                              rows, adult_agrees=_adult_rule_agrees)
+                          if not g["flagged"] and g["post_ids"]]
+                if work_ref_post_id is not None:
+                    groups = [g for g in groups
+                              if work_ref_post_id in g["post_ids"]]
+                for group in groups:
+                    rep = _works_pick_representative(
+                        rows_by_id, group["post_ids"])
+                    group["rep_id"] = int(rep["id"]) \
+                        if rep is not None else int(group["work_id"])
+                    group["best_rating"] = _works_best_rating(
+                        rows_by_id, group["post_ids"])
+                if sort_key in ("trending", "most_copies"):
+                    # The copies order needs counts for EVERY work, not
+                    # just the page: one grouped query over the same
+                    # filtered post set, via a subselect (no giant IN
+                    # list), paid once per cache miss.
+                    count_rows = conn.execute(
+                        "SELECT r.post_id AS pid,"
+                        " COUNT(DISTINCT r.id) AS rc,"
+                        " COUNT(DISTINCT s.id) AS sc"
+                        " FROM releases r"
+                        " LEFT JOIN download_sources s ON s.release_id = r.id"
+                        " WHERE r.post_id IN (SELECT p.id FROM posts p"
+                        f" WHERE {where_sql}) GROUP BY r.post_id",
+                        params).fetchall()
+                    copies = {int(r["pid"]): int(r["rc"] or 0) + int(r["sc"] or 0)
+                              for r in count_rows}
+                    for group in groups:
+                        group["copies"] = sum(
+                            copies.get(int(pid), 0) for pid in group["post_ids"])
+                groups = _works_sort_groups(groups, sort_key)
+                _works_cache_put(cache_key, groups)
+        total = len(groups)
+        page_groups = groups[offset:offset + limit]
+        if page_groups:
+            results = _works_enrich_page(conn, page_groups, base_url)
+        else:
+            results = []
+        # The typo case with hits, over work titles: the exact search
+        # returned works, but none contains any query token exactly,
+        # while a correction exists. Same bound as the posts route
+        # (small result sets only — the correction is an extra scan).
+        if (query and not work_ref and not exact_missed
+                and did_you_mean_query is None and 0 < total <= 500
+                and results):
+            titles = [(item.get("clean_title") or item.get("title") or "")
+                      for item in results]
+            if works.is_poor_match(query, titles):
+                did_you_mean_query = _poor_match_correction(conn, query, titles)
+        suggestions = None
+        if query and not work_ref and total == 0 and not fuzzy \
+                and did_you_mean_query is None:
+            suggestions = _newest_suggestions(conn, base_url)
+        answer = {
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": max(1, (total + limit - 1) // limit),
+            "results": results,
+            "fuzzy": fuzzy,
+            "moods": mood_words,
+            "mood_genres": mood_genres,
+            "did_you_mean": did_you_mean_query,
+        }
+        if suggestions is not None:
+            answer["suggestions"] = suggestions
+        return answer
+
+
+def api_v1_get_work_detail(work_id, full: bool = False,
+                           base_url: str = "", ladder: bool = True) -> dict | None:
+    """GET /api/v1/works/<id> — one work, every copy of it.
+
+    `<id>` is a post id: the work is the group holding it (the list
+    route's `id` is the minimum member post id). The response is the
+    representative post's `post_detail` shape — same view, same art
+    pair, same work handle — with the releases of EVERY member post
+    merged in (`_fetch_releases_with_sources`, the post detail's own
+    loader, so a work's print is its post's print), season/episode
+    normalised to `S01`/`E01`, and the work's own keys: `post_ids`,
+    `post_count`, `release_count`, `source_count`, `languages` (the
+    members' language buckets), `episode_guide` (episodes 1..max per
+    season with gaps marked, never the representative's `seasons`
+    column), `is_ongoing`, and `latest_episode_added_at` (the newest
+    release timestamp in the work — the new-episode signal a client
+    diffs across polls; there is no snapshot table).
+
+    A work answers None, exactly like a missing work, when a flagged
+    member's flag is corroborated (`fast_fetch.adult_rule_agrees`):
+    the flag belongs to the work, not to one row. A flagged member
+    that does not corroborate is excluded from the work but does not
+    hide it. That is stricter than `/api/v1/posts/<id>`, which still
+    serves an unflagged twin per row — the fold migration will close
+    that gap for posts; works does not wait for it.
+    """
+    _ensure_schema()
+    try:
+        seed_id = int(work_id)
+    except (TypeError, ValueError):
+        return None
+    with get_db() as conn:
+        seed = conn.execute(
+            "SELECT * FROM posts WHERE id = ?", (seed_id,)).fetchone()
+        if not seed or seed["is_18_plus"]:
+            return None
+        # The candidate set for this work's group: the same ids, or a
+        # title sharing the first meaningful token, inside the year
+        # window the merge allows. The title scan is a substring LIKE
+        # over clean_title — the same cost class as the fuzzy candidate
+        # pass — and the year window bounds it.
+        tokens = works.work_title_tokens(seed["clean_title"] or seed["title"] or "")
+        meaningful = [t for t in tokens if t not in works.STOPWORDS and len(t) >= 3]
+        token = meaningful[0] if meaningful else (max(tokens, key=len) if tokens else "")
+        try:
+            year = int(seed["year"])
+        except (TypeError, ValueError):
+            year = None
+        like_params: list = []
+        like_sql = "1 = 0"
+        if token:
+            like_sql = "lower(p.clean_title) LIKE ?"
+            like_params.append("%" + token + "%")
+            if year is not None and 1900 <= year <= 2100:
+                like_sql += (" AND (p.year IS NULL OR p.year = 0"
+                             " OR p.year BETWEEN ? AND ?)")
+                like_params.extend([year - 1, year + 1])
+        imdb_id = (seed["imdb_id"] or "").strip()
+        tmdb_id = seed["tmdb_id"]
+        rows = conn.execute(
+            "SELECT " + _WORKS_GROUP_COLS + " FROM posts p WHERE"
+            " ((p.imdb_id = ? AND p.imdb_id <> '')"
+            " OR (p.tmdb_id = ? AND p.tmdb_id IS NOT NULL)"
+            f" OR ({like_sql}))",
+            [imdb_id, tmdb_id if tmdb_id not in (None, "") else -1]
+            + like_params).fetchall()
+        groups = works.group_posts(rows, adult_agrees=_adult_rule_agrees)
+        group = next((g for g in groups if seed_id in g["post_ids"]), None)
+        if group is None:
+            group = {"work_id": seed_id, "post_ids": [seed_id],
+                     "flagged_ids": [], "flagged": False,
+                     "title_tokens": tuple(tokens),
+                     "year": str(year) if year else "ny", "post_count": 1}
+        if group["flagged"] or not group["post_ids"]:
+            return None
+        member_ids = [int(pid) for pid in group["post_ids"]]
+        member_rows = conn.execute(
+            "SELECT " + _WORKS_GROUP_COLS + " FROM posts p WHERE p.id IN ("
+            + ", ".join("?" for _ in member_ids) + ")",
+            member_ids).fetchall()
+        rows_by_id = {int(r["id"]): r for r in member_rows}
+        rep = _works_pick_representative(rows_by_id, member_ids)
+        if rep is None:
+            return None
+        rep_full = conn.execute(
+            "SELECT * FROM posts WHERE id = ?", (int(rep["id"]),)).fetchone()
+        if rep_full is None:
+            return None
+        if full:
+            p_dict = dict(rep_full)
+            p_dict["source_pages"] = [dict(r) for r in conn.execute(
+                "SELECT source_site, url, source_title FROM post_sources WHERE post_id = ?",
+                (int(rep["id"]),)).fetchall()]
+        else:
+            p_dict = redact.project(rep_full, "post_detail")
+            p_dict.update(_art_pair(rep_full, base_url))
+            p_dict["work_ref"] = _work_ref(rep_full)
+        try:
+            title = rep_full["clean_title"] or rep_full["title"] or ""
+            work_type = catalog_v2.work_type_for(
+                rep_full["content_type"] or "movie",
+                int(rep_full["is_animated"] or 0), title)
+            key = catalog_v2.work_key_for(
+                title, rep_full["year"], work_type,
+                rep_full["imdb_id"] or "", rep_full["tmdb_id"])
+            work = conn.execute(
+                "SELECT runtime_minutes FROM cat_works WHERE work_key = ?",
+                (key,)).fetchone()
+            if work is not None and work["runtime_minutes"]:
+                p_dict["runtime_minutes"] = int(work["runtime_minutes"])
+        except sqlite3.Error:
+            pass
+        release_rows, rel_list = _fetch_releases_with_sources(
+            conn, member_ids, full=full, base_url=base_url)
+        if not full:
+            # One format for season/episode in this response: S01/E01.
+            # The option-group scopes are normalised the same way, by
+            # passing normalised release rows to `_option_groups` — it
+            # groups by (season, episode), so normalising first is what
+            # folds `1` and `S01` into one scope.
+            norm_releases = []
+            for rel_row, r_dict in zip(release_rows, rel_list):
+                season = works.parse_season(rel_row["season"])
+                episode = works.parse_episode(rel_row["episode"])
+                r_dict["season"] = works.format_season(season) if season else None
+                r_dict["episode"] = works.format_episode(episode) if episode else None
+                norm = dict(rel_row)
+                norm["season"] = r_dict["season"]
+                norm["episode"] = r_dict["episode"]
+                norm_releases.append(norm)
+            p_dict["option_groups"] = (_option_groups(norm_releases, rel_list)
+                                       if ladder else [])
+        p_dict["releases"] = rel_list
+        p_dict["id"] = int(group["work_id"])
+        p_dict["post_ids"] = member_ids
+        p_dict["post_count"] = len(member_ids)
+        p_dict["release_count"] = len(release_rows)
+        p_dict["source_count"] = sum(len(r.get("sources") or [])
+                                     for r in rel_list)
+        buckets: set = set()
+        for row in member_rows:
+            buckets |= works.language_buckets(row["language"])
+        p_dict["languages"] = sorted(buckets)
+        # Best-known external ids, as on the list: the representative
+        # is usually the id-less bare title, while one member in ten
+        # carries the IMDb/TMDb id (Salaar: 1 of 9 live).
+        best_imdb, best_tmdb = _works_best_ids(
+            rows_by_id, member_ids, rep_id=int(rep["id"]))
+        if best_imdb:
+            p_dict["imdb_id"] = best_imdb
+        if best_tmdb not in (None, "", 0):
+            p_dict["tmdb_id"] = best_tmdb
+        seasons, latest = works.build_seasons(release_rows)
+        p_dict["episode_guide"] = seasons
+        # A "new episode" signal is meaningless for a film: the field
+        # answers None unless some member is a series.
+        has_series = any((row["content_type"] or "") in
+                         ("series", "ongoing_season") for row in member_rows)
+        p_dict["latest_episode_added_at"] = latest if has_series else None
+        p_dict["is_ongoing"] = any(
+            (row["content_type"] or "") == "ongoing_season"
+            or works.title_marks_ongoing(row["clean_title"] or row["title"] or "")
+            for row in member_rows)
+        art: list = []
+        seen = set()
+        for pid in member_ids:
+            for entry in _season_artwork(conn, pid):
+                marker = (entry["kind"], entry["season"], entry["episode"],
+                          entry["url"])
+                if marker in seen:
+                    continue
+                seen.add(marker)
+                art.append(entry)
+        art.sort(key=lambda e: (e["season"],
+                                0 if e["kind"] == "season_poster" else 1,
+                                e["episode"]))
+        p_dict["season_artwork"] = art
+        return p_dict
 
 
 def api_v1_get_related(work_id, page: int = 1, limit: int = 20,
@@ -3928,6 +4740,66 @@ def api_v1_search_by_media(query: str = "", duration_s=None, resolution: str = "
         return result
 
 
+def _fetch_releases_with_sources(conn, post_ids, full: bool = False,
+                                 base_url: str = ""):
+    """The releases of one or more posts, with their sources, in the
+    post detail's own shape. Shared by `/api/v1/posts/<id>` (one post)
+    and `/api/v1/works/<id>` (every member post of a work): the source
+    order is the same evidence ladder in both — a probe-confirmed live
+    copy, then an unprobed claim, then expired, then dead last — and
+    the projection is the same (`release` view + `link_view`), so a
+    work's print is indistinguishable from its post's print. Returns
+    (release_rows, rel_list), ordered by post id, then release id."""
+    ids = [int(pid) for pid in post_ids]
+    if not ids:
+        return [], []
+    releases = conn.execute(
+        "SELECT * FROM releases WHERE post_id IN ("
+        + ", ".join("?" for _ in ids) + ") ORDER BY post_id ASC, id ASC",
+        ids).fetchall()
+    rel_list = []
+    for rel in releases:
+        sources = conn.execute("""
+            SELECT * FROM download_sources
+            WHERE release_id = ?
+            ORDER BY
+                CASE
+                    WHEN status IN ('dead', 'broken', 'gone') THEN 3
+                    WHEN status = 'expired' THEN 2
+                    WHEN status = 'active'
+                         AND last_checked_at IS NOT NULL
+                         AND http_status IS NOT NULL AND http_status <> 0 THEN 0
+                    ELSE 1
+                END ASC,
+                is_temporary ASC,
+                CASE service
+                    WHEN 'pixeldrain' THEN 1
+                    WHEN 'vegadrive' THEN 2
+                    WHEN 'hubcloud_10g' THEN 3
+                    WHEN 'fsl_r2' THEN 4
+                    WHEN 'fastdl' THEN 5
+                    WHEN 'google_cdn' THEN 6
+                    ELSE 99
+                END ASC
+        """, (rel["id"],)).fetchall()
+        # The ordering above is our own preference between servers; it is a
+        # query, not a field. Nothing that names a hoster leaves this box.
+        # The first key is audit critical 10's evidence ladder — a probe-
+        # confirmed live copy, then an unprobed claim (unchecked, never a
+        # promise), then expired, then dead last. `status = 'active' DESC`
+        # alone ranked a scraper's blanket 'active' above everything, dead
+        # links included.
+        if full:
+            r_dict = dict(rel)
+            r_dict["sources"] = [dict(s) for s in sources]
+        else:
+            r_dict = redact.project(rel, "release")
+            r_dict["label"] = redact.public_label(rel)
+            r_dict["sources"] = [link_view(s, base_url) for s in sources]
+        rel_list.append(r_dict)
+    return releases, rel_list
+
+
 def api_v1_get_post_detail(post_id: int, full: bool = False,
                            base_url: str = "", ladder: bool = True,
                            warm: bool = False, vip: bool = False,
@@ -3965,47 +4837,8 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
         except sqlite3.Error:
             pass
 
-        releases = conn.execute("SELECT * FROM releases WHERE post_id = ? ORDER BY id ASC", (post_id,)).fetchall()
-        rel_list = []
-        for rel in releases:
-            sources = conn.execute("""
-                SELECT * FROM download_sources
-                WHERE release_id = ?
-                ORDER BY
-                    CASE
-                        WHEN status IN ('dead', 'broken', 'gone') THEN 3
-                        WHEN status = 'expired' THEN 2
-                        WHEN status = 'active'
-                             AND last_checked_at IS NOT NULL
-                             AND http_status IS NOT NULL AND http_status <> 0 THEN 0
-                        ELSE 1
-                    END ASC,
-                    is_temporary ASC,
-                    CASE service
-                        WHEN 'pixeldrain' THEN 1
-                        WHEN 'vegadrive' THEN 2
-                        WHEN 'hubcloud_10g' THEN 3
-                        WHEN 'fsl_r2' THEN 4
-                        WHEN 'fastdl' THEN 5
-                        WHEN 'google_cdn' THEN 6
-                        ELSE 99
-                    END ASC
-            """, (rel["id"],)).fetchall()
-            # The ordering above is our own preference between servers; it is a
-            # query, not a field. Nothing that names a hoster leaves this box.
-            # The first key is audit critical 10's evidence ladder — a probe-
-            # confirmed live copy, then an unprobed claim (unchecked, never a
-            # promise), then expired, then dead last. `status = 'active' DESC`
-            # alone ranked a scraper's blanket 'active' above everything, dead
-            # links included.
-            if full:
-                r_dict = dict(rel)
-                r_dict["sources"] = [dict(s) for s in sources]
-            else:
-                r_dict = redact.project(rel, "release")
-                r_dict["label"] = redact.public_label(rel)
-                r_dict["sources"] = [link_view(s, base_url) for s in sources]
-            rel_list.append(r_dict)
+        releases, rel_list = _fetch_releases_with_sources(
+            conn, [post_id], full=full, base_url=base_url)
         if not full:
             p_dict["option_groups"] = (
                 _option_groups(releases, rel_list, vip=vip,
@@ -5012,6 +5845,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     sort=query_params.get("sort", [""])[0],
                     free_only=query_params.get("free_only", [""])[0] == "1",
                     work_ref=query_params.get("work_ref", [""])[0],
+                    region=query_params.get("region", [""])[0],
                 )
             except sqlite3.OperationalError as exc:
                 # The query ran past the 10 s search deadline: the progress
@@ -5024,6 +5858,54 @@ class DashboardHandler(BaseHTTPRequestHandler):
                                status=503)
                 return
             self.send_json(data)
+
+        elif path == "/api/v1/works":
+            # One work per movie/series (see api_v1_get_works): the same
+            # params as /api/v1/posts, the same page window, the same
+            # 503 on a search that runs past the deadline.
+            q = query_params.get("q", [""])[0]
+            ctype = query_params.get("type", [""])[0]
+            page = bounded_int(query_params, "page", 1, 1, 1_000_000)
+            limit = bounded_int(query_params, "limit", 20, 1, 100)
+            if (page - 1) * limit > POSTS_MAX_OFFSET:
+                self.send_json({"success": False, "error": "page_beyond_range",
+                                "max_offset": POSTS_MAX_OFFSET}, status=400)
+                return
+            try:
+                data = api_v1_get_works(
+                    query=q, content_type=ctype, page=page, limit=limit,
+                    full=full, base_url=base_url,
+                    industry=query_params.get("industry", [""])[0],
+                    genre=query_params.get("genre", [""])[0],
+                    language=query_params.get("language", [""])[0],
+                    quality=query_params.get("quality", [""])[0],
+                    sort=query_params.get("sort", [""])[0],
+                    free_only=query_params.get("free_only", [""])[0] == "1",
+                    work_ref=query_params.get("work_ref", [""])[0],
+                    region=query_params.get("region", [""])[0],
+                )
+            except sqlite3.OperationalError as exc:
+                if str(exc) != "interrupted":
+                    raise
+                self.send_json({"success": False, "error": "search_timeout"},
+                               status=503)
+                return
+            self.send_json(data)
+
+        elif path.startswith("/api/v1/works/"):
+            parts = path.strip("/").split("/")
+            if len(parts) == 4 and parts[3].isdigit():
+                detail = api_v1_get_work_detail(
+                    int(parts[3]), full=full, base_url=base_url,
+                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"))
+                if detail:
+                    self.send_json({"success": True, "data": detail})
+                else:
+                    # Identical to a row that never existed: an adult work
+                    # must not be distinguishable from an absent one.
+                    self.send_json({"success": False, "error": "Work not found"}, status=404)
+            else:
+                self.send_json({"error": "Invalid work ID"}, status=400)
 
         elif path == "/api/v1/trending":
             # The "Most Sources" rail as its own route (see api_v1_get_trending).

@@ -60,7 +60,8 @@ def _candidate_rows(conn, like_sql, score_sql, patterns, limit, *,
     ).fetchall()
 
 
-def correct_token(conn, token: str, *, limit: int = 1000) -> str | None:
+def correct_token(conn, token: str, *, limit: int = 1000,
+                  exclude: frozenset | None = None) -> str | None:
     """The title word `token` most likely meant, or None.
 
     One fuzzy pass over the catalog's title words (the same 3-gram +
@@ -79,6 +80,13 @@ def correct_token(conn, token: str, *, limit: int = 1000) -> str | None:
     near-miss is offered — but only when its evidence (prints +
     mirrors, summed over the window's rows carrying the word) strictly
     exceeds the exact word's. A well-printed exact word never corrects.
+
+    `exclude` is the poor-match path's word list: title words the
+    exact search already served (`salar` → the served `salary` is one
+    edit away too, and offering it back would be no correction at
+    all). Excluded words are skipped, so the next closest word wins
+    (`salaar`). On the miss path the set is empty and nothing changes.
+
 
     Recall: candidates are ordered by how many of the token's 3-grams
     the title shares, newest first within a tie — never by recency
@@ -138,21 +146,26 @@ def correct_token(conn, token: str, *, limit: int = 1000) -> str | None:
         best: str | None = None
         best_weight = exact_weight
         seen: set[str] = set()
+        excluded = exclude or frozenset()
         for word in words:
-            if word == token or word in seen:
+            if word == token or word in seen or word in excluded:
                 continue
             seen.add(word)
             if (evidence.get(word, 0) > best_weight
                     and search_fuzzy.edit_distance_le1(token, word)):
                 best, best_weight = word, evidence[word]
         return best
+    excluded = exclude or frozenset()
     for word in words:
+        if word in excluded:
+            continue
         if search_fuzzy.edit_distance_le1(token, word):
             return word
     return None
 
 
-def suggest_correction(conn, query: str, *, limit: int = 1000) -> dict | None:
+def suggest_correction(conn, query: str, *, limit: int = 1000,
+                       exclude: frozenset | None = None) -> dict | None:
     """The corrected query for `query`, or None when nothing corrects.
 
     Returns {"query": <corrected query>, "corrected_tokens": {<typed>:
@@ -168,7 +181,7 @@ def suggest_correction(conn, query: str, *, limit: int = 1000) -> dict | None:
     corrected: dict[str, str] = {}
     out_tokens: list[str] = []
     for token in tokens:
-        fixed = correct_token(conn, token, limit=limit)
+        fixed = correct_token(conn, token, limit=limit, exclude=exclude)
         if fixed is not None:
             corrected[token] = fixed
             out_tokens.append(fixed)
