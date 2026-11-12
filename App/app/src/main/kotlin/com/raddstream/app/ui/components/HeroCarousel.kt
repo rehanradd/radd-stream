@@ -1,5 +1,6 @@
 package com.raddstream.app.ui.components
 
+import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
@@ -35,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -59,6 +61,7 @@ import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.WireText
 import com.raddstream.app.ui.theme.PressHaptics
+import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.ui.theme.pressScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -128,24 +131,49 @@ fun HeroCarousel(
     // a LaunchedEffect key: restarting the effect would cancel an in-flight
     // animateScrollToPage and strand the pager between pages).
     var watchNowPressed by remember { mutableStateOf(false) }
+    // Samsung RTL (v1.1.2, Issue 3): the banner rotated every 5 s and a
+    // manual swipe or dot tap did not restart the clock, so the slide a
+    // viewer had just chosen could be yanked away a beat later — and
+    // Watch Now was a moving target. The advance loop below reads this
+    // timestamp per tick: any page change (auto or manual), any drag, and
+    // any dot tap restarts the full interval, so a viewer always gets the
+    // whole interval on the slide they are looking at.
+    var lastChangeMs by remember { mutableLongStateOf(SystemClock.uptimeMillis()) }
+    // A drag that snaps back to the same page changes no page, so the
+    // page effect below would not see it — the scroll flag is the record
+    // that the viewer is handling the banner right now.
+    LaunchedEffect(pagerState.isScrollInProgress) {
+        if (pagerState.isScrollInProgress) lastChangeMs = SystemClock.uptimeMillis()
+    }
     // Self-heal for the press flag: if the pressed slide is ever disposed mid-press
     // (a two-finger drag paging away under the finger), its release callback never
     // fires and the flag would stick true, parking auto-advance forever. A page
     // change means the pressed button is gone, so the flag is stale by definition.
     // A normal press can never trip this — the loop below holds its tick while the
     // flag is true, and a dot tap needs the finger to be on a dot, not the button.
-    LaunchedEffect(pagerState.currentPage) { watchNowPressed = false }
+    LaunchedEffect(pagerState.currentPage) {
+        watchNowPressed = false
+        lastChangeMs = SystemClock.uptimeMillis()
+    }
 
     LaunchedEffect(posts.size, reduceMotion, autoplay, intervalMs) {
         if (!autoplay || posts.size < 2 || reduceMotion) return@LaunchedEffect
         while (true) {
-            delay(intervalMs)
-            // A drag in progress, or a press on Watch Now: let the tick go. The
-            // press is the one that matters — an advance starting under a finger
-            // moves the button away before tap-up, and the tap is then cancelled
-            // instead of navigating. Waiting one more interval costs nothing;
-            // stealing the tap costs the whole action.
-            if (pagerState.isScrollInProgress || watchNowPressed) continue
+            // Tick, don't sleep the whole interval: a press, a drag, or a
+            // manual page change part-way through the wait must hold the
+            // advance, and a single long delay could not notice any of them
+            // until it had already fired. The tick is the only cost; the
+            // decision — and its test — lives in [shouldAdvanceHero].
+            delay(HERO_ADVANCE_TICK_MS)
+            if (!shouldAdvanceHero(
+                    nowMs = SystemClock.uptimeMillis(),
+                    lastChangeMs = lastChangeMs,
+                    intervalMs = intervalMs,
+                    isScrolling = pagerState.isScrollInProgress,
+                    watchNowPressed = watchNowPressed,
+                )
+            ) continue
+            lastChangeMs = SystemClock.uptimeMillis()
             pagerState.animateScrollToPage(nextHeroPage(pagerState.currentPage, posts.size))
         }
     }
@@ -179,7 +207,14 @@ fun HeroCarousel(
                 current = pagerState.currentPage,
                 // Scrolling is a suspending pager call, so the dot's click launches it on the
                 // composition's scope instead of pretending the tap can wait for it inline.
-                onSelect = { index -> scrollScope.launch { pagerState.animateScrollToPage(index) } },
+                // The tap also restarts the auto-advance clock outright: tapping the
+                // current dot changes no page, so the page effect would not see it,
+                // and without this the slide just chosen could still be yanked away
+                // a beat later (Samsung RTL v1.1.2, Issue 3).
+                onSelect = { index ->
+                    lastChangeMs = SystemClock.uptimeMillis()
+                    scrollScope.launch { pagerState.animateScrollToPage(index) }
+                },
                 // Top end, NOT the bottom strip: the dots' 48dp hit boxes used to sit
                 // in the buttons' band (bottom 20dp), declared after the pager so on
                 // top in z-order, and on a 6-dot hero they covered the Watch Now
@@ -198,12 +233,25 @@ fun HeroCarousel(
  * The banner's own placeholder while the first rail is still in flight. It keeps the real
  * hero's footprint ([heroHeight]) so the page does not jump when artwork lands, and a few
  * shimmering bars stand in for the title, badges and Watch Now button.
+ *
+ * Samsung RTL (v1.1.2, Issue 3): the first load read as a blank grey box for ~10 s.
+ * The skeleton was already here — but its shimmer band (0.16f) is near-invisible
+ * over the surfaceVariant base, so on a phone it read as flat grey, not as
+ * loading. The band runs stronger here ([HERO_SKELETON_SHIMMER_ALPHA]) and the
+ * brand mark sits in the middle, so the wait reads as "featured titles are
+ * loading" instead of an empty slot. The mark is decorative canvas, like the
+ * fallback card's, and stays out of the accessibility tree with the bars.
  */
 @Composable
 fun HeroSkeleton(modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth().height(heroHeight())) {
         Box(Modifier.fillMaxSize().padding(heroInset).clip(RoundedCornerShape(HERO_CORNER))) {
-            ShimmerBox(Modifier.fillMaxSize())
+            ShimmerBox(Modifier.fillMaxSize(), highlightAlpha = HERO_SKELETON_SHIMMER_ALPHA)
+            RaddStreamMark(
+                diameter = 56.dp,
+                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                modifier = Modifier.align(Alignment.Center),
+            )
             Column(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
@@ -517,6 +565,28 @@ internal fun nextHeroPage(currentPage: Int, pageCount: Int): Int =
     if (pageCount <= 0) 0 else (currentPage + 1) % pageCount
 
 /**
+ * Whether the auto-advance loop may take the next slide, pure so the timing
+ * is testable without a pager. A drag in progress, or a press on Watch Now,
+ * holds the tick — an advance starting under a finger moves the button away
+ * before tap-up, and the tap is then cancelled instead of navigating. And a
+ * full [intervalMs] must have passed since the last page change or user
+ * interaction ([lastChangeMs]): a manual swipe or dot tap restarts the clock,
+ * so the slide just chosen is never yanked away a beat later (Samsung RTL
+ * v1.1.2, Issue 3). A non-positive interval never advances on its own.
+ */
+internal fun shouldAdvanceHero(
+    nowMs: Long,
+    lastChangeMs: Long,
+    intervalMs: Long,
+    isScrolling: Boolean,
+    watchNowPressed: Boolean,
+): Boolean {
+    if (isScrolling || watchNowPressed) return false
+    if (intervalMs <= 0L) return false
+    return nowMs - lastChangeMs >= intervalMs
+}
+
+/**
  * The vertical bands the hero's top and bottom controls live in, in dp from the hero's
  * top edge — the single source of truth for both the layout above and the regression
  * test (HeroCarouselTest). The indicator is top-anchored at [HERO_INDICATOR_TOP_DP]
@@ -541,7 +611,24 @@ internal fun heroIndicatorOverlapsActionRow(heroHeightDp: Float, indicatorTopDp:
 
 private const val MAX_LANGUAGE_PILLS = 3
 private const val MAX_PILL_LENGTH = 18
-private const val AUTO_ADVANCE_MS = 5_000L
+/**
+ * Samsung RTL (v1.1.2, Issue 3): 5 s per slide made Watch Now a moving
+ * target — a viewer reading the slide and then reaching for the button got
+ * the slide yanked away. 8 s is a full read plus a comfortable tap, and the
+ * operator can still retune it from the panel (`hero_interval_s`); this is
+ * only the default when no theme has been published. HomeScreen, PanelTheme
+ * and the theme mirror in ServerSettingsRepository carry the same 8 s, so no
+ * layer silently reverts it to 5.
+ */
+private const val AUTO_ADVANCE_MS = 8_000L
+
+/** The auto-advance loop's tick: short enough to notice a press, a drag, or a
+ *  manual page change promptly, long enough to cost nothing. */
+private const val HERO_ADVANCE_TICK_MS = 500L
+
+/** The skeleton's shimmer band runs stronger than the shared default
+ *  (ShimmerBox), so the first-load hero reads as loading, not blank grey. */
+private const val HERO_SKELETON_SHIMMER_ALPHA = 0.30f
 
 /**
  * The page dot's hit box: 48dp square, the WCAG 2.2 AA minimum in both directions.

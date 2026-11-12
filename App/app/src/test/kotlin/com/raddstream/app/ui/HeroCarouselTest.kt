@@ -4,6 +4,7 @@ import com.raddstream.app.ui.components.HERO_INDICATOR_TOP_DP
 import com.raddstream.app.ui.components.heroIndicatorOverlapsActionRow
 import com.raddstream.app.ui.components.heroLanguagePills
 import com.raddstream.app.ui.components.nextHeroPage
+import com.raddstream.app.ui.components.shouldAdvanceHero
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -83,5 +84,35 @@ class HeroCarouselTest {
         // false, the witness is stale, not the fix.
         assertTrue(heroIndicatorOverlapsActionRow(320f, 320f - 20f - 48f))
         assertTrue(heroIndicatorOverlapsActionRow(400f, 400f - 20f - 48f))
+    }
+
+    // Samsung RTL (v1.1.2, Issue 3): the banner rotated every 5 s and a manual
+    // swipe or dot tap did not restart the clock, so Watch Now was a moving
+    // target. A full interval must pass since the last change or interaction
+    // before the loop takes the next slide.
+    @Test
+    fun advancesAfterAFullIntervalWhenIdle() {
+        assertTrue(shouldAdvanceHero(nowMs = 8_000L, lastChangeMs = 0L, intervalMs = 8_000L, isScrolling = false, watchNowPressed = false))
+        assertTrue(shouldAdvanceHero(nowMs = 9_000L, lastChangeMs = 0L, intervalMs = 8_000L, isScrolling = false, watchNowPressed = false))
+    }
+
+    @Test
+    fun holdsBeforeTheIntervalHasPassed() {
+        assertFalse(shouldAdvanceHero(nowMs = 7_999L, lastChangeMs = 0L, intervalMs = 8_000L, isScrolling = false, watchNowPressed = false))
+        // A manual interaction 1 s ago restarts the clock: the slide just
+        // chosen is never yanked away a beat later.
+        assertFalse(shouldAdvanceHero(nowMs = 9_000L, lastChangeMs = 8_000L, intervalMs = 8_000L, isScrolling = false, watchNowPressed = false))
+    }
+
+    @Test
+    fun holdsWhileScrollingOrPressingWatchNow() {
+        assertFalse(shouldAdvanceHero(nowMs = 20_000L, lastChangeMs = 0L, intervalMs = 8_000L, isScrolling = true, watchNowPressed = false))
+        assertFalse(shouldAdvanceHero(nowMs = 20_000L, lastChangeMs = 0L, intervalMs = 8_000L, isScrolling = false, watchNowPressed = true))
+    }
+
+    @Test
+    fun neverAdvancesOnANonPositiveInterval() {
+        assertFalse(shouldAdvanceHero(nowMs = 20_000L, lastChangeMs = 0L, intervalMs = 0L, isScrolling = false, watchNowPressed = false))
+        assertFalse(shouldAdvanceHero(nowMs = 20_000L, lastChangeMs = 0L, intervalMs = -1L, isScrolling = false, watchNowPressed = false))
     }
 }

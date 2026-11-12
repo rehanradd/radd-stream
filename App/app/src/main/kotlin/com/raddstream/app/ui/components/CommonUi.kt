@@ -171,11 +171,17 @@ fun SectionHeader(
  * flag came back identical. The bars are decorative: they carry no words, so
  * they leave the accessibility tree entirely ([clearAndSetSemantics]) instead
  * of standing in it as something a contrast check can sample.
+ *
+ * [highlightAlpha] is the band's strength: the shared 0.16f default is a
+ * calm sweep for small tiles, and a caller whose placeholder fills the
+ * screen (the hero skeleton) may ask for a stronger band so the wait reads
+ * as loading instead of a blank grey box (Samsung RTL v1.1.2, Issue 3).
  */
 @Composable
 fun ShimmerBox(
     modifier: Modifier = Modifier,
     shape: Shape = RectangleShape,
+    highlightAlpha: Float = SHIMMER_HIGHLIGHT_ALPHA,
 ) {
     val reduceMotion = rememberReduceMotion()
     val base = MaterialTheme.colorScheme.surfaceVariant
@@ -204,7 +210,7 @@ fun ShimmerBox(
                 val x = -band + travel * progress
                 drawRect(
                     Brush.linearGradient(
-                        colors = listOf(Color.Transparent, highlight.copy(alpha = 0.16f), Color.Transparent),
+                        colors = listOf(Color.Transparent, highlight.copy(alpha = highlightAlpha), Color.Transparent),
                         start = Offset(x, 0f),
                         end = Offset(x + band, size.height),
                     )
@@ -234,6 +240,9 @@ fun SkeletonBox(
 }
 
 private const val SHIMMER_PERIOD_MS = 1_400
+
+/** The shimmer band's default strength; the hero skeleton asks for more. */
+private const val SHIMMER_HIGHLIGHT_ALPHA = 0.16f
 
 /**
  * The catalog grid's one column rule: a tile is never narrower than 120dp, so a phone gets

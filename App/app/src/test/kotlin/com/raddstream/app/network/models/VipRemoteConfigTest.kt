@@ -526,7 +526,8 @@ class VipRemoteConfigTest {
         assertEquals("", config.theme.accent)
         assertFalse(config.theme.dynamicColor)
         assertTrue(config.theme.heroAutoplay)
-        assertEquals(5, config.theme.heroIntervalS)
+        // Samsung RTL (v1.1.2, Issue 3): the shipped default interval is 8 s.
+        assertEquals(8, config.theme.heroIntervalS)
         assertEquals(6, config.theme.heroMax)
     }
 

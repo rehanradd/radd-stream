@@ -21,14 +21,21 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -75,12 +82,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -251,6 +261,14 @@ fun DetailScreen(
                 // below — the bar used to repeat it, so the screen read
                 // its own name twice.
                 title = {},
+                // Samsung RTL (v1.1.2, Issue 9): in landscape the camera
+                // cutout sits on one side, and the Scaffold's insets do not
+                // carry it — the back arrow must clear the hole, not sit
+                // under it. The cutout inset is zero in portrait, so this
+                // changes nothing there.
+                modifier = Modifier.windowInsetsPadding(
+                    WindowInsets.displayCutout.only(WindowInsetsSides.Horizontal),
+                ),
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -261,14 +279,23 @@ fun DetailScreen(
             )
         },
     ) { paddingValues ->
+        // Issue 9: the safe-drawing insets (system bars + display cutout)
+        // are what keep the content off the camera hole and the system
+        // navigation in landscape; the Scaffold's padding alone does not
+        // carry the cutout. Every state of this screen goes through the
+        // same padding, so the skeleton and the error state cannot sit
+        // under the cutout either.
+        val safeDrawingPadding = WindowInsets.safeDrawing.asPaddingValues()
+        val layoutDirection = LocalLayoutDirection.current
+        val detailPadding = detailContentPadding(paddingValues, safeDrawingPadding, layoutDirection)
         val post = state.post
         when {
-            state.isLoading -> DetailSkeleton(Modifier.padding(paddingValues))
+            state.isLoading -> DetailSkeleton(Modifier.padding(detailPadding))
             state.error != null && post == null -> ErrorState(
                 title = "Couldn't load this title",
                 message = state.error ?: "Unable to load title.",
                 onRetry = viewModel::loadDetail,
-                modifier = Modifier.padding(paddingValues),
+                modifier = Modifier.padding(detailPadding),
             )
             post != null -> DetailContent(
                 post = post,
@@ -312,7 +339,7 @@ fun DetailScreen(
                 onShare = {
                     shareTitle(context, post) { viewModel.reportShare(post.workRef) }
                 },
-                contentPadding = paddingValues,
+                contentPadding = detailPadding,
             )
         }
     }
@@ -396,6 +423,43 @@ private fun rungScopeLabel(season: Int?, episode: Int?): String? = when {
     else -> null
 }
 
+/**
+ * The detail page's content padding, safe for landscape (Samsung RTL
+ * v1.1.2, Issue 9). The page is a single portrait column, and in
+ * landscape its full-width Play button ran off the right edge while the
+ * system navigation overlapped it: the Scaffold's padding covers the
+ * status and navigation bars, but not the display cutout — on a phone
+ * whose camera hole sits mid-height on one side in landscape, the
+ * content ran to the physical edge and under the hole.
+ *
+ * Every side takes the larger of the Scaffold's ask and the safe-drawing
+ * inset (system bars + cutout), so the two are never double-counted: in
+ * portrait the safe-drawing sides are zero and nothing changes; in
+ * landscape the cutout side wins and the content clears it. The 40 dp of
+ * breathing room stays on top of the bottom (Session 121, P-22: the
+ * bottom VIP card sat half-hidden behind the system nav bar when this
+ * was a fixed 40 dp while the Scaffold's own bottom padding was
+ * ignored). Pure so the max-per-side rule is testable without a device.
+ */
+internal fun detailContentPadding(
+    scaffoldPadding: PaddingValues,
+    safeDrawingPadding: PaddingValues,
+    layoutDirection: LayoutDirection,
+    baseHorizontal: Dp = 16.dp,
+    bottomBreathing: Dp = 40.dp,
+): PaddingValues = PaddingValues(
+    start = maxOf(baseHorizontal, safeDrawingPadding.calculateStartPadding(layoutDirection)),
+    top = maxOf(
+        scaffoldPadding.calculateTopPadding(),
+        safeDrawingPadding.calculateTopPadding(),
+    ),
+    end = maxOf(baseHorizontal, safeDrawingPadding.calculateEndPadding(layoutDirection)),
+    bottom = maxOf(
+        scaffoldPadding.calculateBottomPadding(),
+        safeDrawingPadding.calculateBottomPadding(),
+    ) + bottomBreathing,
+)
+
 @Composable
 private fun DetailContent(
     post: PostDetail,
@@ -452,16 +516,11 @@ private fun DetailContent(
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            top = contentPadding.calculateTopPadding(),
-            // Session 121 (P-22): the bottom VIP card sat half-hidden behind the
-            // system nav bar because this was a fixed 40 dp while the Scaffold's
-            // own bottom padding (nav bar + bottom nav) was ignored. Keep the
-            // 40 dp of breathing room on top of what the Scaffold already asks for.
-            bottom = contentPadding.calculateBottomPadding() + 40.dp,
-            start = 16.dp,
-            end = 16.dp,
-        ),
+        // Already inset-aware: the caller passes [detailContentPadding],
+        // which takes the larger of the Scaffold's ask and the safe-drawing
+        // inset per side (system bars + display cutout), plus the 40 dp of
+        // breathing room at the bottom (Session 121, P-22).
+        contentPadding = contentPadding,
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         reloadError?.let { failure ->

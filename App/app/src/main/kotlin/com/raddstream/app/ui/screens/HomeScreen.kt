@@ -136,7 +136,9 @@ fun HomeScreen(
     /** The operator's hero knobs from the panel theme: 0 hides the hero slot. */
     heroMax: Int = HERO_LIMIT,
     heroAutoplay: Boolean = true,
-    heroIntervalMs: Long = 5_000L,
+    /** Samsung RTL (v1.1.2, Issue 3): 8 s, not 5 — the operator's panel value
+     *  still wins when published; this is the default when it has not been. */
+    heroIntervalMs: Long = 8_000L,
     viewModel: HomeViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()

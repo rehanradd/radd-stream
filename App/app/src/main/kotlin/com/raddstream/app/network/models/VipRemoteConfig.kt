@@ -256,7 +256,10 @@ data class PanelTheme(
     @SerializedName("hero_autoplay")
     val heroAutoplay: Boolean = true,
     @SerializedName("hero_interval_s")
-    val heroIntervalS: Int = 5,
+    /** Samsung RTL (v1.1.2, Issue 3): the shipped default is 8 s, not 5 —
+     *  a 5 s rotation made Watch Now a moving target. The panel can still
+     *  publish any value; this is only what a body with no theme decodes to. */
+    val heroIntervalS: Int = 8,
     @SerializedName("hero_max")
     val heroMax: Int = 6,
 )

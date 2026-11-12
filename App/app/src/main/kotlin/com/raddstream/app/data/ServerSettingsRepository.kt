@@ -598,7 +598,7 @@ class ServerSettingsRepository @Inject constructor(
             accent = preferences[THEME_ACCENT_KEY] ?: "",
             dynamicColor = preferences[THEME_DYNAMIC_COLOR_KEY] ?: false,
             heroAutoplay = preferences[THEME_HERO_AUTOPLAY_KEY] ?: true,
-            heroIntervalS = preferences[THEME_HERO_INTERVAL_S_KEY] ?: 5,
+            heroIntervalS = preferences[THEME_HERO_INTERVAL_S_KEY] ?: 8,
             heroMax = preferences[THEME_HERO_MAX_KEY] ?: 6,
         )
     }

@@ -3,6 +3,7 @@ package com.raddstream.app.ui.components
 import android.content.Context
 import android.graphics.Bitmap
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +13,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -75,6 +77,18 @@ import dagger.hilt.components.SingletonComponent
  * [ImageFallbackCard]: a dark branded panel carrying the source-ripple mark and, when the
  * caller supplied one, the title's initials. [fallbackLabel] is optional precisely because
  * not every call site has a title to hand; the mark alone is a complete answer.
+ *
+ * A failed load is retried, not filed away. Samsung RTL (v1.1.2, Issue 5):
+ * Salaar's poster URL is alive (HEAD 200 from the Oracle VM, 0.19 s) yet the
+ * phone showed the dark "SA" fallback — one transient fetch failure, and
+ * Coil's single attempt left the tile failed for the whole visit, with no
+ * way back. A failure now re-requests at once, up to [MAX_IMAGE_AUTO_RETRIES]
+ * times ([shouldAutoRetryImage] is the bound), and once those are spent the
+ * fallback itself is tappable to try again — a tap is a deliberate retry, so
+ * it is never bounded. The retries are immediate on purpose: a delayed retry
+ * would park a coroutine on the composition clock, which the frozen-clock
+ * Robolectric tests cannot advance past; a bounded immediate re-request
+ * settles the same way a single attempt does.
  */
 @Composable
 fun CatalogImage(
@@ -98,7 +112,13 @@ fun CatalogImage(
     val serverUrl by settingsRepository.serverUrl.collectAsState(initial = null)
     val serverHost = remember(serverUrl) { ArtUrlPolicy.hostOf(serverUrl) }
 
-    val request = remember(url, sizing, metered, serverHost, allowAnyHost) {
+    // The load attempt this URL is on: 0 is the first request, and each
+    // failure below bumps it (bounded) while a tap on the failed tile bumps
+    // it without a bound. It is part of the request's key, so a bump
+    // re-issues the fetch instead of re-showing the same failure.
+    var attempt by remember(url) { mutableIntStateOf(0) }
+
+    val request = remember(url, sizing, metered, serverHost, allowAnyHost, attempt) {
         val decision = ImageSizingPolicy.decide(
             widthPx = sizing.posterMaxWidthPx,
             imagesAllowedOnMobileData = sizing.imagesAllowedOnMobileData,
@@ -149,7 +169,18 @@ fun CatalogImage(
         // A real request in flight gets the moving shimmer; a gated or blank URL never
         // reaches this slot, so the surface behind the card stays the truth in that case.
         loading = { ShimmerBox(Modifier.fillMaxSize()) },
-        error = { ImageFallbackCard(label = fallbackLabel) },
+        // A failed load shows the branded fallback — and the fallback is
+        // tappable to try again, because a tile that failed once must not
+        // stay failed for the whole visit when the URL itself is alive.
+        error = {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .clickable(onClickLabel = "Retry loading image") { attempt++ },
+            ) {
+                ImageFallbackCard(label = fallbackLabel, modifier = Modifier.fillMaxSize())
+            }
+        },
         // The artwork-accent hook: only a caller that passed onBitmap pays the
         // decode-to-bitmap, and only on a real success — a gated or failed load
         // reports nothing, so the caller keeps its fallback colour.
@@ -157,9 +188,28 @@ fun CatalogImage(
             loaded = true
             onBitmap?.invoke(state.result.drawable.toBitmap())
         },
-        onError = { loaded = false },
+        // A transient failure re-requests at once, bounded by
+        // [shouldAutoRetryImage]: one failed fetch must not leave a live
+        // poster as a dark initials tile for the whole visit. Once the
+        // bound is spent the error slot above is the way back — a tap
+        // re-issues the fetch without a bound, because a tap is deliberate.
+        onError = {
+            if (shouldAutoRetryImage(attempt)) attempt++ else loaded = false
+        },
     )
 }
+
+/**
+ * Auto-retries for a failed catalog image: the first load plus
+ * [MAX_IMAGE_AUTO_RETRIES] immediate re-requests, then the error slot's
+ * tap-to-retry is the only way back. The bound is what keeps a permanently
+ * dead URL from re-requesting forever; the tap is unbounded because a tap
+ * is a deliberate retry. Pure so the bound is testable without Coil.
+ */
+internal const val MAX_IMAGE_AUTO_RETRIES = 2
+
+internal fun shouldAutoRetryImage(attempt: Int, maxAutoRetries: Int = MAX_IMAGE_AUTO_RETRIES): Boolean =
+    attempt < maxAutoRetries
 
 /**
  * The dark placeholder every failed catalog image falls back to. Colours come only from
