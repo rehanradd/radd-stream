@@ -270,7 +270,7 @@ fun HeroSkeleton(modifier: Modifier = Modifier) {
                 )
                 ShimmerBox(
                     Modifier.width(150.dp).height(52.dp),
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(28.dp),
                 )
             }
         }
@@ -416,7 +416,7 @@ private fun HeroSlide(
                 LaunchedEffect(watchNowPressed) { onWatchNowPressChange(watchNowPressed) }
                 Button(
                     onClick = onWatchNow,
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(28.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
@@ -437,7 +437,7 @@ private fun HeroSlide(
                 // the treatment matches the year/type badges above it.
                 Button(
                     onClick = onToggleFavorite,
-                    shape = RoundedCornerShape(24.dp),
+                    shape = RoundedCornerShape(28.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f),
                         contentColor = MaterialTheme.colorScheme.onBackground,
@@ -653,4 +653,4 @@ private fun heroHeight(): Dp {
 /** The glow shows through this gutter — enough to read, not enough to look like a border. */
 private val heroInset = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)
 
-private val HERO_CORNER: Dp = 24.dp
+private val HERO_CORNER: Dp = 28.dp

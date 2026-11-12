@@ -48,8 +48,8 @@ object RaddTokens {
 
     /** Radii — one radius language (benchmark §14). */
     object Radius {
-        /** Posters: 4-6. */
-        val Poster: Dp = 6.dp
+        /** Posters: 8 (M3 small). */
+        val Poster: Dp = 8.dp
         /** Thumbnails: 6-8. */
         val Thumb: Dp = 8.dp
         /** Chips: 4. */
@@ -58,8 +58,8 @@ object RaddTokens {
         val Input: Dp = 12.dp
         /** Cards: 12-16. */
         val Card: Dp = 16.dp
-        /** Sheet tops: 12-18. */
-        val Sheet: Dp = 18.dp
+        /** Sheet tops: 20 (M3 large increased). */
+        val Sheet: Dp = 20.dp
         /** Pills: fully round. */
         val Pill: Dp = 999.dp
     }

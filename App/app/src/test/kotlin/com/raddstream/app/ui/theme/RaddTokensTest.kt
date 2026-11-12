@@ -29,12 +29,12 @@ class RaddTokensTest {
 
     @Test
     fun radiiFollowTheSpec() {
-        assertEquals(6.dp, RaddTokens.Radius.Poster)
+        assertEquals(8.dp, RaddTokens.Radius.Poster)
         assertEquals(8.dp, RaddTokens.Radius.Thumb)
         assertEquals(4.dp, RaddTokens.Radius.Chip)
         assertEquals(12.dp, RaddTokens.Radius.Input)
         assertEquals(16.dp, RaddTokens.Radius.Card)
-        assertEquals(18.dp, RaddTokens.Radius.Sheet)
+        assertEquals(20.dp, RaddTokens.Radius.Sheet)
         assertEquals(999.dp, RaddTokens.Radius.Pill)
     }
 

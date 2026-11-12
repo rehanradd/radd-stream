@@ -249,7 +249,7 @@ private fun RegionChoiceCard(
             Box(
                 modifier = Modifier
                     .size(48.dp)
-                    .clip(RoundedCornerShape(14.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .background(iconTileColor),
                 contentAlignment = Alignment.Center,
             ) {

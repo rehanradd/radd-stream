@@ -629,7 +629,7 @@ private fun StreakCard(
                                 isToday -> RaddCurrent500.copy(alpha = 0.10f)
                                 else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                             },
-                            shape = RoundedCornerShape(10.dp),
+                            shape = RoundedCornerShape(12.dp),
                             border = if (isToday) {
                                 BorderStroke(1.dp, RaddCurrent500)
                             } else {

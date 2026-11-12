@@ -67,7 +67,7 @@ fun Pill(
         },
         color = backgroundColor,
         contentColor = contentColor,
-        shape = RoundedCornerShape(6.dp),
+        shape = RoundedCornerShape(8.dp),
     ) {
         Box(Modifier.padding(horizontal = 8.dp, vertical = 3.dp)) {
             Text(
@@ -250,11 +250,11 @@ internal fun subtitleBadgeText(
 fun CamBadge(modifier: Modifier = Modifier) {
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(8.dp))
             // CAM is its own token, not an error: a cam recording is a
             // low-quality source, not something that went wrong.
             .background(RaddCamPill)
-            .border(1.dp, RaddHealthDead, RoundedCornerShape(6.dp))
+            .border(1.dp, RaddHealthDead, RoundedCornerShape(8.dp))
             .padding(horizontal = 8.dp, vertical = 3.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -308,7 +308,7 @@ fun LinkHealthChip(
     }
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .semantics { contentDescription = desc }
             .padding(horizontal = 8.dp, vertical = 3.dp),
