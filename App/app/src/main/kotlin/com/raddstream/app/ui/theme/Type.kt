@@ -68,8 +68,8 @@ fun brandSp(value: Number): TextUnit {
 val RaddNumeric = TextStyle(
     fontFamily = RaddTextFamily,
     fontWeight = FontWeight.Medium,
-    fontSize = brandSp(13),
-    lineHeight = brandSp(18),
+    fontSize = brandSp(14),
+    lineHeight = brandSp(20),
     letterSpacing = brandSp(0),
     fontFeatureSettings = "tnum",
 )
@@ -78,53 +78,59 @@ val RaddNumeric = TextStyle(
 val RaddStatNumeric = TextStyle(
     fontFamily = RaddTextFamily,
     fontWeight = FontWeight.SemiBold,
-    fontSize = brandSp(20),
-    lineHeight = brandSp(26),
+    fontSize = brandSp(22),
+    lineHeight = brandSp(28),
     letterSpacing = brandSp(-0.2),
     fontFeatureSettings = "tnum",
 )
 
 // ── The scale ───────────────────────────────────────────────────────────────
-// M3 role names, brand metrics. Display/Hero roles lean 30sp+ but stay below
-// full M3 sizes so one-line titles never ellipsize on 360dp-wide phones.
+// M3 baseline sizes + line heights (skill: off-scale sizes such as 13, 15,
+// 18 are non-conformant). Display/headline/title roles used to sit below
+// the baseline so one-line titles never ellipsized on 360dp phones; the
+// restyle adopts the baseline and lets titles wrap to two lines with
+// ellipsis instead — the premium look is the bigger type, and every title
+// call site already caps maxLines. Emphasized variants (same size, heavier
+// weight) live in [RaddEmphasized] for hero titles, section heads and
+// card-title spotlights.
 
 val RaddTypography = Typography(
     // Display — hero/detail titles only, always on a scrim or solid ink.
     displayLarge = TextStyle(
         fontFamily = RaddDisplayFamily, fontWeight = FontWeight.Bold,
-        fontSize = brandSp(40), lineHeight = brandSp(48), letterSpacing = brandSp(-0.5),
+        fontSize = brandSp(57), lineHeight = brandSp(64), letterSpacing = brandSp(-0.5),
     ),
     displayMedium = TextStyle(
         fontFamily = RaddDisplayFamily, fontWeight = FontWeight.Bold,
-        fontSize = brandSp(34), lineHeight = brandSp(42), letterSpacing = brandSp(-0.4),
+        fontSize = brandSp(45), lineHeight = brandSp(52), letterSpacing = brandSp(-0.4),
     ),
     displaySmall = TextStyle(
         fontFamily = RaddDisplayFamily, fontWeight = FontWeight.SemiBold,
-        fontSize = brandSp(28), lineHeight = brandSp(36), letterSpacing = brandSp(-0.2),
+        fontSize = brandSp(36), lineHeight = brandSp(44), letterSpacing = brandSp(-0.2),
     ),
 
     // Headline — screen titles, section heads.
     headlineLarge = TextStyle(
         fontFamily = RaddDisplayFamily, fontWeight = FontWeight.SemiBold,
-        fontSize = brandSp(24), lineHeight = brandSp(32), letterSpacing = brandSp(0),
+        fontSize = brandSp(32), lineHeight = brandSp(40), letterSpacing = brandSp(0),
     ),
     headlineMedium = TextStyle(
         fontFamily = RaddDisplayFamily, fontWeight = FontWeight.SemiBold,
-        fontSize = brandSp(20), lineHeight = brandSp(28), letterSpacing = brandSp(0.1),
+        fontSize = brandSp(28), lineHeight = brandSp(36), letterSpacing = brandSp(0.1),
     ),
     headlineSmall = TextStyle(
         fontFamily = RaddDisplayFamily, fontWeight = FontWeight.Medium,
-        fontSize = brandSp(18), lineHeight = brandSp(26), letterSpacing = brandSp(0.1),
+        fontSize = brandSp(24), lineHeight = brandSp(32), letterSpacing = brandSp(0.1),
     ),
 
     // Title — card titles, nav labels, list primaries.
     titleLarge = TextStyle(
         fontFamily = RaddTextFamily, fontWeight = FontWeight.Medium,
-        fontSize = brandSp(17), lineHeight = brandSp(24), letterSpacing = brandSp(0.1),
+        fontSize = brandSp(22), lineHeight = brandSp(28), letterSpacing = brandSp(0.1),
     ),
     titleMedium = TextStyle(
         fontFamily = RaddTextFamily, fontWeight = FontWeight.Medium,
-        fontSize = brandSp(15), lineHeight = brandSp(22), letterSpacing = brandSp(0.15),
+        fontSize = brandSp(16), lineHeight = brandSp(24), letterSpacing = brandSp(0.15),
     ),
     titleSmall = TextStyle(
         fontFamily = RaddTextFamily, fontWeight = FontWeight.Medium,
@@ -142,7 +148,7 @@ val RaddTypography = Typography(
     ),
     bodySmall = TextStyle(
         fontFamily = RaddTextFamily, fontWeight = FontWeight.Normal,
-        fontSize = brandSp(12), lineHeight = brandSp(17), letterSpacing = brandSp(0.3),
+        fontSize = brandSp(12), lineHeight = brandSp(16), letterSpacing = brandSp(0.3),
     ),
 
     // Label — chips, badges, buttons, metadata. All ≥4.5:1 by role pairing.
@@ -156,6 +162,27 @@ val RaddTypography = Typography(
     ),
     labelSmall = TextStyle(
         fontFamily = RaddTextFamily, fontWeight = FontWeight.Medium,
-        fontSize = brandSp(11), lineHeight = brandSp(15), letterSpacing = brandSp(0.5),
+        fontSize = brandSp(11), lineHeight = brandSp(16), letterSpacing = brandSp(0.5),
     ),
 )
+
+/**
+ * Emphasized styles — the M3 Expressive spotlight set: same size and line
+ * height as the baseline role, one weight heavier (500 becomes 700). Use
+ * these where the eye should land first and nowhere else: the hero title,
+ * a section head, a card title, a hero number. Never as a replacement for
+ * the baseline role in body copy.
+ */
+object RaddEmphasized {
+    /** Hero titles (HeroCarousel, detail hero). */
+    val displaySmall: TextStyle = RaddTypography.displaySmall.copy(fontWeight = FontWeight.Bold)
+
+    /** Screen titles that need to shout (Setup wordmark is headlineSmall). */
+    val headlineMedium: TextStyle = RaddTypography.headlineMedium.copy(fontWeight = FontWeight.Bold)
+
+    /** Section heads (SectionHeader) and season banners. */
+    val titleLarge: TextStyle = RaddTypography.titleLarge.copy(fontWeight = FontWeight.Bold)
+
+    /** Card titles and rail-tile spotlights. */
+    val titleMedium: TextStyle = RaddTypography.titleMedium.copy(fontWeight = FontWeight.Bold)
+}

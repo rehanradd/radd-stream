@@ -61,7 +61,7 @@ import android.provider.Settings
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.ui.layout.CardGeometry
-import com.raddstream.app.ui.theme.RaddTokens
+import com.raddstream.app.ui.theme.RaddEmphasized
 
 /**
  * Shared page-level building blocks: section headers, empty/error/loading states,
@@ -104,7 +104,7 @@ fun rememberReduceMotion(): Boolean {
 
 /**
  * One title style for every dialog (D-2): the display family, semibold,
- * 20sp — the same face screen titles use, so a dialog headline never renders
+ * 24sp (M3 headlineSmall) — the same face screen titles use, so a dialog headline never renders
  * in the thin, faint face the video audit caught on the give-up, consent and
  * volume dialogs. Every `AlertDialog` title goes through here; the colour
  * defaults to the surface's own, and the player dialogs pass white for their
@@ -117,7 +117,7 @@ fun RaddDialogTitle(
 ) {
     Text(
         text = text,
-        style = RaddTokens.Type.Headline,
+        style = MaterialTheme.typography.headlineSmall,
         color = color,
     )
 }
@@ -137,9 +137,12 @@ fun SectionHeader(
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Column(Modifier.weight(1f)) {
+            // Restyle: section heads are the emphasized titleLarge (22sp,
+            // bold) — a rail head that reads at a glance without shouting
+            // over the posters below it.
             Text(
                 text = title,
-                style = MaterialTheme.typography.headlineMedium,
+                style = RaddEmphasized.titleLarge,
                 color = MaterialTheme.colorScheme.onBackground,
             )
             if (!subtitle.isNullOrBlank()) {
