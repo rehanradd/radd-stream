@@ -2,6 +2,7 @@ package com.raddstream.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,11 +25,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -37,7 +38,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.ui.layout.CardGeometry
-import com.raddstream.app.ui.theme.RaddArtScrim
+import com.raddstream.app.ui.theme.PressHaptics
+import com.raddstream.app.ui.theme.pressScale
 
 /**
  * The canonical catalog tile. Used by Home rails, the search grid, My List and
@@ -100,17 +102,30 @@ fun PosterCard(
 
     val clickable = Modifier.semantics { contentDescription = a11y }
 
+    // UI-fix P1-X1: the tile's own press source — the scale + haptic track
+    // the same presses the tile's combinedClickable already owns.
+    val pressSource = remember { MutableInteractionSource() }
+    PressHaptics(pressSource)
+
     Card(
         modifier = modifier
             .fillMaxWidth()
             .then(clickable)
             .clip(RoundedCornerShape(12.dp))
+            .pressScale(pressSource)
             .then(
                 when {
                     onClick != null && onLongClick != null ->
-                        Modifier.combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                        Modifier.combinedClickable(
+                            interactionSource = pressSource,
+                            onClick = onClick,
+                            onLongClick = onLongClick,
+                        )
                     onClick != null ->
-                        Modifier.combinedClickable(onClick = onClick)
+                        Modifier.combinedClickable(
+                            interactionSource = pressSource,
+                            onClick = onClick,
+                        )
                     else -> Modifier
                 }
             ),
@@ -201,31 +216,17 @@ fun PosterCard(
                 }
 
                 UserWords.displayRating(post.imdbRating)?.let { rating ->
-                    // E-C1: the rating sat in tertiary directly on the artwork —
-                    // 2.28:1 on white art, 1.73:1 on mid-grey. It now sits on a
-                    // RaddArtScrim plate, like every other badge over artwork.
-                    // Owner decision 2026-11-11: white, not the purple tertiary
-                    // (#9AA5FF, ~3.8:1) — white on the scrim is ~8.6:1 and the
-                    // easiest read. Only this rating text changes; tertiary
-                    // itself (download arrow, offline badge) is untouched.
-                    Box(
+                    // UI-fix P0-1: the badge used to sit TopEnd, painted OVER
+                    // the remove × (same corner, declared later, so it won
+                    // the tap) — rated titles in My List / Continue Watching
+                    // could not be removed. It now rides BottomStart, above
+                    // the 3dp progress bar, on the same scrim plate.
+                    RatingBadge(
+                        rating = rating,
                         modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp)
-                            .background(RaddArtScrim, RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                    ) {
-                        Text(
-                            text = "★ $rating",
-                            color = Color.White,
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.Bold,
-                            // Decorative: the merged tile description already says
-                            // "rating 8.1 out of 10", and a node that clears its own semantics is
-                            // how a Compose text stops being read a second time.
-                            modifier = Modifier.clearAndSetSemantics { },
-                        )
-                    }
+                            .align(Alignment.BottomStart)
+                            .padding(start = 6.dp, bottom = 8.dp),
+                    )
                 }
             }
 

@@ -18,7 +18,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * Robo run 9: a failed-download card in Media Vault spoke "Rank #1" twice —
+ * Robo run 9: a failed-download card in Downloads spoke "Rank #1" twice —
  * the ATF flagged "Multiple items have the same description". The keep's
  * engine task had a blank title and a "Rank #1" print label (displayLabel's
  * fallback when a rendition carries no quality words), so toKeptItem fell

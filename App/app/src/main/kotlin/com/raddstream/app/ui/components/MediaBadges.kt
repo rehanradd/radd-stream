@@ -31,6 +31,7 @@ import com.raddstream.app.network.models.HdrFormat
 import com.raddstream.app.network.models.LinkState
 import com.raddstream.app.network.models.Resolution
 import com.raddstream.app.network.models.SourceTag
+import com.raddstream.app.ui.theme.RaddArtScrim
 import com.raddstream.app.ui.theme.RaddCamPill
 import com.raddstream.app.ui.theme.RaddHdrPill
 import com.raddstream.app.ui.theme.RaddHealthDead
@@ -335,6 +336,29 @@ fun LinkHealthChip(
 }
 
 /** Generic capability chip (4K / HDR / audio languages / Available to watch). */
+/**
+ * The one rating badge (UI-fix P2-4): white ★ on the artwork scrim plate,
+ * ~8.6:1 on any artwork (owner decision 2026-11-11). PosterCard and the
+ * detail header both use it, so one fact never wears two treatments.
+ * Decorative: the tile / header already speaks the rating in its sentence.
+ */
+@Composable
+fun RatingBadge(rating: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .background(RaddArtScrim, RoundedCornerShape(4.dp))
+            .padding(horizontal = 6.dp, vertical = 2.dp),
+    ) {
+        Text(
+            text = "★ $rating",
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.clearAndSetSemantics { },
+        )
+    }
+}
+
 @Composable
 fun CapabilityChip(text: String, modifier: Modifier = Modifier) {
     Pill(

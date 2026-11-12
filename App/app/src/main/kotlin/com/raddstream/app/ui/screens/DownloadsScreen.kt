@@ -79,7 +79,7 @@ fun DownloadsScreen(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Media Vault") },
+                title = { Text("Downloads") },
                 navigationIcon = {
                     IconButton(onClick = onBackClick) {
                         Icon(Icons.Default.ArrowBack, contentDescription = "Back")
@@ -114,7 +114,7 @@ fun DownloadsScreen(
                 item {
                     NoticeCard(
                         "Files in Movies/RaddStream play anywhere, even after the app closes. " +
-                            "In-app keeps play here.",
+                            "Downloads play here.",
                     )
                 }
                 items(
@@ -165,8 +165,8 @@ fun DownloadsScreen(
                     ) {
                         EmptyState(
                             title = "Nothing downloaded yet",
-                            message = "Use the download button on a print or episode. " +
-                                "Files go to Movies/RaddStream and play anywhere; in-app keeps play here.",
+                            message = "Use the Download button on a movie or episode. " +
+                                "Files go to Movies/RaddStream and play anywhere; downloads play here.",
                             icon = {
                                 Icon(
                                     Icons.Default.Download,
@@ -179,7 +179,7 @@ fun DownloadsScreen(
                             action = {
                                 // A downloads tab nobody has used yet is not a dead end: the way
                                 // to fill it is one tap away, on the title they came from.
-                                OutlinedButton(onClick = onBackClick) { Text("Find something to keep") }
+                                OutlinedButton(onClick = onBackClick) { Text("Find something to download") }
                             },
                         )
                     }
@@ -493,7 +493,7 @@ private fun statusLine(item: KeptItem): String {
         KeepState.NO_SPACE -> "Not enough space to finish — free room and retry"
         KeepState.READY -> "Saved on device — available offline"
         KeepState.EXPIRING -> "Kept — expires soon and auto-deletes"
-        KeepState.EXPIRED -> "Expired — auto-deleted to respect link rot"
+        KeepState.EXPIRED -> "Expired — removed automatically"
         KeepState.FAILED -> "Download failed — retry to resume"
     }
 }

@@ -29,25 +29,27 @@ sealed class Screen(val route: String) {
     object Setup : Screen("setup")
     object Region : Screen("region")
     object Home : Screen("home")
-    object Search : Screen("search?query={query}&genre={genre}&industry={industry}") {
+    object Search : Screen("search?query={query}&genre={genre}&industry={industry}&language={language}") {
         const val ARG_QUERY = "query"
         const val ARG_GENRE = "genre"
         const val ARG_INDUSTRY = "industry"
+        const val ARG_LANGUAGE = "language"
 
         /** The tab's plain address — the bottom bar and Home navigate here, with no query. */
         const val PLAIN_ROUTE = "search"
 
         /**
          * A search opened with a query already filled in (an actor tap on a
-         * detail card), or with a facet already applied (a genre/industry
-         * chip on Home). A blank value is omitted, so the plain tab and the
-         * old actor links keep working.
+         * detail card), or with a facet already applied (a genre/industry/
+         * language chip on Home). A blank value is omitted, so the plain tab
+         * and the old actor links keep working.
          */
-        fun createRoute(query: String? = null, genre: String? = null, industry: String? = null): String {
+        fun createRoute(query: String? = null, genre: String? = null, industry: String? = null, language: String? = null): String {
             val args = listOfNotNull(
                 query.takeIf { !it.isNullOrBlank() }?.let { "query=${encodeRouteArg(it)}" },
                 genre.takeIf { !it.isNullOrBlank() }?.let { "genre=${encodeRouteArg(it)}" },
                 industry.takeIf { !it.isNullOrBlank() }?.let { "industry=${encodeRouteArg(it)}" },
+                language.takeIf { !it.isNullOrBlank() }?.let { "language=${encodeRouteArg(it)}" },
             )
             return if (args.isEmpty()) PLAIN_ROUTE else "search?" + args.joinToString("&")
         }

@@ -28,7 +28,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * Robo run 8: the My List empty state never showed its "Popular right now"
+ * Robo run 8: the My List empty state never showed its "Most versions"
  * row — and Robo measured three 32dp clickables just above the nav bar.
  * Both are the same layout bug: [EmptyState] is a fillMaxSize Box, so inside
  * the empty-state Column it took the whole height and the PopularRow below it
@@ -90,7 +90,7 @@ class MyListEmptyContentTest {
             }
         }
         // The row is visible: its heading is on screen, not pushed below the fold.
-        compose.onNodeWithText("Popular right now").assertIsDisplayed()
+        compose.onNodeWithText("Most versions").assertIsDisplayed()
         // The only clickables are the three poster cards — one per title.
         val heights = clickableHeights()
         assertTrue(

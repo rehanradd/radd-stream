@@ -9,6 +9,11 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import com.google.android.play.core.install.model.ActivityResult as PlayCoreActivityResult
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.slideInVertically
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -87,6 +92,8 @@ import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SeeAllButton
 import com.raddstream.app.ui.components.UserWords
+import com.raddstream.app.ui.components.rememberReduceMotion
+import com.raddstream.app.ui.theme.RaddMotion
 import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.update.InAppUpdate
 import com.raddstream.app.viewmodel.HomeSection
@@ -113,10 +120,10 @@ fun HomeScreen(
     onWatchNowClick: (Post) -> Unit = onPostClick,
     onBrowseType: (String?) -> Unit = {},
     /**
-     * A facet chip's jump-off: the genre and/or industry to land on Search
-     * with already applied. Null means "no filter of that kind".
+     * A facet chip's jump-off: the genre, industry and/or language to land
+     * on Search with already applied. Null means "no filter of that kind".
      */
-    onFacetSelected: (genre: String?, industry: String?) -> Unit = { _, _ -> },
+    onFacetSelected: (genre: String?, industry: String?, language: String?) -> Unit = { _, _, _ -> },
     onSetupServerClick: () -> Unit = {},
     /** The phone's own videos (Movies/ and Download/), listed from MediaStore. */
     onOpenLocalFiles: () -> Unit = {},
@@ -222,12 +229,21 @@ fun HomeScreen(
             // that they are saved rows on an offline phone. Nothing until Home
             // has ever loaded, so a first launch never dates an empty page.
             homeSyncLine(state.lastHomeSyncMs, state.isOffline, System.currentTimeMillis())?.let { line ->
-                Text(
-                    text = line,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = line,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.weight(1f),
+                    )
+                    // P1-H6: the top-bar refresh icon had no visible meaning —
+                    // a mystery circular arrow. The sync line now carries a
+                    // plain "Refresh" button next to the freshness it refreshes.
+                    TextButton(onClick = viewModel::refresh) { Text("Refresh") }
+                }
                 Spacer(Modifier.height(8.dp))
             }
 
@@ -238,49 +254,6 @@ fun HomeScreen(
                 BroadcastBanner(
                     broadcast = broadcast,
                     onDismiss = { viewModel.dismissBroadcast(broadcast.id) },
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-
-            // The daily check-in, where the viewer actually is: the same claim
-            // the VIP screen makes, in a compact card. It renders only once
-            // the server's ladder arrives — an absent plan is never a zero.
-            if (state.streakLadder.isNotEmpty()) {
-                DailyCheckInCard(
-                    streakCount = state.streakCount,
-                    serverStreak = state.serverStreak,
-                    streakLadder = state.streakLadder,
-                    coinBalance = state.coinBalance,
-                    signedIn = state.signedIn,
-                    claimedToday = state.claimedToday,
-                    isClaiming = state.isClaiming,
-                    claimMessage = state.claimMessage,
-                    onClaim = viewModel::claimDailyLogin,
-                    onOpenCheckIn = onOpenCheckIn,
-                    onOpenSignIn = onOpenSignIn,
-                )
-                Spacer(Modifier.height(12.dp))
-            }
-
-            // Your library, on Home where it can be seen: the two doors
-            // that already exist — the phone's own videos, and kept
-            // downloads. This is a streaming app, not a browser: there is
-            // no paste-a-link door here any more.
-            if (searchEnabled) {
-                LibraryStrip(
-                    onOpenLocalFiles = onOpenLocalFiles,
-                    onOpenDownloads = onOpenDownloads,
-                )
-                Spacer(Modifier.height(8.dp))
-            }
-
-            // The free trial is granted silently; without this note the viewer loses VIP
-            // features after 3 days with no prior explanation. One line, live days, and
-            // a dismissal that persists — a dismissed note never returns.
-            state.trialDaysRemaining?.let { days ->
-                TrialNoteBanner(
-                    daysRemaining = days,
-                    onDismiss = viewModel::dismissTrialNote,
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -306,24 +279,6 @@ fun HomeScreen(
                 val hasSaved = state.continueWatching.isNotEmpty() || anyVisible
                 if (state.isOffline && hasSaved) {
                     OfflineBanner()
-                    Spacer(Modifier.height(8.dp))
-                }
-                // Gap A6: the first-run card takes the pinned-first slot — a
-                // new viewer has no Continue Watching yet, so this is the
-                // first thing Home offers. Three real titles from the first
-                // rail, each heart saving it to My List; the third pick (or
-                // "Not now") retires the card for good.
-                if (state.showPickThree) {
-                    PickThreeCard(
-                        candidates = state.pickThreeCandidates,
-                        isFavorite = { post ->
-                            post.id in state.favoriteIds ||
-                                (post.workRef != null && post.workRef in state.favoriteWorkRefs)
-                        },
-                        onToggleFavorite = { post -> viewModel.toggleFavorite(post) },
-                        onPostClick = onPostClick,
-                        onDismiss = viewModel::dismissPickThree,
-                    )
                     Spacer(Modifier.height(8.dp))
                 }
                 if (state.continueWatching.isNotEmpty()) {
@@ -383,8 +338,70 @@ fun HomeScreen(
                         Spacer(Modifier.height(12.dp))
                     }
                 }
-                JumpOffRow(onBrowseType = onBrowseType)
-                FacetChipsRow(facets = state.facets, onFacetSelected = onFacetSelected)
+                // Gap A6: the first-run card now rides BELOW the hero — a
+                // new viewer meets a movie first, and the picks are still
+                // the first thing that asks anything of them.
+                if (state.showPickThree) {
+                    PickThreeCard(
+                        candidates = state.pickThreeCandidates,
+                        isFavorite = { post ->
+                            post.id in state.favoriteIds ||
+                                (post.workRef != null && post.workRef in state.favoriteWorkRefs)
+                        },
+                        onToggleFavorite = { post -> viewModel.toggleFavorite(post) },
+                        onPostClick = onPostClick,
+                        onDismiss = viewModel::dismissPickThree,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // P0-3 / P1-H1: the coins economy no longer owns the top of
+                // Home. The wallet lives on the CheckIn / VIP screens; Home
+                // keeps at most this one-line nudge, below the hero.
+                if (state.streakLadder.isNotEmpty()) {
+                    CheckInNudge(
+                        streakCount = state.streakCount,
+                        serverStreak = state.serverStreak,
+                        streakLadder = state.streakLadder,
+                        coinBalance = state.coinBalance,
+                        signedIn = state.signedIn,
+                        claimedToday = state.claimedToday,
+                        isClaiming = state.isClaiming,
+                        claimMessage = state.claimMessage,
+                        onClaim = viewModel::claimDailyLogin,
+                        onOpenCheckIn = onOpenCheckIn,
+                        onOpenSignIn = onOpenSignIn,
+                    )
+                    Spacer(Modifier.height(12.dp))
+                }
+
+                // Your library, below the hero where it can still be seen:
+                // the phone's own videos, and downloads.
+                if (searchEnabled) {
+                    LibraryStrip(
+                        onOpenLocalFiles = onOpenLocalFiles,
+                        onOpenDownloads = onOpenDownloads,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // The free trial note, as one dismissible line below the
+                // hero instead of a card above it. A dismissed note never
+                // returns.
+                state.trialDaysRemaining?.let { days ->
+                    TrialNoteLine(
+                        daysRemaining = days,
+                        onDismiss = viewModel::dismissTrialNote,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                }
+
+                // P1-H3: one "Browse" row, not two near-identical chip rows.
+                BrowseSection(
+                    facets = state.facets,
+                    onBrowseType = onBrowseType,
+                    onFacetSelected = onFacetSelected,
+                )
                 Spacer(Modifier.height(8.dp))
 
                 // At most 10 rows total, CW included: a panel that publishes 12
@@ -407,9 +424,10 @@ fun HomeScreen(
                         seenWorks = next
                         section.copy(items = kept)
                     }
-                renderedRows.forEach { section ->
+                renderedRows.forEachIndexed { index, section ->
                     HomeRailSection(
                         section = section,
+                        index = index,
                         onPostClick = onPostClick,
                         onSeeAll = { onBrowseType(section.type) },
                         // A sorted rail has no Browse equivalent (Browse takes a
@@ -620,41 +638,33 @@ private fun PickThreeCard(
     }
 }
 
+/**
+ * UI-fix P0-3: the trial note as one dismissible line, not a card. The free
+ * trial is granted silently; without this line the viewer loses VIP features
+ * after 3 days with no prior explanation. A dismissed note never returns.
+ */
 @Composable
-private fun TrialNoteBanner(daysRemaining: Int, onDismiss: () -> Unit) {
-    val scheme = MaterialTheme.colorScheme
-    Card(
-        colors = CardDefaults.cardColors(containerColor = scheme.primaryContainer),
+private fun TrialNoteLine(daysRemaining: Int, onDismiss: () -> Unit) {
+    Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(start = 16.dp, top = 12.dp, bottom = 12.dp, end = 4.dp),
-            verticalAlignment = Alignment.Top,
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "Your free VIP trial",
-                    style = MaterialTheme.typography.titleSmall,
-                    color = scheme.onPrimaryContainer,
-                )
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    if (daysRemaining == 1) {
-                        "You have 1 free VIP day left. After that, free playback stays at 720p."
-                    } else {
-                        "You have $daysRemaining free VIP days left. After that, free playback stays at 720p."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = scheme.onPrimaryContainer,
-                )
-            }
-            IconButton(onClick = onDismiss) {
-                Icon(
-                    Icons.Default.Close,
-                    contentDescription = "Dismiss trial note",
-                    tint = scheme.onPrimaryContainer,
-                )
-            }
+        Text(
+            text = if (daysRemaining == 1) {
+                "Free VIP: 1 day left — after that, free playback stays at 720p."
+            } else {
+                "Free VIP: $daysRemaining days left — after that, free playback stays at 720p."
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onDismiss) {
+            Icon(
+                Icons.Default.Close,
+                contentDescription = "Dismiss trial note",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -732,9 +742,9 @@ private fun AppUpdateDialog(
                     Brand.copy(
                         if (required) "update_required_message" else "update_message",
                         if (required) {
-                            "${Brand.name} needs an update to keep working. Download the new build to continue."
+                            "${Brand.name} needs an update to keep working. Download the new version to continue."
                         } else {
-                            "${Brand.name} has published a newer APK. Download it to keep the catalog and player current."
+                            "${Brand.name} has published a newer version. Download it to keep everything current."
                         },
                         "name" to Brand.name,
                     ),
@@ -806,19 +816,15 @@ internal fun claimButtonLabel(
 }
 
 /**
- * The daily check-in in one compact card: the streak the server has counted,
- * and the wallet it pays into. The claim is the VIP screen's own call — same
- * guards, same words — and the button states the amount today pays, from the
- * server's ladder at the next claimable day (HO-8). The day number is the
- * server's claimed count, never the device's open count: the local number
- * counts days the app was opened, the server counts days claimed, and only
- * the server's may be presented as "Day N" (HO-6). A guest gets the honest
- * local wording plus a way in — a sign-in button, not a dead end (HO-7).
- * The full ladder and the pass shop stay on the check-in screen; this card
- * is the daily tap, not the shop.
+ * UI-fix P1-H1: the daily check-in as one line, not a wallet card. Home
+ * keeps at most this nudge; the wallet, the streak ladder and the claim
+ * shop live on the CheckIn screen, which the row opens. The wording rules
+ * still hold (HO-6/HO-8, pinned by HomeCheckInTextTest): the day number is
+ * the server's claimed count, never the device's open count, and the claim
+ * button states the amount today pays from the server's ladder.
  */
 @Composable
-private fun DailyCheckInCard(
+private fun CheckInNudge(
     streakCount: Int,
     serverStreak: Int?,
     streakLadder: Map<Int, Int>,
@@ -832,51 +838,44 @@ private fun DailyCheckInCard(
     onOpenSignIn: () -> Unit = {},
 ) {
     val targetDays = streakLadder.keys.maxOrNull() ?: 7
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
+    Surface(
+        onClick = onOpenCheckIn,
         shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(Icons.Default.DateRange, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Spacer(Modifier.width(10.dp))
+            Icon(Icons.Default.DateRange, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = "Daily check-in",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
-            }
-            Text(
-                text = checkInDayLine(signedIn, serverStreak, streakCount, targetDays),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (signedIn) {
                 Text(
-                    text = "Wallet: $coinBalance coins.",
+                    text = when {
+                        !signedIn -> "Sign in to claim your coins."
+                        claimedToday -> claimMessage ?: "Claimed for today."
+                        signedIn && serverStreak != null ->
+                            "Day $serverStreak of $targetDays · $coinBalance coins in your wallet."
+                        else -> checkInDayLine(signedIn, serverStreak, streakCount, targetDays)
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
             when {
                 !signedIn -> {
-                    Text(
-                        text = "Sign in to claim your coins.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Button(onClick = onOpenSignIn) {
-                        Text("Sign in")
-                    }
+                    Button(onClick = onOpenSignIn) { Text("Sign in") }
                 }
                 claimedToday -> {
                     Text(
-                        text = claimMessage ?: "Claimed for today.",
-                        style = MaterialTheme.typography.bodySmall,
+                        text = "Claimed",
+                        style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }
@@ -884,19 +883,7 @@ private fun DailyCheckInCard(
                     Button(onClick = onClaim, enabled = !isClaiming) {
                         Text(claimButtonLabel(serverStreak, streakLadder, isClaiming))
                     }
-                    claimMessage?.let { message ->
-                        Text(
-                            text = message,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
                 }
-            }
-            // Session 123: the card claims, the screen shows the week — one
-            // tap opens the standalone check-in with the 7-day ladder.
-            TextButton(onClick = onOpenCheckIn) {
-                Text("See all 7 days")
             }
         }
     }
@@ -965,31 +952,35 @@ private fun LibraryTile(
 }
 
 /**
- * The browse jump-off chips from GET /api/v1/facets: the genres and
- * industries the catalog actually holds, each with the count its tap
- * delivers. A chip lands on Search with the filter already applied.
- * Nothing renders until the facets answer — a failed call means no chips,
- * never a failed Home. A group with no rows contributes no chips. Language
- * chips wait for a Search language filter to land on.
+ * UI-fix P1-H3/H4/H5: one "Browse" row, not two near-identical chip rows
+ * ("Browse by genre" over "Browse by type"). Type chips first, then the
+ * catalog's own facet chips — genres, industries, and languages (the server
+ * already serves `language=`; the chips waited for a Search language filter
+ * to land on, and it has now). "Seasons" is a catalog ingest state, not
+ * something a viewer browses for — it reads "Complete series" here and in
+ * Search. Internal so HomeSectionMarginsTest can pin the 16dp margin.
  */
 @Composable
-internal fun FacetChipsRow(
+internal fun BrowseSection(
     facets: FacetsResponse?,
-    onFacetSelected: (genre: String?, industry: String?) -> Unit,
+    onBrowseType: (String?) -> Unit,
+    onFacetSelected: (genre: String?, industry: String?, language: String?) -> Unit,
 ) {
     val chips = remember(facets) {
         val genreChips = facets?.genres.orEmpty()
             .filter { it.count > 0 }
-            .map { FacetChip(label = "${it.label} · ${it.count}", genre = it.key, industry = null) }
+            .map { FacetChip(label = "${it.label} · ${it.count}", genre = it.key, industry = null, language = null) }
         val industryChips = facets?.industries.orEmpty()
             .filter { it.count > 0 }
-            .map { FacetChip(label = "${it.label} · ${it.count}", genre = null, industry = it.key) }
-        genreChips + industryChips
+            .map { FacetChip(label = "${it.label} · ${it.count}", genre = null, industry = it.key, language = null) }
+        val languageChips = facets?.languages.orEmpty()
+            .filter { it.count > 0 }
+            .map { FacetChip(label = "${it.label} · ${it.count}", genre = null, industry = null, language = it.key) }
+        genreChips + industryChips + languageChips
     }
-    if (chips.isEmpty()) return
     Column(Modifier.padding(top = 4.dp)) {
-        // Audit #15: the 16 dp phone margin, like every other heading.
-        SectionHeader(title = "Browse by genre", modifier = Modifier.padding(horizontal = 16.dp))
+        // Audit #15: every section heading carries the 16 dp phone margin.
+        SectionHeader(title = "Browse", modifier = Modifier.padding(horizontal = 16.dp))
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -997,49 +988,7 @@ internal fun FacetChipsRow(
                 .horizontalScrollPadding(),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            chips.forEach { chip ->
-                Surface(
-                    onClick = { onFacetSelected(chip.genre, chip.industry) },
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                ) {
-                    Text(
-                        text = chip.label,
-                        style = MaterialTheme.typography.labelLarge,
-                        // E-T4: the tile was ~40dp tall (label line + 10dp + 10dp).
-                        // 14dp of vertical padding takes it to >= 48dp.
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                    )
-                }
-            }
-        }
-    }
-}
-
-private data class FacetChip(val label: String, val genre: String?, val industry: String?)
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun JumpOffRow(onBrowseType: (String?) -> Unit) {
-    val tiles = listOf(
-        JumpOff("All", null),
-        JumpOff("Movies", "movie"),
-        JumpOff("Series", "series"),
-        JumpOff("Anime", "anime"),
-        JumpOff("Seasons", "complete_season"),
-    )
-    Column(Modifier.padding(top = 4.dp)) {
-        // Audit #15: the 16 dp phone margin, like every other heading.
-        SectionHeader(title = "Browse by type", modifier = Modifier.padding(horizontal = 16.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .horizontalScrollPadding(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            tiles.forEach { tile ->
+            browseTypeTiles.forEach { tile ->
                 Surface(
                     onClick = { onBrowseType(tile.type) },
                     shape = RoundedCornerShape(20.dp),
@@ -1049,26 +998,86 @@ internal fun JumpOffRow(onBrowseType: (String?) -> Unit) {
                     Text(
                         text = tile.label,
                         style = MaterialTheme.typography.labelLarge,
-                        // E-T4: the tile was ~40dp tall (label line + 10dp + 10dp).
-                        // 14dp of vertical padding takes it to >= 48dp.
+                        // E-T4: 14dp of vertical padding takes the tile to >= 48dp.
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                     )
+                }
+            }
+        }
+        if (chips.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .horizontalScrollPadding(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                chips.forEach { chip ->
+                    Surface(
+                        onClick = { onFacetSelected(chip.genre, chip.industry, chip.language) },
+                        shape = RoundedCornerShape(20.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    ) {
+                        Text(
+                            text = chip.label,
+                            style = MaterialTheme.typography.labelLarge,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                        )
+                    }
                 }
             }
         }
     }
 }
 
+private data class FacetChip(val label: String, val genre: String?, val industry: String?, val language: String?)
+
+/** The browse type jump-offs. "Complete series" is the viewer's word for `complete_season`. */
+private val browseTypeTiles = listOf(
+    JumpOff("All", null),
+    JumpOff("Movies", "movie"),
+    JumpOff("Series", "series"),
+    JumpOff("Anime", "anime"),
+    JumpOff("Complete series", "complete_season"),
+)
+
 private fun Modifier.horizontalScrollPadding(): Modifier = this.padding(horizontal = 16.dp)
 
 @Composable
 private fun HomeRailSection(
     section: HomeSection,
+    index: Int = 0,
     onPostClick: (Post) -> Unit,
     onSeeAll: () -> Unit,
     showSeeAll: Boolean = true,
     onRetry: () -> Unit,
 ) {
+    // UI-fix P1-X1: rails arrive staggered (index * 60 ms, fade + a short
+    // rise — the Region screen's index * 90 pattern, extended to rails).
+    // Reduced-motion users get a plain fade, never the rise.
+    val reduceMotion = rememberReduceMotion()
+    AnimatedVisibility(
+        visible = true,
+        enter = fadeIn(
+            animationSpec = tween(
+                durationMillis = RaddMotion.DurationDefault,
+                delayMillis = index * 60,
+            ),
+        ) + if (reduceMotion) {
+            EnterTransition.None
+        } else {
+            slideInVertically(
+                initialOffsetY = { it / 4 },
+                animationSpec = tween(
+                    durationMillis = RaddMotion.DurationDefault,
+                    delayMillis = index * 60,
+                    easing = RaddMotion.EmphasizedDecelerate,
+                ),
+            )
+        },
+    ) {
     when {
         section.error != null && section.items.isEmpty() -> {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
@@ -1116,5 +1125,6 @@ private fun HomeRailSection(
                 Spacer(Modifier.height(8.dp))
             }
         }
+    }
     }
 }

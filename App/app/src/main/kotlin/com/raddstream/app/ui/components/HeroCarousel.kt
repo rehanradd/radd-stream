@@ -5,6 +5,7 @@ import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -42,7 +43,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -53,11 +54,13 @@ import androidx.compose.ui.unit.dp
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.WireText
+import com.raddstream.app.ui.theme.PressHaptics
+import com.raddstream.app.ui.theme.pressScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
- * The banner rail on Home: [HERO_HEIGHT] tall, a rounded card floating on a soft
+ * The banner rail on Home: [heroHeight] tall, a rounded card floating on a soft
  * ambient glow, one work at a time, advancing on its own.
  *
  * Layout of one slide, back to front:
@@ -118,7 +121,7 @@ fun HeroCarousel(
         }
     }
 
-    Box(modifier.fillMaxWidth().height(HERO_HEIGHT)) {
+    Box(modifier.fillMaxWidth().height(heroHeight())) {
         HeroAmbientGlow(
             currentPage = pagerState.currentPage,
             modifier = Modifier.fillMaxSize(),
@@ -157,12 +160,12 @@ fun HeroCarousel(
 
 /**
  * The banner's own placeholder while the first rail is still in flight. It keeps the real
- * hero's footprint ([HERO_HEIGHT]) so the page does not jump when artwork lands, and a few
+ * hero's footprint ([heroHeight]) so the page does not jump when artwork lands, and a few
  * shimmering bars stand in for the title, badges and Watch Now button.
  */
 @Composable
 fun HeroSkeleton(modifier: Modifier = Modifier) {
-    Box(modifier.fillMaxWidth().height(HERO_HEIGHT)) {
+    Box(modifier.fillMaxWidth().height(heroHeight())) {
         Box(Modifier.fillMaxSize().padding(heroInset).clip(RoundedCornerShape(HERO_CORNER))) {
             ShimmerBox(Modifier.fillMaxSize())
             Column(
@@ -314,6 +317,9 @@ private fun HeroSlide(
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                // UI-fix P1-X1: press scale + haptic on the hero's primary action.
+                val watchNowSource = remember { MutableInteractionSource() }
+                PressHaptics(watchNowSource)
                 Button(
                     onClick = onWatchNow,
                     shape = RoundedCornerShape(24.dp),
@@ -321,7 +327,8 @@ private fun HeroSlide(
                         containerColor = MaterialTheme.colorScheme.primary,
                         contentColor = MaterialTheme.colorScheme.onPrimary,
                     ),
-                    modifier = Modifier.height(52.dp),
+                    interactionSource = watchNowSource,
+                    modifier = Modifier.height(52.dp).pressScale(watchNowSource),
                 ) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
@@ -463,9 +470,15 @@ private val DOT_TOUCH_WIDTH: Dp = 48.dp
 /**
  * The banner's height. A rounded, inset hero wants ~16:9 of a phone screen plus the text
  * block; 400dp keeps the first rail's posters peeking over the fold, so the page still
- * reads as a catalog and not as a single poster.
+ * reads as a catalog and not as a single poster. UI-fix P1-H2: on a narrow phone
+ * (360dp class) 400dp is 62% of the screen for one title — the hero caps at 320dp
+ * there, so the first rail still shows below it.
  */
-private val HERO_HEIGHT: Dp = 400.dp
+@Composable
+private fun heroHeight(): Dp {
+    val width = LocalConfiguration.current.screenWidthDp
+    return if (width < 400) 320.dp else 400.dp
+}
 
 /** The glow shows through this gutter — enough to read, not enough to look like a border. */
 private val heroInset = PaddingValues(start = 14.dp, end = 14.dp, top = 10.dp, bottom = 10.dp)

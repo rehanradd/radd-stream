@@ -1,5 +1,10 @@
 package com.raddstream.app.ui.navigation
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -43,6 +48,7 @@ import com.raddstream.app.data.RemoteFeatures
 import com.raddstream.app.network.models.PanelTheme
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.player.PlayerSessionStore
+import com.raddstream.app.ui.components.rememberReduceMotion
 import com.raddstream.app.ui.screens.BrowseScreen
 import com.raddstream.app.ui.screens.CheckInScreen
 import com.raddstream.app.ui.screens.CoinsScreen
@@ -65,6 +71,7 @@ import com.raddstream.app.ui.screens.SettingsScreen
 import com.raddstream.app.ui.screens.SetupScreen
 import com.raddstream.app.ui.screens.VipUpgradeScreen
 import com.raddstream.app.ui.screens.WatchHistoryScreen
+import com.raddstream.app.ui.theme.RaddMotion
 
 private data class BottomNavItem(
     val label: String,
@@ -329,10 +336,54 @@ fun RaddStreamNavGraph(
             }
         },
     ) { innerPadding ->
+        // UI-fix P1-X1: screens no longer cut between each other. Slide + fade
+        // on the motion tokens (250–320 ms); reduced-motion users get a pure
+        // 30 ms alpha crossfade, never movement.
+        val reduceMotion = rememberReduceMotion()
         NavHost(
             navController = navController,
             startDestination = startDestination,
             modifier = Modifier.padding(bottom = if (showBottomBar) innerPadding.calculateBottomPadding() else 0.dp),
+            enterTransition = {
+                if (reduceMotion) {
+                    fadeIn(animationSpec = tween(RaddMotion.FadeWhenReduced))
+                } else {
+                    slideInHorizontally(
+                        initialOffsetX = { it / 4 },
+                        animationSpec = tween(RaddMotion.DurationDefault, easing = RaddMotion.EmphasizedDecelerate),
+                    ) + fadeIn(animationSpec = tween(RaddMotion.DurationDefault))
+                }
+            },
+            exitTransition = {
+                if (reduceMotion) {
+                    fadeOut(animationSpec = tween(RaddMotion.FadeWhenReduced))
+                } else {
+                    slideOutHorizontally(
+                        targetOffsetX = { -it / 4 },
+                        animationSpec = tween(RaddMotion.DurationDefault, easing = RaddMotion.EmphasizedAccelerate),
+                    ) + fadeOut(animationSpec = tween(RaddMotion.DurationDefault))
+                }
+            },
+            popEnterTransition = {
+                if (reduceMotion) {
+                    fadeIn(animationSpec = tween(RaddMotion.FadeWhenReduced))
+                } else {
+                    slideInHorizontally(
+                        initialOffsetX = { -it / 4 },
+                        animationSpec = tween(RaddMotion.DurationDefault, easing = RaddMotion.EmphasizedDecelerate),
+                    ) + fadeIn(animationSpec = tween(RaddMotion.DurationDefault))
+                }
+            },
+            popExitTransition = {
+                if (reduceMotion) {
+                    fadeOut(animationSpec = tween(RaddMotion.FadeWhenReduced))
+                } else {
+                    slideOutHorizontally(
+                        targetOffsetX = { it / 4 },
+                        animationSpec = tween(RaddMotion.DurationDefault, easing = RaddMotion.EmphasizedAccelerate),
+                    ) + fadeOut(animationSpec = tween(RaddMotion.DurationDefault))
+                }
+            },
         ) {
             composable(Screen.Setup.route) {
                 SetupScreen(
@@ -384,8 +435,8 @@ fun RaddStreamNavGraph(
                     onBrowseType = { type -> navController.navigate(Screen.Browse.createRoute(type)) },
                     // A facet chip on Home lands on Search with the filter
                     // already applied — the same tab, not a pushed copy.
-                    onFacetSelected = { genre, industry ->
-                        navController.navigate(Screen.Search.createRoute(genre = genre, industry = industry))
+                    onFacetSelected = { genre, industry, language ->
+                        navController.navigate(Screen.Search.createRoute(genre = genre, industry = industry, language = language))
                     },
                     onSetupServerClick = { navController.navigate(Screen.Setup.route) },
                     onOpenLocalFiles = { navController.navigate(Screen.LocalFiles.route) },
@@ -441,12 +492,19 @@ fun RaddStreamNavGraph(
                         type = NavType.StringType
                         defaultValue = ""
                     },
+                    // UI-fix P1-H5: a language chip on Home lands here with
+                    // the language already applied.
+                    navArgument(Screen.Search.ARG_LANGUAGE) {
+                        type = NavType.StringType
+                        defaultValue = ""
+                    },
                 ),
             ) { backStackEntry ->
                 SearchScreen(
                     initialQuery = backStackEntry.arguments?.getString(Screen.Search.ARG_QUERY)?.takeIf { it.isNotBlank() },
                     initialGenre = backStackEntry.arguments?.getString(Screen.Search.ARG_GENRE)?.takeIf { it.isNotBlank() },
                     initialIndustry = backStackEntry.arguments?.getString(Screen.Search.ARG_INDUSTRY)?.takeIf { it.isNotBlank() },
+                    initialLanguage = backStackEntry.arguments?.getString(Screen.Search.ARG_LANGUAGE)?.takeIf { it.isNotBlank() },
                     onPostClick = { post -> navController.navigateToPost(post) },
                     onPlayDirectUrl = { url, title ->
                         // The address is staged, never routed: the player

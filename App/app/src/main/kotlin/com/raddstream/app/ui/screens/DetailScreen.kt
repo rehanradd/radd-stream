@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -67,7 +68,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -84,7 +84,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
-import kotlinx.coroutines.launch
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.WireText
@@ -104,6 +103,7 @@ import com.raddstream.app.ui.components.PrintQualityBadge
 import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.QualityRungCard
 import com.raddstream.app.ui.components.RaddDialogTitle
+import com.raddstream.app.ui.components.RatingBadge
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.SubtitleBadge
 import com.raddstream.app.ui.components.audioBadgeText
@@ -116,6 +116,8 @@ import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.player.preferredAudioLanguages
 import com.raddstream.app.ui.navigation.DeepLinks
+import com.raddstream.app.ui.theme.PressHaptics
+import com.raddstream.app.ui.theme.pressScale
 import com.raddstream.app.ui.theme.rememberArtworkAccent
 import com.raddstream.app.viewmodel.DetailNavigationEvent
 import com.raddstream.app.viewmodel.DetailViewModel
@@ -147,7 +149,6 @@ fun DetailScreen(
     val state by viewModel.uiState.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     var pendingDownload by remember { mutableStateOf<(() -> Unit)?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -264,6 +265,7 @@ fun DetailScreen(
         when {
             state.isLoading -> DetailSkeleton(Modifier.padding(paddingValues))
             state.error != null && post == null -> ErrorState(
+                title = "Couldn't load this title",
                 message = state.error ?: "Unable to load title.",
                 onRetry = viewModel::loadDetail,
                 modifier = Modifier.padding(paddingValues),
@@ -320,21 +322,10 @@ fun DetailScreen(
             pending = pending,
             onConfirm = viewModel::confirmKeep,
             onDismiss = viewModel::dismissKeep,
-            // 2026-11-12 rework: the free web-link row is GONE — the
-            // browser route to the shortener is closed, so free downloads
-            // go through the in-app download service only. The coins
-            // direct link stays: a bought credit, a direct file, clearly
-            // labelled with its price.
-            showDirectLink = !state.vip && state.downloadCreditPrice > 0,
-            directLinkPrice = state.downloadCreditPrice,
-            directLinkEnabled = state.coinBalance >= state.downloadCreditPrice,
-            directLinkMessage = state.directLinkMessage,
-            onDirectLink = {
-                scope.launch {
-                    val url = viewModel.directDownloadUrlFor(pending.handle)
-                    if (url != null) openWebPage(context, url)
-                }
-            },
+            // UI-fix P1-D9: the coins Direct Link row is gone — it opened the
+            // browser in the middle of a download (the one remaining external-
+            // browser route on the download path). It returns only when a bought
+            // credit can download in-app through the same DownloadService.
         )
     }
 }
@@ -350,11 +341,6 @@ private fun KeepConfirmDialog(
     pending: PendingKeep,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
-    showDirectLink: Boolean = false,
-    directLinkPrice: Int = 0,
-    directLinkEnabled: Boolean = false,
-    directLinkMessage: String? = null,
-    onDirectLink: () -> Unit = {},
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -374,21 +360,6 @@ private fun KeepConfirmDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (showDirectLink) {
-                    // Session 76 (Build 4): a direct link for one movie, bought
-                    // with coins — the button is disabled while the wallet is
-                    // short, so a tap can never spend what is not there.
-                    TextButton(onClick = onDirectLink, enabled = directLinkEnabled) {
-                        Text("Direct Link — $directLinkPrice coins")
-                    }
-                    if (directLinkMessage != null) {
-                        Text(
-                            directLinkMessage,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
             }
         },
         confirmButton = {
@@ -476,6 +447,8 @@ private fun DetailContent(
 ) {
     val allPrints = (workPrints + seasons.flatMap { it.episodes.flatMap { e -> e.prints } } + seasons.flatMap { it.packedPrints })
     val bestPrint = allPrints.maxByOrNull { it.rankKey }
+    // UI-fix P1-D2: the version list folds to 3 until the viewer asks for all.
+    var showAllVersions by remember { mutableStateOf(false) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -616,14 +589,19 @@ private fun DetailContent(
             if (workPrints.isEmpty()) {
                 item {
                     Text(
-                        "No playable releases are attached to this title on the connected server yet.",
+                        "Nothing to play for this title yet.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             } else {
+                // UI-fix P1-D2: a title can carry a long list of near-identical
+                // version cards (Salaar has 10 posts). Show at most 3, with
+                // "Show all versions" for the rest — the quality rungs above
+                // already carry the folded choice.
+                val shownPrints = if (showAllVersions) workPrints else workPrints.take(3)
                 val workCopies = copyNumbers(workPrints)
-                items(workPrints, key = { "print-${it.releaseId}" }) { print ->
+                items(shownPrints, key = { "print-${it.releaseId}" }) { print ->
                     PrintCard(
                         print = print,
                         onPlayPrint = onPlayPrint,
@@ -632,6 +610,16 @@ private fun DetailContent(
                         copyIndex = workCopies[print.releaseId]?.first ?: 1,
                         copyTotal = workCopies[print.releaseId]?.second ?: 1,
                     )
+                }
+                if (workPrints.size > 3) {
+                    item {
+                        TextButton(onClick = { showAllVersions = !showAllVersions }) {
+                            Text(
+                                if (showAllVersions) "Show fewer versions"
+                                else "Show all ${workPrints.size} versions",
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -717,23 +705,18 @@ private fun PosterHeader(
                 Text(line, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
             UserWords.displayRating(post.imdbRating)?.let { rating ->
-                Pill(text = "★ $rating IMDb", backgroundColor = MaterialTheme.colorScheme.tertiaryContainer, contentColor = MaterialTheme.colorScheme.onTertiaryContainer)
+                RatingBadge(rating = "$rating IMDb")
             }
-            val genres = post.genreList
-            if (genres.isNotEmpty()) {
+            // UI-fix P1-D5: genres + capabilities were two identical scrolling
+            // pill rows under the title. One row now; capabilities ride with
+            // the genres.
+            val allChips = post.genreList + capabilities
+            if (allChips.isNotEmpty()) {
                 Row(
                     modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
-                    genres.forEach { CapabilityChip(it) }
-                }
-            }
-            if (capabilities.isNotEmpty()) {
-                Row(
-                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    capabilities.forEach { CapabilityChip(it) }
+                    allChips.forEach { CapabilityChip(it) }
                 }
             }
         }
@@ -762,13 +745,24 @@ private fun PrimaryActions(
         // Audit #29: whether anything here can start. A resume is playable
         // by definition (only a playable resume is ever passed in).
         val playable = resume != null || bestPrint?.canStart == true
-        if (playable) {
-            // Hero Play Button (full width)
+        // UI-fix P1-D1: the hero button plays video, nothing else. A title
+        // whose only option is the provider's own page gets a secondary row
+        // instead — the big green button must never open a web page.
+        val canPlayHere = resume != null || bestPrint?.playableHere == true
+        val providerOnly = resume == null && bestPrint != null &&
+            !bestPrint.playableHere && bestPrint.opensProviderPage
+        if (canPlayHere) {
+            // Hero Play Button (full width). UI-fix P1-X1: press scale +
+            // haptic on the primary action.
+            val playSource = remember { MutableInteractionSource() }
+            PressHaptics(playSource)
             Button(
                 onClick = if (resume != null) onPlayResume else onPlay,
+                interactionSource = playSource,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(52.dp)
+                    .pressScale(playSource),
                 // D-29: a disabled Play keeps the same shape and language as the
                 // enabled one — a tonal fill, not a dead grey slab. The reason it
                 // cannot start rides right under the button, so the tonal state
@@ -780,11 +774,31 @@ private fun PrimaryActions(
                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
                 Text(
-                    text = resume?.label ?: (bestPrint?.playLabel() ?: "Play"),
+                    text = resume?.label ?: "Play",
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
+        } else if (providerOnly) {
+            OutlinedButton(
+                onClick = onPlay,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+            ) {
+                Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(20.dp))
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = "Watch on the provider's page",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Text(
+                text = "This title plays on the provider's own page, with its own player and ads.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         } else {
             // No playable copy: Play is hidden, never a dead button — and
             // Download becomes the primary, full-width and green, with the
@@ -900,7 +914,7 @@ private fun PrimaryActions(
 
 /** Action label for the My List toggle button under Play. */
 internal fun favoriteActionLabel(isFavorite: Boolean): String =
-    if (isFavorite) "My List" else "Add to List"
+    if (isFavorite) "Saved in My List" else "Save to My List"
 
 /**
  * Whether this print gets the viewer somewhere: our player can start a file, or the provider's own
@@ -911,7 +925,6 @@ private val RankedPrint.canStart: Boolean get() = playableHere || opensProviderP
 
 /** The button's word. A page is OPENED, a file is played, and a cam says so while it does. */
 private fun RankedPrint.playLabel(): String = when {
-    playableHere && isCam -> "Play (cam)"
     playableHere -> "Play"
     // Not "Open": a one-word verb hid that this leaves the app's player for the
     // provider's own page, with its player and its ads. The button says where
@@ -986,7 +999,7 @@ private fun VipSourcesCard(onOpenVipUpgrade: () -> Unit) {
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = "Free playback stays at 720p and below. Upgrade to unlock every source on this title.",
+                text = "Free playback stays at 720p and below. Upgrade to unlock 4K and 1080p on this title.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1030,6 +1043,9 @@ private fun ExpandableSynopsis(text: String) {
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CastSection(cast: List<String>, onActorClick: (String) -> Unit) {
+    // UI-fix P1-D3: "and N more" was dead text with no cast screen to open.
+    // It now expands the row in place.
+    var expanded by remember { mutableStateOf(false) }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = "Cast",
@@ -1041,7 +1057,7 @@ private fun CastSection(cast: List<String>, onActorClick: (String) -> Unit) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            cast.take(6).forEach { actor ->
+            (if (expanded) cast else cast.take(6)).forEach { actor ->
                 FilterChip(
                     colors = raddFilterChipColors(),
                     selected = false,
@@ -1054,11 +1070,12 @@ private fun CastSection(cast: List<String>, onActorClick: (String) -> Unit) {
             }
         }
         if (cast.size > 6) {
-            Text(
-                text = "and ${cast.size - 6} more",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            TextButton(onClick = { expanded = !expanded }) {
+                Text(
+                    if (expanded) "Show less" else "and ${cast.size - 6} more",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
         }
     }
 }
@@ -1067,7 +1084,7 @@ private fun CastSection(cast: List<String>, onActorClick: (String) -> Unit) {
 private fun PrintSummary(officialPrintCount: Int, camPrintCount: Int) {
     val total = officialPrintCount + camPrintCount
     val officialText = when {
-        total == 0 -> "No versions available on the connected server"
+        total == 0 -> "No versions available here yet"
         officialPrintCount > 0 -> "$officialPrintCount official version${if (officialPrintCount == 1) "" else "s"} available"
         else -> "No official versions"
     }
@@ -1541,7 +1558,7 @@ private fun PrintCard(
 
         if (print.isCam) {
             Text(
-                "This is a cam/bootleg recording. Pick an official version above when one exists.",
+                "This is a cam/bootleg recording — low quality.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error,
             )
@@ -1558,10 +1575,10 @@ private fun PrintCard(
                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(Modifier.width(6.dp))
                 // CL-4: every print's Play button said bare "Play", so three
-                // prints announced identically. The verb stays (a cam still says
-                // "Play (cam)", a provider page still says where the tap goes);
-                // the quality makes each one distinct. The PrimaryActions hero
-                // button above keeps bare "Play" — it is the single hero action.
+                // prints announced identically. The verb stays (a provider page
+                // still says where the tap goes); the quality makes each one
+                // distinct. The PrimaryActions hero button above keeps bare
+                // "Play" — it is the single hero action.
                 Text(playText, modifier = Modifier.clearAndSetSemantics { })
             }
             OutlinedButton(onClick = { onKeep(print) }) {
@@ -1655,20 +1672,5 @@ private fun openInExternalPlayer(context: Context, url: String) {
         } catch (_: Exception) {
             Toast.makeText(context, "No player or browser installed", Toast.LENGTH_SHORT).show()
         }
-    }
-}
-
-/**
- * Session 73 (Phase 5): open a plain web link in the external browser — the
- * Web Download link for a free viewer. Unlike [openInExternalPlayer] this sets
- * no MIME type, so the system picks the browser, not a video player.
- */
-private fun openWebPage(context: Context, url: String) {
-    try {
-        context.startActivity(
-            Intent(Intent.ACTION_VIEW, Uri.parse(url)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-    } catch (_: Exception) {
-        Toast.makeText(context, "No browser installed", Toast.LENGTH_SHORT).show()
     }
 }

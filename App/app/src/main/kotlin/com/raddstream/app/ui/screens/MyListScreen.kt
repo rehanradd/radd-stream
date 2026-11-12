@@ -188,7 +188,7 @@ fun MyListScreen(
 }
 
 /**
- * Robo run 8: the My List empty state never showed its "Popular right now"
+ * Robo run 8: the My List empty state never showed its "Most versions"
  * row — and Robo measured three 32dp clickables just above the nav bar.
  * Both are the same layout bug: [EmptyState] is a fillMaxSize Box, so inside
  * the Column it took the whole height and the [PopularRow] below it was laid
@@ -226,8 +226,9 @@ internal fun MyListEmptyContent(
 
 /**
  * Three titles for an empty list — the server's own trending order (most
- * prints and mirrors first), not this viewer's history. A tap opens the
- * title; saving it from there is what fills the list.
+ * prints and mirrors first), not this viewer's history and not a popularity
+ * claim: the ledger has no play counts. A tap opens the title; saving it
+ * from there is what fills the list.
  */
 @Composable
 private fun PopularRow(popular: List<Post>, onPostClick: (Post) -> Unit) {
@@ -238,7 +239,7 @@ private fun PopularRow(popular: List<Post>, onPostClick: (Post) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(
-            "Popular right now",
+            "Most versions",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.onBackground,
         )

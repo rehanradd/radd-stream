@@ -46,14 +46,13 @@ import kotlinx.coroutines.launch
  * whole result set before paging — so they stay opt-in and the default never pays
  * for them.
  *
- * "Most watched" is the viewer's word for this rail. The ledger has no play-count
- * column, so the server ranks by how many prints and mirrors the catalog holds for a
- * work — the label says what the rail feels like, never "Trending", which would promise
- * popularity data that does not exist.
+ * "Most versions" names what the sort actually measures: how many prints and mirrors
+ * the catalog holds for a work. The ledger has no play-count column, so no label here
+ * may promise popularity — never "Trending", never "Most watched".
  */
 enum class SearchSort(val label: String, val wireValue: String) {
     NEWEST("Newest", "newest"),
-    MOST_SOURCES("Most watched", "trending"),
+    MOST_SOURCES("Most versions", "trending"),
     HIGHEST_IMDB("Highest IMDb", "rating"),
     TITLE("Title A–Z", "title");
 
@@ -92,11 +91,34 @@ enum class QualityFilter(val label: String, val wireValue: String?) {
     HD("720p", "720p"),
 }
 
+/**
+ * UI-fix P1-H5/P1-S2: the language filter the server already answers
+ * (`language=hindi` → 7 of 9 Salaar) but the app never exposed. Desi-first
+ * first: Hindi, Urdu, Tamil, Telugu, Punjabi, Bengali, Marathi, Malayalam,
+ * Kannada, Gujarati, then English. The v2 search route takes no language,
+ * so a language search stays on the v1 route — like the free-only filter.
+ */
+enum class LanguageFilter(val label: String, val wireValue: String?) {
+    ALL("All", null),
+    HINDI("Hindi", "hindi"),
+    URDU("Urdu", "urdu"),
+    TAMIL("Tamil", "tamil"),
+    TELUGU("Telugu", "telugu"),
+    PUNJABI("Punjabi", "punjabi"),
+    BENGALI("Bengali", "bengali"),
+    MARATHI("Marathi", "marathi"),
+    MALAYALAM("Malayalam", "malayalam"),
+    KANNADA("Kannada", "kannada"),
+    GUJARATI("Gujarati", "gujarati"),
+    ENGLISH("English", "english"),
+}
+
 data class SearchFilters(
     val type: String? = null,
     val industry: IndustryFilter = IndustryFilter.ALL,
     val genre: GenreFilter = GenreFilter.ALL,
     val quality: QualityFilter = QualityFilter.ALL,
+    val language: LanguageFilter = LanguageFilter.ALL,
     val yearFrom: Int? = null,
     val yearTo: Int? = null,
     /**
@@ -110,6 +132,7 @@ data class SearchFilters(
         get() = industry != IndustryFilter.ALL ||
             genre != GenreFilter.ALL ||
             quality != QualityFilter.ALL ||
+            language != LanguageFilter.ALL ||
             includedOnly
 
     val anyClientFilterActive: Boolean
@@ -294,6 +317,12 @@ class SearchViewModel @Inject constructor(
         scheduleSearch(reset = true)
     }
 
+    fun selectLanguage(language: LanguageFilter) {
+        if (_uiState.value.filters.language == language) return
+        _uiState.update { it.copy(filters = it.filters.copy(language = language)) }
+        scheduleSearch(reset = true)
+    }
+
     fun setIncludedOnly(includedOnly: Boolean) {
         if (_uiState.value.filters.includedOnly == includedOnly) return
         _uiState.update { it.copy(filters = it.filters.copy(includedOnly = includedOnly)) }
@@ -368,6 +397,7 @@ class SearchViewModel @Inject constructor(
                     type = state.filters.type,
                     industry = state.filters.industry.wireValue,
                     genre = state.filters.genre.wireValue,
+                    language = state.filters.language.wireValue,
                     quality = state.filters.quality.wireValue,
                     sort = state.sort.wireValue,
                     freeOnly = state.filters.includedOnly.takeIf { it },
@@ -433,12 +463,13 @@ class SearchViewModel @Inject constructor(
             onV2 = false
             try {
                 // Phase 7 (M1): v2 search first — one row per work — with v1 as
-                // the fallback. The v2 side has no free-only filter, so a
-                // free-only search stays on v1; and v2 matches titles only, so
-                // an EMPTY v2 page falls back to v1, which is the route that
-                // matches cast names (actor search, per the cast directive).
+                // the fallback. The v2 side has no free-only filter and no
+                // language filter, so a free-only or language search stays on
+                // v1; and v2 matches titles only, so an EMPTY v2 page falls
+                // back to v1, which is the route that matches cast names
+                // (actor search, per the cast directive).
                 val freeOnly = filters.includedOnly
-                if (!freeOnly) {
+                if (!freeOnly && filters.language == LanguageFilter.ALL) {
                     val page = catalogRepository.searchWorksV2(
                         query = query,
                         sort = state.sort.wireValue,
@@ -477,6 +508,7 @@ class SearchViewModel @Inject constructor(
                     type = filters.type,
                     industry = filters.industry.wireValue,
                     genre = filters.genre.wireValue,
+                    language = filters.language.wireValue,
                     quality = filters.quality.wireValue,
                     sort = state.sort.wireValue,
                     freeOnly = filters.includedOnly.takeIf { it },

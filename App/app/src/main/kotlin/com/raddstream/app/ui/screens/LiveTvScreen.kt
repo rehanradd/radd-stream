@@ -19,11 +19,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Card
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -46,6 +48,7 @@ import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.PosterGridSkeleton
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.ui.layout.CardGeometry
 import com.raddstream.app.viewmodel.LiveTvViewModel
 
@@ -88,13 +91,14 @@ fun LiveTvScreen(
             // list (with a notice, below) — the error owns the screen only
             // when there is nothing at all to show.
             state.error != null && state.channels.isEmpty() -> ErrorState(
+                title = "Live TV isn't available",
                 message = state.error ?: "Could not load live channels.",
                 onRetry = { viewModel.refresh() },
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
             state.channels.isEmpty() -> EmptyState(
                 title = "No live channels right now",
-                message = "Live channels will appear here once the operator enables them.",
+                message = "Live channels will appear here when they are available.",
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
             else -> Column(Modifier.fillMaxSize().padding(contentPadding)) {
@@ -133,6 +137,16 @@ fun LiveTvScreen(
                             contentDescription = null,
                         )
                     },
+                    trailingIcon = {
+                        if (state.query.isNotEmpty()) {
+                            IconButton(onClick = { viewModel.onQueryChanged("") }) {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Clear search",
+                                )
+                            }
+                        }
+                    },
                     singleLine = true,
                     modifier = Modifier
                         .fillMaxWidth()
@@ -148,6 +162,7 @@ fun LiveTvScreen(
                 ) {
                     item {
                         FilterChip(
+                            colors = raddFilterChipColors(),
                             selected = state.selectedCategory == null,
                             onClick = { viewModel.onCategorySelected(null) },
                             label = { Text("All") },
@@ -157,6 +172,7 @@ fun LiveTvScreen(
                     }
                     items(state.categories) { category ->
                         FilterChip(
+                            colors = raddFilterChipColors(),
                             selected = state.selectedCategory == category,
                             onClick = { viewModel.onCategorySelected(category) },
                             label = { Text(categoryLabel(category)) },
@@ -209,7 +225,11 @@ private fun LiveTvChannelCard(
     // Robo run 2: every card announced its name three times (logo description,
     // name text, and the "LIVE" badge on every card) — the same words on all
     // ~18 channels. One sentence per card; the logo, badge and texts are paint.
-    val a11y = "${channel.name}, live, ${categoryLabel(channel.category)} · ${channel.country}"
+    val a11y = listOfNotNull(
+        "${channel.name}, live",
+        categoryLabel(channel.category),
+        channel.country.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
     Card(
         onClick = onClick,
         modifier = modifier.semantics { contentDescription = a11y },
@@ -264,7 +284,11 @@ private fun LiveTvChannelCard(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp).clearAndSetSemantics { },
             )
             Text(
-                text = "${categoryLabel(channel.category)} · ${channel.country}",
+                text = listOfNotNull(
+                    categoryLabel(channel.category),
+                    channel.country.takeIf { it.isNotBlank() },
+                ).joinToString(" · "),
+                // P2-6: no trailing separator when the country is blank.
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 10.dp).padding(bottom = 10.dp).clearAndSetSemantics { },

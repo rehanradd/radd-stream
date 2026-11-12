@@ -379,11 +379,15 @@ fun ErrorState(
     message: String,
     onRetry: () -> Unit,
     modifier: Modifier = Modifier,
+    // UI-fix P2-2: one headline for every failure read the same — a dead
+    // server, an empty search and a failed page all said "Something went
+    // wrong". Callers name the context; the default stays for Home's fatal.
+    title: String = "Something went wrong",
     secondaryLabel: String? = null,
     onSecondary: (() -> Unit)? = null,
 ) {
     EmptyState(
-        title = "Something went wrong",
+        title = title,
         modifier = modifier,
         message = message,
         icon = {

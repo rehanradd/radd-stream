@@ -49,7 +49,7 @@ import kotlinx.coroutines.launch
  * "Because you watch" renders from GET /api/v1/related, seeded from the
  * first Continue Watching post, and the genre/language jump-off renders
  * from GET /api/v1/facets — both are real server answers now, so neither
- * is reserved any more. "Most watched" used to sit in that list; it does
+ * is reserved any more. "Most versions" used to sit in that list; it does
  * not any more, because the sort it needs already exists on the live route
  * (`/api/v1/posts?sort=trending`) — see [initialHomeSections].
  */
@@ -77,7 +77,7 @@ data class HomeSection(
     val error: String? = null,
     /**
      * The server sort this rail asks for (`/api/v1/posts?sort=`), or null for
-     * the server default (`p.id DESC`, freshest first). Only "Most watched"
+     * the server default (`p.id DESC`, freshest first). Only "Most versions"
      * sets one today: `sort=trending` ranks by how many prints and mirrors
      * the catalog holds for a work — the ledger has no play-count column,
      * so the rail is labelled for the viewer, never "Trending" (which would
@@ -258,7 +258,7 @@ private const val RESERVE_NOTE = """
       - (none — "Because you watch" shipped with GET /api/v1/related and
         the genre / language jump-off with GET /api/v1/facets.)
     None of these render until the backend returns real rows; they are NOT faked.
-    "Most watched" left this list in D2.2: its order already exists as
+    "Most versions" left this list in D2.2: its order already exists as
     sort=trending on /api/v1/posts (most prints and mirrors — no play counts
     exist, so it is not popularity), and the app already calls that sort.
 """
@@ -268,12 +268,12 @@ private const val BECAUSE_YOU_WATCH_KEY = "because_you_watch"
 
 /**
  * The rails Home actually renders, in order. Pure, so the test can pin the
- * questions that matter without a repository: five rails, "Most watched"
+ * questions that matter without a repository: five rails, "Most versions"
  * last, and only that rail asks the server for a sort.
  *
  * Only rails v1 can honestly serve today. `type = null` == recently added
  * (the API default order is `p.id DESC` per viewer.py:1905, i.e. freshest
- * scrape). "Most watched" is `sort=trending` on the same live route — the
+ * scrape). "Most versions" is `sort=trending` on the same live route — the
  * server ranks by how many prints and mirrors the catalog holds for a work,
  * because the ledger has no play-count column; the label says what the
  * order is, and "Trending" would promise popularity data that does not
@@ -283,8 +283,8 @@ internal fun initialHomeSections(): List<HomeSection> = listOf(
     HomeSection(key = "recent", title = "Recently added", type = null, loading = true),
     HomeSection(key = "movie", title = "Movies", type = "movie", loading = true),
     HomeSection(key = "series", title = "Series", type = "series", loading = true),
-    HomeSection(key = "season", title = "Seasons", type = "complete_season", loading = true),
-    HomeSection(key = "most_sources", title = "Most watched", type = null, sort = "trending", loading = true),
+    HomeSection(key = "season", title = "Complete series", type = "complete_season", loading = true),
+    HomeSection(key = "most_sources", title = "Most versions", type = null, sort = "trending", loading = true),
 )
 
 /**
@@ -905,13 +905,13 @@ class HomeViewModel @Inject constructor(
                     // Phase 7 (M1): the v2 list first — one row per work, keyset-safe —
                     // with the v1 list as the fallback. An empty v2 page falls back too:
                     // a section type the v2 side cannot serve must not read as "no titles".
-                    // A rail that asks for a server sort (only "Most watched" today) keeps
+                    // A rail that asks for a server sort (only "Most versions" today) keeps
                     // it on both paths; the others keep the v2 default sort.
                     val page = catalogRepository.browseWorksV2(type = section.type, sort = section.sort ?: "trending", limit = 18)
                     if (page != null && page.posts.isNotEmpty()) {
                         page.posts
                     } else if (section.sort == "trending") {
-                        // "Most watched": the dedicated /api/v1/trending route
+                        // "Most versions": the dedicated /api/v1/trending route
                         // first, the list it replaces behind it — an old
                         // server answers the old route, so the rail never
                         // loses rows to a route it does not have yet.

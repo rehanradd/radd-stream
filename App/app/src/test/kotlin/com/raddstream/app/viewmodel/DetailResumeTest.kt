@@ -99,8 +99,8 @@ class DetailResumeTest {
     }
 
     @Test
-    fun `favorite action label toggles between Add to List and My List`() {
-        assertEquals("Add to List", favoriteActionLabel(false))
-        assertEquals("My List", favoriteActionLabel(true))
+    fun `favorite action label toggles between Save to My List and Saved in My List`() {
+        assertEquals("Save to My List", favoriteActionLabel(false))
+        assertEquals("Saved in My List", favoriteActionLabel(true))
     }
 }

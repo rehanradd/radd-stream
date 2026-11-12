@@ -14,7 +14,7 @@ import com.google.gson.annotations.SerializedName
  *                               each release with `sources[]` projected by the link view)
  *  GET /api/v1/stream           → [StreamResponse]           (our own redirector, `redirect=0`)
  *  GET /api/v1/stats            → [StatsResponse]            (scale only, no per-site rows)
- *  GET /api/v1/trending         → [PostsResponse]            (the "Most watched" order,
+ *  GET /api/v1/trending         → [PostsResponse]            (the "Most versions" order,
  *                               `sort=trending` on /api/v1/posts, as its own route)
  *  GET /api/v1/related          → [PostsResponse]            ("Because you watch", scored
  *                               on the seed post's genres, cast, industry, type and year)

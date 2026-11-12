@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
@@ -19,6 +20,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -38,11 +40,19 @@ fun SetupScreen(
 ) {
     val state by viewModel.uiState.collectAsState()
 
+    // UI-fix P0-4: the shipped server is probed once on arrival, with the
+    // progress visible — a first-run user never meets a dead screen that
+    // only asks for an address they do not have.
+    LaunchedEffect(Unit) {
+        if (!state.isConnected) viewModel.retryDefault()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
             .imePadding()
+            .navigationBarsPadding()
             .padding(horizontal = 28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
@@ -50,7 +60,7 @@ fun SetupScreen(
         Text(Brand.name, style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Connect to a catalog server you operate or are authorized to use.",
+            text = "Radd Stream connects automatically. If that fails, you can enter a different address — or continue offline with your saved titles.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
@@ -130,6 +140,16 @@ fun SetupScreen(
             ),
         ) {
             Text("Continue", style = MaterialTheme.typography.labelLarge)
+        }
+
+        // UI-fix P0-4: never strand the user. If the shipped server does not
+        // answer, Home still opens — saved titles and the retry there — with
+        // no address to type and no dead end.
+        if (!state.isConnected) {
+            Spacer(Modifier.height(8.dp))
+            TextButton(onClick = onConnected) {
+                Text("Continue offline — saved titles only")
+            }
         }
 
         if (!state.showUrlField) {

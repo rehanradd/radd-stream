@@ -76,12 +76,12 @@ import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.PosterRailSkeleton
-import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.PosterCard
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.GenreFilter
+import com.raddstream.app.viewmodel.LanguageFilter
 import com.raddstream.app.viewmodel.IndustryFilter
 import com.raddstream.app.viewmodel.QualityFilter
 import com.raddstream.app.viewmodel.SearchSort
@@ -95,7 +95,7 @@ private val typeChips = listOf(
     "Series" to "series",
     // Not a `content_type`: the server answers `type=anime` from the `is_animated` flag.
     "Anime" to "anime",
-    "Seasons" to "complete_season",
+    "Complete series" to "complete_season",
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -112,6 +112,8 @@ fun SearchScreen(
     initialGenre: String? = null,
     /** An industry filter to apply at once — a facet chip on Home lands here with the industry filled in. */
     initialIndustry: String? = null,
+    /** A language filter to apply at once — a language chip on Home lands here with the language filled in. */
+    initialLanguage: String? = null,
     viewModel: SearchViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
@@ -133,12 +135,15 @@ fun SearchScreen(
     // any filter the viewer set. Keyed on the arguments, so a rotation or
     // a later edit never re-applies them. An unknown wire value is ignored,
     // never guessed at.
-    LaunchedEffect(initialGenre, initialIndustry) {
+    LaunchedEffect(initialGenre, initialIndustry, initialLanguage) {
         initialGenre?.let { wire ->
             GenreFilter.entries.firstOrNull { it.wireValue == wire }?.let { viewModel.selectGenre(it) }
         }
         initialIndustry?.let { wire ->
             IndustryFilter.entries.firstOrNull { it.wireValue == wire }?.let { viewModel.selectIndustry(it) }
+        }
+        initialLanguage?.let { wire ->
+            LanguageFilter.entries.firstOrNull { it.wireValue == wire }?.let { viewModel.selectLanguage(it) }
         }
     }
 
@@ -283,7 +288,6 @@ fun SearchScreen(
                     state = state,
                     viewModel = viewModel,
                     onPostClick = onPostClick,
-                    onOpenFilters = { showSheet = true },
                 )
             } else if (state.recents.isNotEmpty()) {
                 // A pasted link replaces the results, not the history: the
@@ -488,7 +492,6 @@ private fun SearchBody(
     state: SearchUiState,
     viewModel: SearchViewModel,
     onPostClick: (Post) -> Unit,
-    onOpenFilters: () -> Unit,
 ) {
     // Session 121 (P-12): scrolling the results dismisses the keyboard — the open
     // keyboard covering the top row was the other half of the complaint (the first
@@ -516,7 +519,7 @@ private fun SearchBody(
         state.isLoading && state.groups.isEmpty() -> PosterRailSkeleton(
             Modifier.fillMaxWidth().padding(top = 16.dp),
         )
-        state.error != null && state.groups.isEmpty() -> ErrorState(message = state.error ?: "Search failed.", onRetry = viewModel::submitCurrentQuery)
+        state.error != null && state.groups.isEmpty() -> ErrorState(title = "Couldn't search", message = state.error ?: "Search failed.", onRetry = viewModel::submitCurrentQuery)
         // Audit #36: "No matches" only after a completed search returns zero
         // rows — never while a search is still in flight (the skeleton owns
         // that window), and never before the first search.
@@ -553,22 +556,15 @@ private fun SearchBody(
         )
         else -> LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
             item {
-                Row(
+                // P1-S3: one filter entry point — the top bar's Tune icon (and
+                // the "Filtered" pill) opens the sheet. The header keeps only
+                // the count; a second "Sort" door to the same sheet is gone.
+                Text(
+                    text = resultsSummary(state.resultCount, state.serverTotal, state.hasMore),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = resultsSummary(state.resultCount, state.serverTotal, state.hasMore),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    TextButton(onClick = onOpenFilters) {
-                        Icon(Icons.Default.Tune, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("Sort · ${state.sort.label}")
-                    }
-                }
+                )
             }
 
             // Audit #37: the server's "did you mean" spelling, one tap to
@@ -609,12 +605,27 @@ private fun SearchBody(
                         modifier = Modifier.padding(horizontal = 0.dp),
                     )
                 }
-                item {
-                    MediaRail(items = group.items, key = { it.id }) { post ->
-                        PosterCard(post = post, onClick = { onPostClick(post) })
+                // P1-S1: results are a scannable vertical grid, two posters
+                // wide — rails are for Home. Scanning 20 results no longer
+                // means swiping every rail sideways.
+                group.items.chunked(2).forEachIndexed { rowIndex, pair ->
+                    item(key = "${group.typeKey}-row-$rowIndex") {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            pair.forEach { post ->
+                                PosterCard(
+                                    post = post,
+                                    onClick = { onPostClick(post) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            if (pair.size == 1) Spacer(Modifier.weight(1f))
+                        }
+                        Spacer(Modifier.height(12.dp))
                     }
                 }
-                item { Spacer(Modifier.height(12.dp)) }
             }
 
             if (state.hasMore) {
@@ -678,6 +689,14 @@ private fun FilterSheetContent(
             isSelected = { state.filters.genre == it },
             onSelect = viewModel::selectGenre,
             allDescription = "All genres",
+        )
+        FacetChips(
+            title = "Language",
+            options = LanguageFilter.entries,
+            label = { it.label },
+            isSelected = { state.filters.language == it },
+            onSelect = viewModel::selectLanguage,
+            allDescription = "All languages",
         )
         FacetChips(
             title = "Quality",

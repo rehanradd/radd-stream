@@ -87,15 +87,15 @@ fun BrowseScreen(
                 modifier = Modifier.fillMaxSize().padding(contentPadding),
             )
             state.error != null && state.items.isEmpty() ->
-                ErrorState(message = state.error ?: "Could not load.", onRetry = viewModel::load,
+                ErrorState(title = "Couldn't load this category", message = state.error ?: "Could not load.", onRetry = viewModel::load,
                     modifier = Modifier.padding(contentPadding))
             state.items.isEmpty() -> EmptyState(
                 title = "Nothing here yet",
-                message = "This category has no titles on the connected server.",
+                message = "This category has no titles here yet.",
                 modifier = Modifier.padding(contentPadding),
                 action = {
                     // The category is empty, not the app. The way forward is back to the picker.
-                    OutlinedButton(onClick = onBackClick) { Text("Pick another category") }
+                    OutlinedButton(onClick = onBackClick) { Text("Browse all") }
                 },
             )
             else -> LazyVerticalGrid(

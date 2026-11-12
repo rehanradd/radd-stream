@@ -124,6 +124,11 @@ fun SettingsScreen(
     // Audit #51: the server switcher lives behind Advanced — closed until
     // the viewer asks for it, so a casual tap can never disconnect the app.
     var showAdvanced by remember { mutableStateOf(false) }
+    // UI-fix P1-T1: the Account card's key machinery lives behind these
+    // two doors — guests see Sign in / Create account only, signed-in
+    // viewers see Sync / Sign out, and the rest waits behind a tap.
+    var showSignInForm by remember { mutableStateOf(false) }
+    var showAccountDetails by remember { mutableStateOf(false) }
 
     // A status line this screen used to print inside the About card as a button that did
     // nothing. It is a transient answer to an action, so it lives where every other screen
@@ -222,7 +227,7 @@ fun SettingsScreen(
                 // A keep is gated by the Wi-Fi-only switch in the Offline card above,
                 // not by this one — this switch only ever governed the thumbnails.
                 Text(
-                    "A title you keep follows the Wi-Fi-only switch in the Offline card; this only " +
+                    "A title you download follows the Wi-Fi-only switch in the Offline card; this only " +
                         "governs the thumbnails on the screens you browse.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -242,7 +247,7 @@ fun SettingsScreen(
                 )
 
                 Spacer(Modifier.height(10.dp))
-                PreferenceRowTitle("Offline keep duration")
+                PreferenceRowTitle("How long downloads are kept")
                 ChipRow(KeepTtl.entries.map { it.label }, KeepTtl.entries.indexOf(state.prefs.keepTtl)) { idx ->
                     viewModel.setKeepTtl(KeepTtl.entries.toList()[idx])
                 }
@@ -289,7 +294,7 @@ fun SettingsScreen(
                 }
                 Text(
                     "Saved on this device, and applied the next time each one matters: image size " +
-                        "from the next poster, the keep duration from the next download.",
+                        "from the next poster, the download duration from the next download.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -378,7 +383,7 @@ fun SettingsScreen(
             if (features.downloads) {
                 SettingsCard(title = "Offline", icon = Icons.Default.Download) {
                     Text(
-                        "Manage kept-for-offline titles, view storage use and expiry.",
+                        "Manage downloaded titles, view storage use and expiry.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -389,7 +394,7 @@ fun SettingsScreen(
                         label = "Download only on Wi-Fi",
                     )
                     Text(
-                        "A title you keep downloads only when this phone is on Wi-Fi. Turn it off to download on mobile data too.",
+                        "Downloads happen only when this phone is on Wi-Fi. Turn it off to download on mobile data too.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -400,13 +405,13 @@ fun SettingsScreen(
                         label = "Delete watched downloads",
                     )
                     Text(
-                        "A finished download deletes itself to free space. A finished series episode deletes its own keep too — only the episode you just watched, never the rest of the season.",
+                        "A finished download deletes itself to free space. A finished series episode deletes its own download too — only the episode you just watched, never the rest of the season.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(10.dp))
                     OutlinedButton(onClick = onOpenDownloads, modifier = Modifier.fillMaxWidth()) {
-                        Text("Open Media Vault")
+                        Text("Open Downloads")
                     }
                 }
             }
@@ -419,7 +424,7 @@ fun SettingsScreen(
                     SwitchRow(
                         checked = state.lanShareEnabled,
                         onCheckedChange = viewModel::setLanShareEnabled,
-                        label = "Let devices on this network play kept files",
+                        label = "Let devices on this network play downloaded files",
                     )
                     Text(
                         lanShareStatusLine(state.lanShareStatus),
@@ -427,7 +432,7 @@ fun SettingsScreen(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
-                        "While this is on, anything on your local network can read your kept files.",
+                        "Only devices on your Wi-Fi can see them.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -439,7 +444,7 @@ fun SettingsScreen(
                 // The poster-image cache as a bar: what it holds now against the
                 // loader's own cap. Nothing here is a guess at the device's free
                 // space, and the kept videos are not in this number at all — they
-                // are listed and removed on the Media Vault screen.
+                // are listed and removed on the Downloads screen.
                 val cacheBytes = state.posterCacheBytes
                 val cacheMax = state.posterCacheMaxBytes
                 if (cacheBytes != null && cacheMax != null) {
@@ -459,8 +464,8 @@ fun SettingsScreen(
                 }
                 Text(
                     "This clears only the poster images the app has fetched; they come back as you " +
-                        "browse. Videos you kept for offline are not touched here — they are removed " +
-                        "individually on the Media Vault screen.",
+                        "browse. Videos you downloaded for offline are not touched here — they are removed " +
+                        "individually on the Downloads screen.",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -518,7 +523,7 @@ fun SettingsScreen(
                 Text(
                     if (account.signedIn) {
                         "Signed in on this device. Your saved list, watch history and resume points " +
-                            "are kept on the connected server as well as here."
+                            "are saved to your account as well as on this device."
                     } else {
                         "Guest mode. Everything in this app works without an account: your saved " +
                             "list, watch history and resume points stay on this device. Sign in only " +
@@ -592,74 +597,88 @@ fun SettingsScreen(
                     TextButton(onClick = viewModel::hideRevealedKey) { Text("Done showing this key") }
                 }
 
-                if (account.signedIn && account.revealedKey == null && account.keyHint.isNotEmpty()) {
-                    Text(
-                        "Key on this device: ${account.keyHint}. The full key was shown once, when it " +
-                            "was created, and is not stored anywhere it can be re-displayed.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-
+                // UI-fix P1-T1: progressive disclosure. A guest sees "Sign in"
+                // and "Create account" only — the key field, the label and the
+                // long warnings wait behind the Sign in tap. A signed-in viewer
+                // sees Sync / Sign out, and the key hint, label and phone+PIN
+                // link wait behind "Account details".
                 if (!account.signedIn) {
-                    OutlinedTextField(
-                        value = account.quickInput,
-                        onValueChange = viewModel::onQuickInputChanged,
-                        label = { Text("Sync key") },
-                        placeholder = { Text("The 16-character key from your other device") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    // The sentence this card used to print — "anyone who knows it can derive the
-                    // same key" — described a feature that is now deleted, so it is replaced by
-                    // the two facts that are true of what is left: a number cannot open an
-                    // account, and the key is the whole account.
-                    Text(
-                        "Enter the key this app showed once, when it created the account. A mobile " +
-                            "number is not a key and this app cannot turn one into a key: knowing " +
-                            "someone's number gets them nowhere. An account is only as strong as " +
-                            "its key, so keep the key somewhere safe, and sign out on any device " +
-                            "that is not yours.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    AccountLabelField(
-                        value = account.labelInput,
-                        onValueChange = viewModel::onAccountLabelChanged,
-                        onSave = null,
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Button(
-                            onClick = viewModel::quickSignIn,
-                            enabled = !account.isBusy && account.quickInput.isNotBlank(),
-                            // Robo run 5: the disabled text on this button read
-                            // 2.98:1 — see DisabledButtonContentAlpha.
-                            colors = ButtonDefaults.buttonColors(
-                                disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(
-                                    alpha = DisabledButtonContentAlpha,
+                    if (!showSignInForm) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Button(
+                                onClick = { showSignInForm = true },
+                                enabled = !account.isBusy,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Sign in")
+                            }
+                            OutlinedButton(
+                                onClick = viewModel::createAccount,
+                                enabled = !account.isBusy,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Create account")
+                            }
+                        }
+                    } else {
+                        OutlinedTextField(
+                            value = account.quickInput,
+                            onValueChange = viewModel::onQuickInputChanged,
+                            label = { Text("Sync key") },
+                            placeholder = { Text("The 16-character key from your other device") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        // The sentence this card used to print — "anyone who knows it can derive the
+                        // same key" — described a feature that is now deleted, so it is replaced by
+                        // the two facts that are true of what is left: a number cannot open an
+                        // account, and the key is the whole account.
+                        Text(
+                            "Enter the key this app showed once, when it created the account. A mobile " +
+                                "number is not a key and this app cannot turn one into a key: knowing " +
+                                "someone's number gets them nowhere. An account is only as strong as " +
+                                "its key, so keep the key somewhere safe, and sign out on any device " +
+                                "that is not yours.",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        AccountLabelField(
+                            value = account.labelInput,
+                            onValueChange = viewModel::onAccountLabelChanged,
+                            onSave = null,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Button(
+                                onClick = viewModel::quickSignIn,
+                                enabled = !account.isBusy && account.quickInput.isNotBlank(),
+                                // Robo run 5: the disabled text on this button read
+                                // 2.98:1 — see DisabledButtonContentAlpha.
+                                colors = ButtonDefaults.buttonColors(
+                                    disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(
+                                        alpha = DisabledButtonContentAlpha,
+                                    ),
                                 ),
-                            ),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            BusyLabel(account.isBusy, "Sign in")
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                BusyLabel(account.isBusy, "Sign in")
+                            }
+                            OutlinedButton(
+                                onClick = viewModel::createAccount,
+                                enabled = !account.isBusy,
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text("Create a random key")
+                            }
                         }
-                        OutlinedButton(
-                            onClick = viewModel::createAccount,
-                            enabled = !account.isBusy,
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Text("Create a random key")
-                        }
+                        TextButton(onClick = { showSignInForm = false }) { Text("Cancel") }
                     }
                 } else {
-                    AccountLabelField(
-                        value = if (account.labelInput.isEmpty()) account.accountLabel else account.labelInput,
-                        onValueChange = viewModel::onAccountLabelChanged,
-                        onSave = viewModel::saveAccountLabel,
-                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -676,42 +695,57 @@ fun SettingsScreen(
                             enabled = !account.isBusy,
                             modifier = Modifier.weight(1f),
                         ) {
-                            Text("Sign out (revokes the key)")
+                            Text("Sign out")
                         }
                     }
-                }
-
-                // ── the phone + PIN profile link ─────────────────────────
-                //
-                // Offered only to a device that holds a key: the route writes onto the account the
-                // bearer names, so with no credential there is nothing to link and the honest thing
-                // is to hide the form rather than let it fail.
-                if (account.signedIn) {
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        AccountCardCopy.LINK_TITLE,
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        AccountCardCopy.LINK_BONUS,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Text(
-                        AccountCardCopy.LINK_PIN_MEANING,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    OutlinedButton(
-                        onClick = viewModel::openLinkForm,
-                        enabled = !account.isLinking,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(if (account.showLinkForm) "Close" else AccountCardCopy.LINK_BUTTON)
+                    TextButton(onClick = { showAccountDetails = !showAccountDetails }) {
+                        Text(if (showAccountDetails) "Hide account details" else "Account details")
                     }
-                    if (account.showLinkForm) {
-                        ProfileLinkDialog(account = account, viewModel = viewModel, serverUrl = state.serverUrl)
+                    if (showAccountDetails) {
+                        if (account.revealedKey == null && account.keyHint.isNotEmpty()) {
+                            Text(
+                                "Key on this device: ${account.keyHint}. The full key was shown once, when it " +
+                                    "was created, and is not stored anywhere it can be re-displayed.",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                        AccountLabelField(
+                            value = if (account.labelInput.isEmpty()) account.accountLabel else account.labelInput,
+                            onValueChange = viewModel::onAccountLabelChanged,
+                            onSave = viewModel::saveAccountLabel,
+                        )
+                        // ── the phone + PIN profile link ─────────────────────────
+                        //
+                        // Offered only to a device that holds a key: the route writes onto the account the
+                        // bearer names, so with no credential there is nothing to link and the honest thing
+                        // is to hide the form rather than let it fail.
+                        Spacer(Modifier.height(10.dp))
+                        Text(
+                            AccountCardCopy.LINK_TITLE,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            AccountCardCopy.LINK_BONUS,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Text(
+                            AccountCardCopy.LINK_PIN_MEANING,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        OutlinedButton(
+                            onClick = viewModel::openLinkForm,
+                            enabled = !account.isLinking,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(if (account.showLinkForm) "Close" else AccountCardCopy.LINK_BUTTON)
+                        }
+                        if (account.showLinkForm) {
+                            ProfileLinkDialog(account = account, viewModel = viewModel, serverUrl = state.serverUrl)
+                        }
                     }
                 }
 
@@ -835,7 +869,7 @@ fun SettingsScreen(
             // dialog asked, changeable here at any time.
             SettingsCard(title = "Anonymous usage totals", icon = Icons.Default.Info) {
                 Text(
-                    "Share anonymous totals with the operator: plays, " +
+                    "Share anonymous totals with Radd Stream: plays, " +
                         "playback failures, and crashes. Nothing that can " +
                         "identify you or what you watch is ever sent.",
                     style = MaterialTheme.typography.bodySmall,
@@ -862,14 +896,7 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    "Version ${Brand.versionName} (${Brand.versionCode}) • ${Brand.schemeName}\n" +
-                        "Connection: " +
-                        if (state.serverUrl.trim().startsWith("https", ignoreCase = true)) {
-                            "secured with TLS."
-                        } else {
-                            "plain HTTP — the server address you set does not use https, so anything " +
-                                "this app sends, including a sync key, can be read on the local network."
-                        },
+                    "Version ${Brand.versionName} (${Brand.versionCode}) • ${Brand.schemeName}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

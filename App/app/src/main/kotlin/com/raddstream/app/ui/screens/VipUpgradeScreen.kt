@@ -249,9 +249,9 @@ fun VipUpgradeScreen(
                         VerificationSection(state = state, viewModel = viewModel)
                     }
                     Text(
-                        "Payment accounts are published by the operator of the connected catalog. " +
+                        "Payment details are published by Radd Stream. " +
                             "This app never sees your transfer: it sends only the reference you type " +
-                            "here, to that operator's verification queue.",
+                            "here, for verification.",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -306,7 +306,7 @@ private fun EntitlementCard(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        if (earned.vip) planName else "Awaiting the operator's confirmation",
+                        if (earned.vip) planName else "Awaiting confirmation",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onBackground,
@@ -368,7 +368,7 @@ private fun EntitlementCard(
                 } else {
                     Text(
                         "A payment was filed and no decision has been recorded yet. " +
-                            "VIP turns on here by itself once the operator approves it.",
+                            "VIP turns on here by itself once your payment is confirmed.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -453,7 +453,7 @@ private fun VipHero() {
                 )
             }
             Text(
-                "Pick a plan, send the amount to one of the operator's accounts, then submit " +
+                "Pick a plan, send the amount to one of the accounts below, then submit " +
                     "the transaction ID from your confirmation. JazzCash, EasyPaisa and Raast " +
                     "are all accepted.",
                 style = MaterialTheme.typography.bodyMedium,
@@ -1016,8 +1016,7 @@ internal fun ComingSoonCard() {
         ) {
             SectionLabel("VIP is coming soon")
             Text(
-                "There's no way to pay yet — the operator hasn't published a payment " +
-                    "account, so there's nowhere to send a payment. Check back later.",
+                "There's no way to pay yet — payment options haven't been added. Check back later.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

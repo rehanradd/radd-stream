@@ -17,6 +17,10 @@ import org.robolectric.RobolectricTestRunner
  * type" started at x=0 with their first letter cut off. Every Home section
  * heading sits 16 dp from the screen edge (M3 Expressive phone margin).
  *
+ * UI-fix P1-H3: the two browse rows merged into one "Browse" section, so the
+ * two heading cases below are now one — the single heading still carries
+ * the 16 dp margin.
+ *
  * Runs on the JVM under Robolectric because this project has no emulator
  * image. Requires an x86_64 runner (robolectric/robolectric#9166).
  */
@@ -37,25 +41,15 @@ class HomeSectionMarginsTest {
     }
 
     @Test
-    fun facetRowHeadingHasThePhoneMargin() {
+    fun browseSectionHeadingHasThePhoneMargin() {
         val facets = FacetsResponse(
             genres = listOf(FacetEntry(key = "action", label = "Action", count = 12)),
         )
         compose.setContent {
             RaddStreamTheme {
-                FacetChipsRow(facets = facets, onFacetSelected = { _, _ -> })
+                BrowseSection(facets = facets, onBrowseType = {}, onFacetSelected = { _, _, _ -> })
             }
         }
-        compose.onNodeWithText("Browse by genre").assertLeftPositionInRootIsEqualTo(16.dp)
-    }
-
-    @Test
-    fun jumpOffRowHeadingHasThePhoneMargin() {
-        compose.setContent {
-            RaddStreamTheme {
-                JumpOffRow(onBrowseType = {})
-            }
-        }
-        compose.onNodeWithText("Browse by type").assertLeftPositionInRootIsEqualTo(16.dp)
+        compose.onNodeWithText("Browse").assertLeftPositionInRootIsEqualTo(16.dp)
     }
 }
