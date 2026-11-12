@@ -3508,6 +3508,141 @@ def _poor_match_correction(conn, query: str, result_titles) -> str | None:
     return correction["query"] if correction is not None else None
 
 
+#: The trending order cache — why it exists. `/api/v1/trending` delegates
+#: to `api_v1_get_posts(sort="trending")`, whose page is the one-query
+#: shape: GROUP BY over every public post with two joins, three temp
+#: B-trees (two `COUNT(DISTINCT)`, one ORDER BY) — measured 2.9 s per hit
+#: from localhost at load 0.01 (2026-11-12), ~10 s cold, and nothing
+#: cached it, so every hit paid it. The 0.039 s second hit the gate
+#: probe saw was nginx's 60 s `radd_micro` proxy cache on the public
+#: location, not this process: direct-to-service hits never saw it, and
+#: public hits paid the full cost again whenever the 60 s window lapsed
+#: (9.14 s / 4.90 s at 14:09–14:10). The service is one process
+#: (ThreadingHTTPServer), so an in-process cache holds across requests —
+#: the cache was missing, not per-process.
+#:
+#: What is cached is the ORDER ONLY — post ids by
+#: (release_count + source_count) DESC, p.id DESC, plus the COUNT(*)
+#: total at build time — never the page rows. What a client may see is
+#: re-decided per request: a row flagged adult, or hidden in the panel,
+#: after the order was built is re-checked here and backfilled from
+#: deeper in the order, so a flag flip hides the work on the very next
+#: hit and the page stays full. The fail-safe direction keeps its lag:
+#: an un-flag (or un-hide) waits for the TTL, and `total` can lag the
+#: same window — it is a number, never a listing. The catalog changes
+#: only on batched merges, so a 120 s stale window on a browse list is
+#: the same trade the works list already makes (`_WORKS_CACHE_*`).
+_TRENDING_CACHE_TTL_SECONDS = 120.0
+_TRENDING_CACHE_MAX_ENTRIES = 16
+#: Page 1 of a rail is the hot path, but the route allows any page whose
+#: offset is <= POSTS_MAX_OFFSET (10_000): cache enough ids to answer
+#: every legal page from the cache, so no trending page ever pays the
+#: grouping. The grouping itself costs the same whatever the LIMIT is.
+_TRENDING_ORDER_TOP_N = POSTS_MAX_OFFSET + 100
+#: How many extra ids a page fetch looks past when a cached id was
+#: flagged or hidden after the order was built.
+_TRENDING_PAGE_SLACK = 32
+_TRENDING_ORDER_CACHE: dict = {}
+
+
+def _trending_db_fingerprint():
+    """(path, mtime_ns, size) for the catalog file, or (path,) when the
+    file cannot be stat'ed. A merge or checkpoint bumps the mtime, so
+    the next hit rebuilds instead of serving the pre-merge order; a
+    write that lands only in the WAL leaves the fingerprint alone and
+    the TTL governs — the per-request adult/hide re-check below is
+    what keeps listings exact either way."""
+    path = DB_PATH
+    try:
+        st = os.stat(path)
+    except OSError:
+        return (str(path),)
+    return (str(path), st.st_mtime_ns, st.st_size)
+
+
+def _trending_cache_get(key):
+    entry = _TRENDING_ORDER_CACHE.get(key)
+    if entry is None:
+        return None
+    expires, value = entry
+    if time.monotonic() > expires:
+        del _TRENDING_ORDER_CACHE[key]
+        return None
+    return value
+
+
+def _trending_cache_put(key, value):
+    if len(_TRENDING_ORDER_CACHE) >= _TRENDING_CACHE_MAX_ENTRIES:
+        oldest = min(_TRENDING_ORDER_CACHE,
+                     key=lambda k: _TRENDING_ORDER_CACHE[k][0])
+        del _TRENDING_ORDER_CACHE[oldest]
+    _TRENDING_ORDER_CACHE[key] = (time.monotonic() + _TRENDING_CACHE_TTL_SECONDS, value)
+
+
+def _trending_cached_page(conn, where_sql, params, content_type,
+                          limit, offset, hidden):
+    """(page_ids, total) for a plain trending page from the cached
+    order, or (None, None) when the caller should run the uncached
+    path (the requested window runs past the cached prefix — a page
+    past the legal offset cap, or a page the prefix ran out on while
+    still short). An empty list (not None) means the page is genuinely
+    empty: the cached order is complete and ends before this page.
+
+    On a cache miss the build is the same one-query shape the paged
+    read uses, id-only with the same ORDER BY, plus the COUNT(*) the
+    caller would otherwise run — paid once per TTL, not per hit. The
+    same `where_sql` (adult clause, type facet, hides at build time)
+    builds it, so a cached page and an uncached page answer the same
+    rows in the same order. `full` never reaches here: the caller
+    only offers the fast path to the public shape."""
+    key = (content_type, _trending_db_fingerprint())
+    cached = _trending_cache_get(key)
+    if cached is None:
+        rows = conn.execute(
+            "SELECT p.id FROM posts p"
+            " LEFT JOIN releases r ON r.post_id = p.id"
+            " LEFT JOIN download_sources s ON s.release_id = r.id"
+            f" WHERE {where_sql}"
+            " GROUP BY p.id"
+            " ORDER BY (COUNT(DISTINCT r.id) + COUNT(DISTINCT s.id)) DESC,"
+            " p.id DESC"
+            f" LIMIT {_TRENDING_ORDER_TOP_N}",
+            params).fetchall()
+        ids = [int(r["id"]) for r in rows]
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
+            params).fetchone()[0]
+        _trending_cache_put(key, (ids, total))
+        cached = (ids, total)
+    ids, total = cached
+    truncated = len(ids) >= _TRENDING_ORDER_TOP_N
+    hidden_ids = set(hidden or ())
+    page_ids: list[int] = []
+    cursor = offset
+    while len(page_ids) < limit and cursor < len(ids):
+        window = ids[cursor:cursor + (limit - len(page_ids))
+                     + _TRENDING_PAGE_SLACK]
+        cursor += len(window)
+        marks = ",".join("?" for _ in window)
+        live = {int(r["id"]) for r in conn.execute(
+            f"SELECT p.id FROM posts p WHERE p.id IN ({marks})"
+            f" AND {redact.adult_clause('p')}",
+            window).fetchall()}
+        for pid in window:
+            if len(page_ids) >= limit:
+                break
+            if pid in live and pid not in hidden_ids:
+                page_ids.append(pid)
+    if len(page_ids) < limit and cursor >= len(ids) and truncated:
+        # The cached prefix ran out while the page was still short: the
+        # order may continue past the prefix, so the caller answers
+        # this page from the uncached path instead of serving a short
+        # one. When the order is complete (not truncated) a short page
+        # is the true answer.
+        return None, None
+    return page_ids, total
+
+
 def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -3630,7 +3765,26 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 "p.id NOT IN (%s)" % ",".join("?" for _ in ids))
             params.extend(ids)
             where_sql = " AND ".join(where_clauses)
-        total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
+        # Trending fast path (see `_TRENDING_ORDER_CACHE`): the plain
+        # trending shape — no query, no work handle, no facet filter
+        # beyond the type, public mode — answers its page from the
+        # cached order instead of paying the full-catalog grouping on
+        # every hit. Anything else (a search, a facet, `full`) falls
+        # through to the uncached path below, unchanged.
+        _trending_ids = None
+        _trending_total = None
+        if (not full and sort_key in ("trending", "most_copies")
+                and not query and not work_ref
+                and not industry.strip() and not region.strip()
+                and not genre and not language and not quality
+                and not free_only):
+            _trending_ids, _trending_total = _trending_cached_page(
+                conn, where_sql, params, content_type, limit,
+                offset, hidden)
+        if _trending_total is None:
+            total = conn.execute(f"SELECT COUNT(*) FROM posts p WHERE {where_sql}", params).fetchone()[0]
+        else:
+            total = _trending_total
 
         fuzzy = False
         did_you_mean_query = None
@@ -3726,14 +3880,17 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # 2026-11-10 Firebase Robo test. The two-step applies exactly when
         # the ORDER BY names only `posts` columns: newest (year clamp),
         # title and rating. Trending orders by the join counts, so it cannot
-        # resolve ids without the join and keeps the one-query shape; the
+        # resolve ids without the join: the plain trending page instead
+        # takes its ids from the cached order above (`_trending_ids`,
+        # None unless the fast path filled it), and a page the cache
+        # cannot answer falls back to the one-query shape below. The
         # unknown sort orders by id DESC, which the rowid scan already
         # provides, so it keeps it too. No posts title index: one was
         # measured and REJECTED — the planner uses it for the content_type
         # seek, which forces the grouped shape into a GROUP BY temp B-tree
         # (title/rating/trending 7-10s, rating 503s); the two-step plus the
         # covering releases(post_id, quality) index is the fix instead.
-        page_ids = None
+        page_ids = _trending_ids
         two_step = order_sql is None or sort_key in ("title", "rating")
         if query and not work_ref and two_step and 0 < total <= _SEARCH_DEDUPE_CAP:
             # Audit #38: one row per film. The dedupe runs on the same
@@ -3786,6 +3943,29 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 if suggestions is not None:
                     answer["suggestions"] = suggestions
                 return answer
+
+        if page_ids is not None and not page_ids:
+            # The cached trending order ends before this page: the page
+            # is empty, and total is the cached count. (The two-step
+            # path returns its own empty page above; this is the same
+            # answer for a cached page that collected no ids — and it
+            # must return here, because the step-2 query below builds
+            # `p.id IN (...)` from the list, which is empty.)
+            answer = {
+                "page": page,
+                "limit": limit,
+                "total": total,
+                "total_pages": max(1, (total + limit - 1) // limit),
+                "results": [],
+                "fuzzy": fuzzy,
+                "moods": mood_words,
+                "mood_genres": mood_genres,
+                "did_you_mean": did_you_mean_query,
+                "suggestion": did_you_mean_query,
+            }
+            if suggestions is not None:
+                answer["suggestions"] = suggestions
+            return answer
 
         # `p.source_site`, `p.url` and `p.slug` used to be selected here: the site
         # it came from and the page we took it off. Both are our bookkeeping, so

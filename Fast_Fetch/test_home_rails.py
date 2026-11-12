@@ -212,6 +212,54 @@ class TrendingTests(Fixture):
         self.assertIn("subtitled", item)
         self.assertNotIn("source_site", item)
 
+    def test_second_hit_serves_the_cached_order(self):
+        first = viewer.api_v1_get_trending(limit=20)
+        self.assertTrue(viewer._TRENDING_ORDER_CACHE,
+                        "the first trending hit must populate the order cache")
+        second = viewer.api_v1_get_trending(limit=20)
+        self.assertEqual(self.ids(second), self.ids(first))
+        self.assertEqual(second["total"], first["total"])
+        self.addCleanup(viewer._TRENDING_ORDER_CACHE.clear)
+
+    def test_paging_comes_from_the_cached_order(self):
+        first = viewer.api_v1_get_trending(page=1, limit=2)
+        second = viewer.api_v1_get_trending(page=2, limit=2)
+        self.assertEqual(self.ids(first), [self.part_two_id, self.squid_id])
+        self.assertEqual(self.ids(second), [self.seed_id, self.wonka_id])
+        self.assertEqual(second["total"], 6)
+        self.addCleanup(viewer._TRENDING_ORDER_CACHE.clear)
+
+    def test_page_past_the_end_is_empty_not_an_error(self):
+        resp = viewer.api_v1_get_trending(page=99, limit=20)
+        self.assertEqual(resp["results"], [])
+        self.assertEqual(resp["total"], 6)
+        self.addCleanup(viewer._TRENDING_ORDER_CACHE.clear)
+
+    def test_newly_flagged_row_hides_on_the_next_hit(self):
+        # The cache holds the ORDER, never the verdict on what may be
+        # listed: flag the top row after the first hit and the very
+        # next hit must hide it (backfilled, so the page stays full),
+        # even though the order itself is still cached — the frozen
+        # fingerprint forces the cache-hit path, so a rebuild cannot
+        # stand in for the per-request re-check. `total` is the cached
+        # COUNT(*) and may lag the same window; it is a number, never
+        # a listing.
+        with mock.patch.object(viewer, "_trending_db_fingerprint",
+                               return_value=("test",)):
+            first = viewer.api_v1_get_trending(limit=3)
+            self.assertEqual(self.ids(first), [
+                self.part_two_id, self.squid_id, self.seed_id])
+            self.conn.execute(
+                "UPDATE posts SET is_18_plus=1 WHERE id=?",
+                (self.part_two_id,))
+            self.conn.commit()
+            second = viewer.api_v1_get_trending(limit=3)
+            self.assertNotIn(self.part_two_id, self.ids(second))
+            self.assertEqual(self.ids(second), [
+                self.squid_id, self.seed_id, self.wonka_id])
+            self.assertEqual(second["total"], 6)
+        self.addCleanup(viewer._TRENDING_ORDER_CACHE.clear)
+
 
 class RelatedTests(Fixture):
     def test_scores_order_and_tiebreak(self):

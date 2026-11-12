@@ -14,7 +14,12 @@ The claim being pinned is narrow and it is not "search is fast":
   the trending and unknown sorts — the exact-total `COUNT(*)` and the paged
   list — and neither can use an index, because `LIKE '%inception%'` has a
   leading wildcard. No index removes a leading-wildcard scan; only a different
-  index *structure* (FTS5) does. The newest, title and rating sorts
+  index *structure* (FTS5) does. (Plain trending — no query, no facet beyond
+  the type — no longer pays either pass on a hit: the order is cached 120 s
+  per content type in `viewer._TRENDING_ORDER_CACHE`, and the two passes
+  below are what a cache miss, a filtered trending call, or a page past
+  the cached prefix still pay. The plans pinned here are those passes,
+  transcribed, not the live call path.) The newest, title and rating sorts
   (`newest` since Session 115, title and rating since Session posts503) add
   a third, narrow pass: the page's ids from `posts` alone, ordered by the
   sort key. That pass DOES sort a temp B-tree, by design — it sorts only ids
