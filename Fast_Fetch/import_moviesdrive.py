@@ -67,15 +67,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead, update_site_registry
 
 DEFAULT_BASE_URL = "https://new3.moviesdrive.cyou"
 SITE_NAME = "moviesdrive"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/moviesdrive.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "moviesdrive.db"
-)
+DEFAULT_DB_PATH = staging_db_path("moviesdrive")
 STATUS_FILE = BASE_DIR / "moviesdrive_status.json"
 WP_PER_PAGE = 100
 

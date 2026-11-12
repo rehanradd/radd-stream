@@ -18,6 +18,7 @@ from pathlib import Path
 from urllib.robotparser import RobotFileParser
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_site
 
 
@@ -759,11 +760,7 @@ def run_import(args: argparse.Namespace) -> int:
 
     all_urls = _unique(title_urls + episode_urls + list(episodes_by_root))
     if not args.dry_run:
-        default_db = (
-            Path("/home/ubuntu/radd-stream-data/multimovies.db")
-            if Path("/home/ubuntu/radd-stream-data").exists()
-            else fast_fetch.BASE_DIR / "multimovies.db"
-        )
+        default_db = staging_db_path("multimovies")
         db_target = args.db_path or os.environ.get("RADD_MULTIMOVIES_DB") or str(default_db)
         fast_fetch.DB_PATH = Path(db_target)
         fast_fetch.init_db()

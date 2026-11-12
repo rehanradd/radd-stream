@@ -46,6 +46,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from domain_resolver import get_active_base_url, resolve_if_dead
+from config import staging_db_path
 
 # Add Fast_Fetch to sys.path
 BASE_DIR = Path(__file__).parent.resolve()
@@ -54,7 +55,7 @@ if str(BASE_DIR) not in sys.path:
 
 DEFAULT_BASE_URL = "https://www.filmyzilla80.com"
 SITE_NAME = "filmyzilla"
-DEFAULT_DB_PATH = Path("/home/ubuntu/radd-stream-data/filmyzilla.db") if Path("/home/ubuntu/radd-stream-data").exists() else BASE_DIR / "filmyzilla.db"
+DEFAULT_DB_PATH = staging_db_path("filmyzilla")
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 

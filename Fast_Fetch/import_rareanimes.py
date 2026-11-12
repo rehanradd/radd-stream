@@ -53,15 +53,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://www.rareanimes.fans"
 SITE_NAME = "rareanimes"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/rareanimes.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "rareanimes.db"
-)
+DEFAULT_DB_PATH = staging_db_path("rareanimes")
 STATUS_FILE = BASE_DIR / "rareanimes_status.json"
 
 STOP_REQUESTED = False

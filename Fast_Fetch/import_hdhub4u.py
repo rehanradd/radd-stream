@@ -55,17 +55,14 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://new12.hdhub4u.cl"
 SITE_NAME = "hdhub4u"
 HOST_RESOLVER_URL = "https://h4.suncdn.org/host/"
 TYPESENSE_SEARCH_URL = "https://search.pingora.fyi/collections/post/documents/search"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/hdhub4u.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "hdhub4u.db"
-)
+DEFAULT_DB_PATH = staging_db_path("hdhub4u")
 STATUS_FILE = BASE_DIR / "hdhub4u_status.json"
 
 STOP_REQUESTED = False

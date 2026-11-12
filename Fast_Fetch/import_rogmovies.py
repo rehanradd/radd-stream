@@ -52,15 +52,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://rogmovies.asia"
 SITE_NAME = "rogmovies"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/rogmovies.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "rogmovies.db"
-)
+DEFAULT_DB_PATH = staging_db_path("rogmovies")
 STATUS_FILE = BASE_DIR / "rogmovies_status.json"
 
 STOP_REQUESTED = False

@@ -54,6 +54,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 # Live domain verified 2026-11-08 (Session 103): ssrmovies.surf 301s to
@@ -63,11 +64,7 @@ from domain_resolver import get_active_base_url, resolve_if_dead
 # every request does not pay a redirect hop.
 DEFAULT_BASE_URL = "https://new1.ssrmovies.page"
 SITE_NAME = "ssrmovies"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/ssrmovies.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "ssrmovies.db"
-)
+DEFAULT_DB_PATH = staging_db_path("ssrmovies")
 STATUS_FILE = BASE_DIR / "ssrmovies_status.json"
 
 STOP_REQUESTED = False

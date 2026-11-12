@@ -54,15 +54,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://bolly4u.lol"
 SITE_NAME = "bolly4u"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/bolly4u.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "bolly4u.db"
-)
+DEFAULT_DB_PATH = staging_db_path("bolly4u")
 STATUS_FILE = BASE_DIR / "bolly4u_status.json"
 
 STOP_REQUESTED = False

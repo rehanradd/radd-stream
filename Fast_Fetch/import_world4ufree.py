@@ -61,15 +61,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://world4ufree.gay"
 SITE_NAME = "world4ufree"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/world4ufree.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "world4ufree.db"
-)
+DEFAULT_DB_PATH = staging_db_path("world4ufree")
 STATUS_FILE = BASE_DIR / "world4ufree_status.json"
 
 STOP_REQUESTED = False

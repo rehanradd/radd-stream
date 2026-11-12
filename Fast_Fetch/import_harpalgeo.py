@@ -64,15 +64,12 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://www.harpalgeo.tv"
 SITE_NAME = "harpalgeo"
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/harpalgeo.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "harpalgeo.db"
-)
+DEFAULT_DB_PATH = staging_db_path("harpalgeo")
 STATUS_FILE = BASE_DIR / "harpalgeo_status.json"
 
 # /programs index pagination cap (the site advertises 12 pages; the sync

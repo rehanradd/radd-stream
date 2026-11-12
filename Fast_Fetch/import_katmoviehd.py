@@ -57,6 +57,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
+from config import staging_db_path
 from domain_resolver import get_active_base_url, resolve_if_dead
 
 DEFAULT_BASE_URL = "https://new.katmoviehd.top"
@@ -67,11 +68,7 @@ KMHD_JWT_TOKEN = (
     "eyJzdWIiOiJhZG1pbiIsImV4cCI6MTgwNzQ4NDIzMywiaWF0IjoxNzA3NDg0MjMzfQ."
     "7u5bF9PcMhvClSDZgsd6EU-CQnp1Ec--wsezkDEgiZo"
 )
-DEFAULT_DB_PATH = (
-    Path("/home/ubuntu/radd-stream-data/katmoviehd.db")
-    if Path("/home/ubuntu/radd-stream-data").exists()
-    else BASE_DIR / "katmoviehd.db"
-)
+DEFAULT_DB_PATH = staging_db_path("katmoviehd")
 STATUS_FILE = BASE_DIR / "katmoviehd_status.json"
 
 STOP_REQUESTED = False
