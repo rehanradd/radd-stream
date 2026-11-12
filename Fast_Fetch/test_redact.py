@@ -835,8 +835,28 @@ class PublicEdgeHttpTests(FixtureMixin):
         self.stage1_backend_patch = patch.object(
             current_hosts, "classify_backend", return_value="unknown")
         self.stage1_backend_patch.start()
+        # Serve-time verification (Player Fix v2) probes the resolved final
+        # URL over the network too, through serve_verify._default_prober
+        # (link_health.probe) — a third network boundary since the Stage-2
+        # port, so it is stubbed here the same way. Without this stub the
+        # suite's fake fixture URLs are really probed: a fast definite
+        # failure (HTTP 404 for a fake file id) drops the band and the
+        # stream endpoint 404s, while a slow timeout only poisons the batch
+        # — which is why the suite passed on a slow box and failed on the
+        # hosted runner (backend CI run 43264848697, 2 failures). The
+        # verifier itself is covered by test_serve_verify.py; this suite
+        # asserts the public edge, not the probe.
+        import serve_verify
+        self.serve_verify_probe_patch = patch.object(
+            serve_verify, "_default_prober",
+            return_value={"ok": True, "http_status": 200,
+                          "protocol": "progressive",
+                          "content_type": "video/mp4",
+                          "size_bytes": 1024, "error": ""})
+        self.serve_verify_probe_patch.start()
 
     def tearDown(self):
+        self.serve_verify_probe_patch.stop()
         self.stage1_backend_patch.stop()
         self.stage2_probe_patch.stop()
         super().tearDown()
