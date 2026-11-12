@@ -1,6 +1,7 @@
 package com.raddstream.app.viewmodel
 
 import com.raddstream.app.data.RegionChoices
+import com.raddstream.app.player.LadderForScope
 
 /**
  * Audit #1 — the audio word the detail load sends with `?warm=1`: the
@@ -53,3 +54,43 @@ internal fun isPreresolveFresh(
     if (nowMs < atMs) return false
     return nowMs - atMs <= PRERESOLVE_FRESH_MS
 }
+
+/**
+ * Gap A2 follow-up — the scope warm: the handle the quality card's Auto rung
+ * would press for one season/episode scope, or null when the scope has
+ * nothing playable here. The detail-open warm covers only the title's best
+ * print and the server warms only the first scope, so an episode the viewer
+ * is looking at would otherwise pay its 5-11 s live resolve inside the
+ * player. Warming this handle (a metadata ask on our own redirector) makes
+ * the server live-resolve AND bank the answer, so the Play press 302s from
+ * cache. A download-only rung is never warmed — its handle is not a stream.
+ */
+internal fun scopeWarmHandle(ladder: LadderForScope): String? {
+    val auto = ladder.autoOption ?: return null
+    if (!auto.playsHere) return null
+    return auto.streamId.takeIf { it.isNotBlank() }
+}
+
+/**
+ * Gap A2 follow-up — the fallback's runner-ups: the other playable copies
+ * of the same print, for the play path that never got a server bundle.
+ * The v2 bundle stages its own runner-ups and the ladder stages its rung's,
+ * but the client-side fallback (`playLink`) launched a bare
+ * single-rendition bundle, so the 8 s watchdog could only retry the same
+ * slow address and then give up. Same print, same quality, different copy —
+ * exactly what a silent hop within the rung is for. Provider pages are
+ * never backups (a hop must never land on a page), dead links are never
+ * backups, and the list is capped so one print cannot stage the whole
+ * ladder.
+ */
+internal fun siblingBackupHandles(
+    print: RankedPrint,
+    link: RankedLink,
+    max: Int = 5,
+): List<String> =
+    print.links
+        .filter { it.playableHere && !it.isProviderPage && it.streamId != link.streamId }
+        .map { it.streamId }
+        .filter { it.isNotBlank() }
+        .distinct()
+        .take(max)

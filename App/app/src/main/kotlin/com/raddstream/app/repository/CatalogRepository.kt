@@ -238,7 +238,7 @@ class CatalogRepository @Inject constructor(
      * A bridge failure never fails the detail: the cast section simply hides,
      * exactly as it does on a v1 row with no cast data.
      */
-    suspend fun getWorkDetailV2(workId: Long): PostDetail? {
+    suspend fun getWorkDetailV2(workId: Long, audio: String? = null): PostDetail? {
         val response = try {
             apiProvider.current().getWorkDetail(workId)
         } catch (_: HttpException) {
@@ -264,9 +264,15 @@ class CatalogRepository @Inject constructor(
                     v1PostId = post.id
                     // Warm the auto tier too: a v2 title's Play press pays
                     // the same live resolve, and this is the only v1 detail
-                    // call on this path. Audio is not sent — the tiers from
-                    // this call are never shown, only cast + season art.
-                    val detail = apiProvider.current().getPostDetail(post.id, warm = "1")
+                    // call on this path. Audio rides along now (Gap A2
+                    // follow-up): without it the warmed auto tier could be a
+                    // different audio than the ladder Play presses. The tiers
+                    // from this call are never shown, only cast + season art.
+                    val detail = apiProvider.current().getPostDetail(
+                        post.id,
+                        warm = "1",
+                        audio = audio?.takeIf { it.isNotBlank() },
+                    )
                     if (detail.success && detail.data != null) {
                         castNames = detail.data.castNames
                         seasonArtwork = detail.data.seasonArtwork

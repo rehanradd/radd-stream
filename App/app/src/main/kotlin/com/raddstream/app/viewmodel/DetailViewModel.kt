@@ -472,7 +472,11 @@ class DetailViewModel @Inject constructor(
                 // found no post: the title still loads, but nothing may write
                 // a Room row under id 0).
                 val detail = if (workId >= 0) {
-                    catalogRepository.getWorkDetailV2(workId)
+                    // Gap A2 follow-up: the bridge warm below used to carry no
+                    // audio word, so the warmed auto tier could be a different
+                    // audio than the ladder Play presses. Name the preferred
+                    // audio here too, exactly as the v1 path does.
+                    catalogRepository.getWorkDetailV2(workId, audio = detailWarmAudio(userRegion))
                 } else {
                     // Audit #1: warm the auto tier on detail open and name
                     // the preferred audio, so the Play press answers from
@@ -621,21 +625,55 @@ class DetailViewModel @Inject constructor(
      * ladder, and the card correctly disappears.
      */
     fun showRungsFor(season: Int?, episode: Int?) {
+        val ladder = VipQualityGate.gate(
+            QualityLadder.forNumberedScope(
+                _uiState.value.post?.optionGroups.orEmpty(),
+                season,
+                episode,
+            ),
+            premiumAccess,
+            freeQualityCap,
+        )
         _uiState.update {
             it.copy(
-                ladder = VipQualityGate.gate(
-                    QualityLadder.forNumberedScope(
-                        _uiState.value.post?.optionGroups.orEmpty(),
-                        season,
-                        episode,
-                    ),
-                    premiumAccess,
-                    freeQualityCap,
-                ),
+                ladder = ladder,
                 ladderSeason = season,
                 ladderEpisode = episode,
                 selectedBand = LadderForScope.AUTO,
             )
+        }
+        // Gap A2 follow-up: the viewer just opened this scope's quality card,
+        // so this is the episode they are about to play — warm its Auto link
+        // now, while they are still choosing, instead of at the Play press.
+        warmScopeLink(ladder)
+    }
+
+    private var scopeWarmJob: Job? = null
+    private var lastScopeWarmHandle: String? = null
+
+    /**
+     * Gap A2 follow-up — warm one scope's Auto link in the background.
+     *
+     * The detail-open warm covers only the title's best print and the server
+     * warms only the first scope, so an episode Play tap otherwise pays its
+     * 5-11 s live resolve inside the player. This ask is metadata only
+     * (`GET /api/v1/stream?redirect=0`): on a cache miss the server
+     * live-resolves the link and banks the answer, so the Play press 302s
+     * from cache instead. One warm in flight, cancelled when the viewer
+     * opens another scope; a warm that fails is silent — Play still works,
+     * it just waits on the first bytes again. A handle warmed once is not
+     * warmed again: the banked answer lives for hours, and re-asking on
+     * every card open would spend the server's resolve budget for nothing.
+     */
+    private fun warmScopeLink(ladder: LadderForScope) {
+        val handle = scopeWarmHandle(ladder) ?: return
+        if (handle == lastScopeWarmHandle) return
+        lastScopeWarmHandle = handle
+        scopeWarmJob?.cancel()
+        scopeWarmJob = viewModelScope.launch {
+            runCatching {
+                withTimeout(30_000) { catalogRepository.resolveStream(handle) }
+            }
         }
     }
 
@@ -1148,7 +1186,11 @@ class DetailViewModel @Inject constructor(
             val playedV2 = v2 != null && v2.bundle.renditions.isNotEmpty() &&
                 playV2Bundle(v2, print, external)
             if (!playedV2) {
-                playLink(link, external, print.season, print.episodeFrom)
+                // Gap A2 follow-up: the fallback used to launch with no
+                // runner-ups, so a stall on this print could only retry the
+                // same address. The print's own sibling copies ride along
+                // now, and the player hops between them on a stall.
+                playLink(link, external, print.season, print.episodeFrom, siblingBackupHandles(print, link))
             }
         }
     }
@@ -1236,7 +1278,7 @@ class DetailViewModel @Inject constructor(
      * decide which resume point the player looks up, so an unknown scope is passed on as the
      * card's own rather than as a guess of 0/0.
      */
-    fun playLink(link: RankedLink, external: Boolean = false, season: Int? = null, episode: Int? = null) {
+    fun playLink(link: RankedLink, external: Boolean = false, season: Int? = null, episode: Int? = null, backupHandles: List<String> = emptyList()) {
         val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
         val playUrl = link.playUrl
         if (link.streamId.isBlank() || playUrl.isNullOrBlank()) {
@@ -1251,6 +1293,17 @@ class DetailViewModel @Inject constructor(
                 _navEvents.emit(DetailNavigationEvent.OpenProviderPage(link.streamId, title))
             }
             return
+        }
+        // Gap A2 follow-up: this is the fallback path (the server bundle failed
+        // or timed out), and it used to launch a bare single-rendition bundle —
+        // the 8 s watchdog could only retry the same slow address and then give
+        // up, while sibling copies of the print sat unused. Stage the
+        // caller-supplied runner-ups so a stall hops within the rung instead.
+        // Only staged when non-empty: the v2-bundle caller already staged its
+        // own runner-ups before reaching here, and an empty list would wipe
+        // them (`stageFailover` replaces).
+        if (backupHandles.isNotEmpty()) {
+            PlayerSessionStore.Instance.stageFailover(link.streamId, backupHandles)
         }
         val scope = stageSyncScope(
             link.streamId,
