@@ -277,11 +277,12 @@ class PlayerViewModel @Inject constructor(
     private var syncEntitled: Boolean = false
 
     /**
-     * The operator's 1080p/4K switch, mirrored from remote config. Off is the shipped default,
-     * so a free viewer keeps the whole ladder; [premiumAccess] is what the gate is actually
-     * handed at every site below.
+     * The operator's 1080p/4K switch, mirrored from remote config. On is the shipped default,
+     * the fail-closed mirror of the server gate (seeded and live ON): until remote config
+     * says otherwise, a free viewer is never offered a rung the server will 402.
+     * [premiumAccess] is what the gate is actually handed at every site below.
      */
-    private var qualityGateEnabled: Boolean = false
+    private var qualityGateEnabled: Boolean = true
     private var freeQualityCap: String = "720p"
     /** Data Saver — on by default, so mobile-data titles start at 480p. */
     private var dataSaver: Boolean = true

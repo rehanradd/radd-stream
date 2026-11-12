@@ -309,11 +309,12 @@ class DetailViewModel @Inject constructor(
     private var serverBaseUrl: String = ""
 
     /**
-     * The operator's switch, not this screen's opinion. Off is the shipped default, so the
-     * catalog stays whole for a free viewer until the owner decides 1080p/4K should cost
-     * something; [premiumAccess] is what every gate call below actually passes.
+     * The operator's switch, not this screen's opinion. On is the shipped default — the
+     * fail-closed mirror of the server gate (seeded and live ON): until remote config
+     * says otherwise, a free viewer is never offered a rung the server will 402.
+     * [premiumAccess] is what every gate call below actually passes.
      */
-    private var qualityGateEnabled: Boolean = false
+    private var qualityGateEnabled: Boolean = true
     private var freeQualityCap: String = "720p"
     /** Data Saver and Wi-Fi-only downloads — both on by default, both the viewer's own choice. */
     private var dataSaver: Boolean = true
@@ -1039,12 +1040,16 @@ class DetailViewModel @Inject constructor(
         preresolvedResult = null
         preresolvedAtMs = null
         val best = bestPrintOf(_uiState.value.layout) ?: return
-        if (!VipQualityGate.allowsResolution(best.resolution, premiumAccess)) return
+        // Salaar (2026-11-12): a locked best print is never what Play will
+        // press — warm the print Play will actually start on (the step-down),
+        // not the gated one. Warming a rung the viewer may not play would
+        // spend the server's answer on nothing.
+        val warm = playStartPrint(_uiState.value.layout, best, premiumAccess, freeQualityCap) ?: return
         preresolveJob = viewModelScope.launch {
             val result = runCatching {
                 withTimeout(PRERESOLVE_TIMEOUT_MS) {
                     catalogRepository.playV2(
-                        best.releaseId,
+                        warm.releaseId,
                         prefer = DataSaver.playPrefer(dataSaver, onWifi),
                         // Salaar (2026-11-12): a v2 detail's best print is a
                         // cat id — warming the wrong title's bundle would
@@ -1055,10 +1060,10 @@ class DetailViewModel @Inject constructor(
                 }
             }.getOrNull() ?: return@launch
             if (result.bundle.renditions.isEmpty()) return@launch
-            preresolvedReleaseId = best.releaseId
+            preresolvedReleaseId = warm.releaseId
             preresolvedResult = result
             preresolvedAtMs = System.currentTimeMillis()
-            if (onWifi) seedPreviewTopLink(best, result)
+            if (onWifi) seedPreviewTopLink(warm, result)
         }
     }
 
@@ -1089,29 +1094,39 @@ class DetailViewModel @Inject constructor(
      * measured throughput — while the navigation route still carries one opaque handle only.
      */
     fun playLadder(option: QualityOption, external: Boolean = false) {
-        if (isLocked(option)) {
-            _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
-            return
+        // Salaar (2026-11-12): a locked rung steps down to the best free rung
+        // before any lock is shown — the lock is only the answer when no free
+        // rung can play. A tap on 4K that would 402 at press time starts the
+        // best free picture instead of burning the player's whole start
+        // budget on copies that cannot play.
+        val effective = if (isLocked(option)) {
+            stepDownRung(_uiState.value.ladder, option, premiumAccess, freeQualityCap)
+                ?: run {
+                    _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
+                    return
+                }
+        } else {
+            option
         }
         val title = _uiState.value.post?.let { it.cleanTitle ?: it.title } ?: "Stream"
-        if (option.streamId.isBlank()) {
+        if (effective.streamId.isBlank()) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this rung yet.") }
             return
         }
         // A rung that is a page is not staged and not played: nothing starts, so there is no
         // resume point to write and no position for Auto to hop to. Staging it would put an HTML
         // page in the failover list the player walks when a CDN refuses.
-        if (option.isProviderPage) {
-            _uiState.update { it.copy(selectedBand = option.band) }
+        if (effective.isProviderPage) {
+            _uiState.update { it.copy(selectedBand = effective.band) }
             viewModelScope.launch {
-                _navEvents.emit(DetailNavigationEvent.OpenProviderPage(option.streamId, title))
+                _navEvents.emit(DetailNavigationEvent.OpenProviderPage(effective.streamId, title))
             }
             return
         }
-        PlayerSessionStore.Instance.stageFailover(option.streamId, option.backupHandles)
-        stageAutoLadder(option)
+        PlayerSessionStore.Instance.stageFailover(effective.streamId, effective.backupHandles)
+        stageAutoLadder(effective)
         stageSyncScope(
-            streamId = option.streamId,
+            streamId = effective.streamId,
             season = _uiState.value.ladderSeason,
             episode = _uiState.value.ladderEpisode,
             // Every rung of this scope's ladder plus each rung's runner-ups: Auto moves
@@ -1119,16 +1134,16 @@ class DetailViewModel @Inject constructor(
             // resume point belongs to the episode, not to whichever address served it.
             backupHandles = _uiState.value.ladder.options.flatMap { listOf(it.streamId) + it.backupHandles },
         )
-        _uiState.update { it.copy(selectedBand = option.band) }
+        _uiState.update { it.copy(selectedBand = effective.band) }
         viewModelScope.launch {
-            if (external && option.playUrl != null) {
-                _navEvents.emit(DetailNavigationEvent.OpenExternal(option.streamId, option.playUrl))
-            } else if (option.playsHere) {
-                _navEvents.emit(DetailNavigationEvent.PlayStream(option.streamId, title))
+            if (external && effective.playUrl != null) {
+                _navEvents.emit(DetailNavigationEvent.OpenExternal(effective.streamId, effective.playUrl))
+            } else if (effective.playsHere) {
+                _navEvents.emit(DetailNavigationEvent.PlayStream(effective.streamId, title))
             } else {
                 // Not a failure and not a silent no-op: the rung can be downloaded, and
                 // saying so is the honest answer to a tap on a picture we cannot stream here.
-                keep(option.streamId, option.title)
+                keep(effective.streamId, effective.title)
             }
         }
     }
@@ -1199,8 +1214,17 @@ class DetailViewModel @Inject constructor(
 
     /** Play the best link this print offers. The server already ranked them. */
     fun playPrint(print: RankedPrint, external: Boolean = false) {
-        if (!VipQualityGate.allowsResolution(print.resolution, premiumAccess)) {
+        // Salaar (2026-11-12): a locked best print steps down to the best free
+        // print BEFORE any lock is shown — the lock is only the answer when no
+        // free print can play. The old shape returned the lock here even while a
+        // 720p copy of the same title sat playable.
+        val start = playStartPrint(_uiState.value.layout, print, premiumAccess, freeQualityCap)
+        if (start == null) {
             _uiState.update { it.copy(actionMessage = VipQualityGate.lockedMessage(freeQualityCap)) }
+            return
+        }
+        if (start.releaseId != print.releaseId) {
+            playPrint(start, external)
             return
         }
         val link = print.links.firstOrNull { it.playableHere } ?:
@@ -1246,10 +1270,14 @@ class DetailViewModel @Inject constructor(
                 // down to the best free print instead of pressing this
                 // print's own link — that link 402s at press time, and the
                 // player then burns its whole watchdog budget on copies that
-                // cannot play. Only for a caller without premium access: a
-                // VIP's empty bundle is a transient or dead print, and the
+                // cannot play. The trigger is server truth, not the local
+                // gate flag: the bundle came back empty for a premium print,
+                // and the mint exempts a confirmed VIP, so an empty bundle
+                // for a caller without confirmed VIP IS the gate refusing it
+                // — whatever the flag said when this detail loaded. A VIP's
+                // empty bundle is a transient or dead print, and the
                 // fallback link is the right second chance for them.
-                if (!premiumAccess &&
+                if (!serverVip &&
                     VipQualityGate.isPremiumResolution(print.resolution, freeQualityCap)
                 ) {
                     val lower = stepDownPrint(

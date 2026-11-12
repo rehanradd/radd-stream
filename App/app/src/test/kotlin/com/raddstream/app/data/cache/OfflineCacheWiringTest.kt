@@ -695,6 +695,61 @@ class OfflineCacheWiringTest {
         assertTrue("past the backoff the eligible keep runs again", w.ahead.seenTasks.size > passesAfterPark)
     }
 
+    // ── (h) a gated rung (402 from our redirector) is not an engine failure ───
+
+    @Test
+    fun `a gated auto-preview is dropped silently, never FAILED-marked`() = runBlocking {
+        // Salaar (2026-11-12): the preview fetcher hit the quality gate's 402
+        // on a rung this viewer cannot play. The row, its ledger, its file row
+        // and its bytes must all disappear — and no FAILED chip may ever name it.
+        val handle = "HDL-18"
+        val sourceKey = KeepIdentity.sourceKeyFor(handle)
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.GATED))
+        val taskId = (w.repository.preview(handle, "Work", 2000, resumable = true) as KeepOutcome.Enqueued).taskId
+        // Bytes already held under this identity, so the drop has something to delete.
+        w.manifestDao.insertAll(listOf(ByteRangeManifestEntity(taskId = taskId, start = 0L, end = 400L, committedElapsedRealtime = 0L)))
+        w.fileDao.upsert(
+            CacheFileEntity(
+                fileId = sourceKey, sourceKey = sourceKey, taskId = taskId, path = "/private/$sourceKey",
+                sizeBytes = 400, origin = CacheOrigin.AUTO_PREVIEW.name, state = CacheTaskState.LOADING.name,
+                isTemporary = true, isComplete = false, createdElapsedRealtime = 0L, lastAccessElapsedRealtime = 0L,
+            )
+        )
+
+        awaitGone(w.taskDao, taskId)
+
+        assertNull("the gated preview's row is dropped outright", w.taskDao.getById(taskId))
+        assertTrue("its ledger goes with it", w.manifestDao.getForTask(taskId).isEmpty())
+        assertTrue("its file row goes with it", w.fileDao.listByTask(taskId).isEmpty())
+        assertTrue("its bytes go with it", w.storage.deleted.contains(sourceKey))
+        assertTrue("nothing FAILED-marked survives a silent drop", w.taskDao.rows.values.none { it.state == CacheTaskState.FAILED.name })
+    }
+
+    @Test
+    fun `a gated user keep parks with the gated reason, never FAILED`() = runBlocking {
+        // The same 402 on a row the viewer explicitly asked to keep: the keep
+        // stays, parked, with the stable reason — so a VIP upgrade can resume
+        // it and the list can say why it waits, instead of showing an engine
+        // failure for a rung the server refused.
+        val handle = "HDL-19"
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.GATED))
+        val taskId = (w.repository.keep(handle, "Work", 2000, resumable = true) as KeepOutcome.Enqueued).taskId
+
+        awaitState(w.taskDao, taskId, CacheTaskState.PAUSED)
+
+        val row = w.taskDao.getById(taskId)!!
+        assertEquals(CacheTaskState.PAUSED.name, row.state)
+        assertEquals("the park reason is the stable token, never UI text",
+            CacheCoordinator.ERR_GATED, row.lastError)
+        assertEquals("gated", row.lastError)
+    }
+
+    /** Let the engine run until the row is gone (a silent drop has no terminal state to wait for). */
+    private suspend fun awaitGone(dao: FakeTaskDao, id: Long) {
+        var guard = 0
+        while (dao.getById(id) != null && guard++ < MAX_EVENT_LOOP_PUMPS) yield()
+    }
+
     private companion object {
         const val MAX_EVENT_LOOP_PUMPS = 500
     }

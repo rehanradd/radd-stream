@@ -299,4 +299,45 @@ class PlayerPolicyBridgeTest {
         // is ever added, this test is the place that has to change on purpose.
         assertFalse(AudioBoostUi.SOFTWARE_GAIN_AVAILABLE)
     }
+
+    // ── Salaar (2026-11-12): step down one rung on a gate refusal ───────────
+
+    @Test
+    fun `lowerRungThan steps exactly one rung below the given band`() {
+        val director = AutoQualityDirector()
+        director.configure(fiveRungs, "2160p", auto = true)
+
+        assertEquals("1080p", director.lowerRungThan("2160p")?.band)
+        assertEquals("720p", director.lowerRungThan("1080p")?.band)
+        assertEquals("480p", director.lowerRungThan("720p")?.band)
+        assertEquals("sd", director.lowerRungThan("480p")?.band)
+    }
+
+    @Test
+    fun `lowerRungThan is null at the bottom and without a band`() {
+        val director = AutoQualityDirector()
+        director.configure(fiveRungs, "2160p", auto = true)
+
+        assertNull(director.lowerRungThan("sd"))
+        assertNull(director.lowerRungThan(null))
+    }
+
+    @Test
+    fun `lowerRungThan treats an unknown band as 720p`() {
+        // AdaptiveQualitySwitcher.nominalBitrateFor maps an unknown band to the
+        // 720p bitrate, so the rung below it is 480p — the same contract the
+        // throughput ladder already relies on.
+        val director = AutoQualityDirector()
+        director.configure(fiveRungs, "2160p", auto = true)
+
+        assertEquals("480p", director.lowerRungThan("360p")?.band)
+    }
+
+    @Test
+    fun `lowerRungThan is null with no ladder to move along`() {
+        val director = AutoQualityDirector()
+        director.configure(emptyList(), null, auto = true)
+
+        assertNull(director.lowerRungThan("2160p"))
+    }
 }

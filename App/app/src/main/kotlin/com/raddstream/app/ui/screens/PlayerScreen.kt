@@ -2716,6 +2716,9 @@ private fun GiveUpCard(
                     // NAV-4: an expired shared link is not a generic error — it
                     // says so, plainly, in the title.
                     HandoffWhy.EXPIRED_LINK -> stringResource(R.string.player_giveup_expired)
+                    // Salaar: a rung the server refused is VIP-only — say so,
+                    // plainly, in the title.
+                    HandoffWhy.GATE_REFUSED -> stringResource(R.string.player_giveup_gate_refused)
                 },
                 color = Color.White,
             )
@@ -2734,6 +2737,8 @@ private fun GiveUpCard(
                             stringResource(R.string.player_giveup_timeout_body)
                         HandoffWhy.EXPIRED_LINK ->
                             stringResource(R.string.player_giveup_expired_body)
+                        HandoffWhy.GATE_REFUSED ->
+                            stringResource(R.string.player_giveup_gate_refused_body)
                     },
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),

@@ -250,6 +250,45 @@ class AheadFetcherFinalizeTest {
     // ── tests ───────────────────────────────────────────────────────────────────
 
     @Test
+    fun `a gate-refused range maps to GATED, never to a retry or a dead source`() {
+        // Salaar (2026-11-12): our redirector refused the rung with the quality
+        // gate's 402 before any redirect. The range fetcher must classify it
+        // GateRefused (not HttpError, not SourceDead) and the ahead fetcher must
+        // surface FetchOutcome.GATED, so the coordinator drops the preview
+        // silently instead of retrying a rung that cannot play for this viewer.
+        val refusingClient = OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                Response.Builder()
+                    .request(chain.request())
+                    .protocol(Protocol.HTTP_1_1)
+                    .code(402)
+                    .message("Payment Required")
+                    .body("".toResponseBody("text/plain".toMediaType()))
+                    .build()
+            }
+            .build()
+        val fx = Fixture(chunkBytes = 4 * 1024, maxBytesPerPass = 64L * 1024 * 1024)
+        val gatedFetcher = AheadFetcher(
+            fetcher = RangeByteFetcher(refusingClient),
+            taskDao = fx.taskDao,
+            manifestDao = fx.manifestDao,
+            fileDao = fx.fileDao,
+            storage = fx.storage,
+            clock = UptimeClock { 1_000L },
+            maxBytesPerPass = 64L * 1024 * 1024,
+            chunkBytes = 4 * 1024,
+        )
+
+        val outcome = runBlocking {
+            gatedFetcher.run(fx.freshTask(), FetchMode.FULL_DOWNLOAD) { 0L }
+        }
+
+        assertEquals(FetchOutcome.GATED, outcome)
+        assertFalse("a gated rung must not publish a committed file", fx.committedFile.exists())
+        assertNull(fx.fileDao.rows[sourceKey])
+    }
+
+    @Test
     fun `the exhausted-plan finish commits the file before reporting COMPLETED`() {
         // The common keep: smaller than the per-pass cap, so the loop runs out of ranges and the
         // tail of run() decides. Before the fix this returned COMPLETED over a bare .part.

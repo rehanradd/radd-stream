@@ -1,5 +1,6 @@
 package com.raddstream.app.data.cache
 
+import com.raddstream.app.player.GATE_REFUSED_HTTP_STATUS
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -23,6 +24,14 @@ import kotlin.coroutines.coroutineContext
 sealed class RangeFetchResult {
     data class Success(val bytesWritten: Long, val rangeHonored: Boolean, val totalSize: Long?) : RangeFetchResult()
     data class SourceDead(val httpStatus: Int) : RangeFetchResult()
+    /**
+     * Salaar (2026-11-12): our own redirector refused this rung with the quality
+     * gate's 402 — the copy cannot play for this viewer, and no retry or
+     * re-resolve will change that. Distinct from [SourceDead] (a rotted ephemeral
+     * URL a fresh handle can heal) and from [HttpError] (transient): the engine
+     * must drop the preview silently instead of FAILED-marking it.
+     */
+    data class GateRefused(val httpStatus: Int) : RangeFetchResult()
     object NoRangeSupport : RangeFetchResult()
     data class HttpError(val httpStatus: Int) : RangeFetchResult()
     data class IoError(val message: String) : RangeFetchResult()
@@ -63,6 +72,13 @@ class RangeByteFetcher(private val client: OkHttpClient) {
 
             if (code == 403 || code == 410 || code == 404) {
                 return@withContext RangeFetchResult.SourceDead(code)
+            }
+            if (code == GATE_REFUSED_HTTP_STATUS && response.request.url.toString() == url) {
+                // The gate refused this rung before any redirect: the 402 came
+                // from OUR redirector (the final request is still the one we
+                // sent), not from an upstream host after a 302. A 402 after a
+                // redirect is upstream's, and stays a plain HttpError.
+                return@withContext RangeFetchResult.GateRefused(code)
             }
             if (code == 416) {
                 // Requested a range past EOF: treat as success with zero bytes, the caller

@@ -675,6 +675,7 @@ class PlaybackService : MediaSessionService() {
         active: PlaybackRendition,
         targetBand: String,
         fromBand: String?,
+        reason: String? = null,
     ) {
         val director = store.autoQuality
         val rung = director.rungFor(targetBand) ?: return
@@ -721,8 +722,9 @@ class PlaybackService : MediaSessionService() {
             listOf(
                 FailoverRecord(
                     swapped.rank, swapped.releaseId, swapped.displayLabel(),
-                    "measured ${formatBitrate(director.estimateBps)}",
-                    "auto moved ${fromBand ?: "the current rung"} → $targetBand",
+                    reason ?: "measured ${formatBitrate(director.estimateBps)}",
+                    reason?.let { "stepped down to $targetBand" }
+                        ?: "auto moved ${fromBand ?: "the current rung"} → $targetBand",
                 ),
             ),
         )
@@ -790,7 +792,31 @@ class PlaybackService : MediaSessionService() {
             // any user-visible surface shows it, so diagnosis loses nothing.
             val rawSummary = summarize(error)
             Log.d("PlaybackService", "player error: $rawSummary")
-            val decision = machine.onFailure(rawSummary)
+            val gateRefusal = isGateRefusalError(error)
+            if (gateRefusal) {
+                // Salaar (2026-11-12): the gate refused the rung now opening, and
+                // every copy of that rung shares the refusal. Before the first
+                // frame has landed, step DOWN the staged ladder at once — the
+                // next lower rung is the picture this viewer may actually play —
+                // instead of letting the failover plan burn its budget on copies
+                // the server will refuse again. Only at start: a refusal after
+                // the first frame is a different failure (the rung played once).
+                val exo = player
+                if (exo != null && !StartDeadline.hasFirstFrame(exo.playbackState)) {
+                    val index = store.activeRenditionIndex.value
+                    val active = bundle.renditions.getOrNull(index)
+                    val fromBand = active?.let { bandOfRendition(it) }
+                    val lower = fromBand?.let { store.autoQuality.lowerRungThan(it) }
+                    if (active != null && lower != null) {
+                        switchRungTo(
+                            bundle, index, active, lower.band, fromBand,
+                            reason = "gate refused ${fromBand ?: "this rung"}",
+                        )
+                        return
+                    }
+                }
+            }
+            val decision = machine.onFailure(rawSummary, isGateRefusal = gateRefusal)
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
         }
 

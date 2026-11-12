@@ -10,6 +10,7 @@ import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -41,6 +42,10 @@ class HlsAheadBufferTest {
         private val playlists: Map<String, String>,
         /** The URL the playlist body actually came from (after a redirect), per asked URL. */
         private val finalUrlFor: Map<String, String> = emptyMap(),
+        /** Manifest URLs our redirector refuses with the gate's 402 (no redirect). */
+        private val refusedUrls: Set<String> = emptySet(),
+        /** Manifest URLs refused with 402 after a redirect to the given upstream URL. */
+        private val redirectedRefusedUrls: Map<String, String> = emptyMap(),
     ) {
         val requestedUrls = ArrayList<String>()
 
@@ -50,7 +55,22 @@ class HlsAheadBufferTest {
                 val url = request.url.toString()
                 requestedUrls.add(url)
                 val playlist = playlists[url]
-                if (playlist != null) {
+                if (refusedUrls.contains(url)) {
+                    Response.Builder()
+                        .request(request).protocol(Protocol.HTTP_1_1)
+                        .code(402).message("Payment Required")
+                        .body("".toResponseBody("text/plain".toMediaType()))
+                        .build()
+                } else if (redirectedRefusedUrls.containsKey(url)) {
+                    // The 402 arrived after a redirect: the request the response
+                    // carries is the upstream URL, not the one we asked for.
+                    Response.Builder()
+                        .request(request.newBuilder().url(redirectedRefusedUrls.getValue(url)).build())
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(402).message("Payment Required")
+                        .body("".toResponseBody("text/plain".toMediaType()))
+                        .build()
+                } else if (playlist != null) {
                     val finalUrl = finalUrlFor[url] ?: url
                     Response.Builder()
                         .request(request.newBuilder().url(finalUrl).build())
@@ -150,6 +170,54 @@ class HlsAheadBufferTest {
         val segmentUrls = scripted.requestedUrls.filter { it.endsWith(".ts") }
         assertEquals(4, segmentUrls.size)
         assertTrue(segmentUrls.all { it.startsWith("https://cdn.example.com/hls/seg") })
+    }
+
+    @Test
+    fun `a manifest our gate refuses is gated, never dead`() = runBlocking {
+        // Salaar (2026-11-12): the 402 came from OUR redirector with no redirect
+        // in between — the rung cannot play for this viewer, and no retry or
+        // re-resolve will change that. The buffer must say gated, not dead, so
+        // the coordinator drops the preview silently instead of FAILED-marking it.
+        val manifestUrl = "https://radd.test/api/v1/stream?id=H"
+        val scripted = ScriptedClient(
+            playlists = emptyMap(),
+            refusedUrls = setOf(manifestUrl),
+        )
+        val workDir = newWorkDir()
+
+        val result = buffer(scripted).run(manifestUrl, workDir, startSegmentIndex = 0, aheadSegments = Int.MAX_VALUE)
+
+        assertTrue(result.gated)
+        assertFalse("a gated rung is not a rotted URL", result.sourceDead)
+        assertEquals("manifest_gated", result.error)
+        assertTrue(result.segments.isEmpty())
+        assertNull(result.localPlaylist)
+        assertEquals("no segment is ever fetched for a refused manifest",
+            0, scripted.requestedUrls.count { it.endsWith(".ts") })
+        assertFalse("no local playlist is written for a refused manifest",
+            File(workDir, "local.m3u8").exists())
+    }
+
+    @Test
+    fun `a manifest 402 after a redirect is a plain unreachable manifest, not gated`() = runBlocking {
+        // The same 402, but it arrived after our redirector 302'd to an upstream
+        // host: that refusal is upstream's, not our gate's, so the buffer must
+        // report an unreachable manifest — never a gated rung.
+        val manifestUrl = "https://radd.test/api/v1/stream?id=H"
+        val upstreamUrl = "https://cdn.example.com/upstream/media.m3u8"
+        val scripted = ScriptedClient(
+            playlists = emptyMap(),
+            redirectedRefusedUrls = mapOf(manifestUrl to upstreamUrl),
+        )
+        val workDir = newWorkDir()
+
+        val result = buffer(scripted).run(manifestUrl, workDir, startSegmentIndex = 0, aheadSegments = Int.MAX_VALUE)
+
+        assertFalse("a 402 after a redirect is upstream's refusal, not our gate", result.gated)
+        assertTrue(result.sourceDead)
+        assertEquals("manifest_unreachable", result.error)
+        assertTrue(result.segments.isEmpty())
+        assertNull(result.localPlaylist)
     }
 
     @Test

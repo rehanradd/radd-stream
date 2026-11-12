@@ -32,6 +32,7 @@ enum class FetchOutcome {
     NO_RANGE_FALLBACK, // server ignored Range — caller should switch to sequential full download
     RETRY_LATER,       // transient IO/HTTP error — retry with backoff
     ALREADY_COMPLETE,  // nothing to do
+    GATED,             // our redirector refused this rung (402) — not this copy, not retryable
 }
 
 /**
@@ -154,6 +155,10 @@ class AheadFetcher(
                         is RangeFetchResult.SourceDead -> {
                             persist(task, ledger, downloaded, totalSize, currentUrl)
                             return FetchOutcome.NEEDS_RERESOLVE
+                        }
+                        is RangeFetchResult.GateRefused -> {
+                            persist(task, ledger, downloaded, totalSize, currentUrl)
+                            return FetchOutcome.GATED
                         }
                         is RangeFetchResult.NoRangeSupport -> {
                             persist(task, ledger, downloaded, totalSize, currentUrl)

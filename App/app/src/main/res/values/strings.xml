@@ -85,6 +85,8 @@
     <string name="player_offline_body">Check your connection and try again — nothing will play until the network is back.</string>
     <string name="player_giveup_expired">This shared link has expired</string>
     <string name="player_giveup_expired_body">The link was only good for a while. Ask whoever shared it for a fresh one, or go back home and find the title again.</string>
+    <string name="player_giveup_gate_refused">This quality needs VIP</string>
+    <string name="player_giveup_gate_refused_body">The best quality for this title is for VIP members. Go back to the title and pick a lower quality, or upgrade to VIP.</string>
     <string name="player_home">Home</string>
     <string name="player_up_next">Up next</string>
     <string name="player_autoplay_play_now">Play now</string>

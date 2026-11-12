@@ -146,4 +146,81 @@ class SilentFailoverTest {
         assertEquals(1, (hop as FailoverDecision.AdvanceBackup).index)
         assertFalse(subject.log.isEmpty())
     }
+
+    // ── Salaar (2026-11-12): a gate refusal is not a retryable failure ──────
+
+    @Test
+    fun `a gate refusal hands off at once, never retries or hops`() {
+        // The server said this rung is VIP-only (402): retrying the same handle
+        // and hopping to its runner-ups are the same refusal wearing different
+        // addresses — the machine must hand off immediately so the service can
+        // step the ladder down instead of burning ~3 s per hop.
+        val subject = machine(rung(1, "h-a", backups = listOf("b-a1", "b-a2")))
+        assertEquals(0, subject.selectInitial())
+        val decision = subject.onFailure("Response code: 402", isGateRefusal = true)
+        decision as FailoverDecision.Handoff
+        assertEquals(HandoffWhy.GATE_REFUSED, decision.why)
+        assertTrue(subject.log.last().action.contains("gate refused"))
+    }
+
+    @Test
+    fun `a gate refusal with a next rank advances to it directly`() {
+        val subject = machine(
+            rung(1, "h-a", backups = listOf("b-a1")),
+            rung(2, "h-b"),
+        )
+        assertEquals(0, subject.selectInitial())
+        val decision = subject.onFailure("Response code: 402", isGateRefusal = true)
+        decision as FailoverDecision.Advance
+        assertEquals(1, decision.index)
+    }
+
+    @Test
+    fun `a gate refusal on the last rank hands off, never retries`() {
+        // Same as the handoff test above, but with no runner-ups at all: the
+        // refusal still hands off as GATE_REFUSED, never as a retry.
+        val subject = machine(rung(1, "h-a"))
+        assertEquals(0, subject.selectInitial())
+        val decision = subject.onFailure("Response code: 402", isGateRefusal = true)
+        decision as FailoverDecision.Handoff
+        assertEquals(HandoffWhy.GATE_REFUSED, decision.why)
+    }
+
+    @Test
+    fun `a non-gate failure still retries and hops as before`() {
+        val subject = machine(
+            rung(1, "h-a", backups = listOf("b-a1")),
+            rung(2, "h-b"),
+        )
+        assertEquals(0, subject.selectInitial())
+        assertTrue(subject.onFailure("HTTP 403") is FailoverDecision.RetrySame)
+        val hop = subject.onFailure("HTTP 403")
+        assertTrue(hop is FailoverDecision.AdvanceBackup)
+    }
+
+    // ── the gate-refusal detector ────────────────────────────────────────────
+
+    @Test
+    fun `isGateRefusalError recognizes a 402 bad-http-status error`() {
+        val error = androidx.media3.common.PlaybackException(
+            "Response code: 402", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertTrue(isGateRefusalError(error))
+    }
+
+    @Test
+    fun `isGateRefusalError rejects a 404 and a timeout`() {
+        val notFound = androidx.media3.common.PlaybackException(
+            "Response code: 404", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertFalse(isGateRefusalError(notFound))
+        val timeout = androidx.media3.common.PlaybackException(
+            "timeout", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        )
+        assertFalse(isGateRefusalError(timeout))
+        assertFalse(isGateRefusalError(null))
+    }
 }

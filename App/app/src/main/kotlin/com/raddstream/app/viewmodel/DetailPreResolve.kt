@@ -2,6 +2,7 @@ package com.raddstream.app.viewmodel
 
 import com.raddstream.app.data.RegionChoices
 import com.raddstream.app.player.LadderForScope
+import com.raddstream.app.player.QualityOption
 import java.io.IOException
 import retrofit2.HttpException
 
@@ -87,6 +88,49 @@ internal fun stepDownPrint(
     }
     return allowed.filter { it.playableHere }.maxByOrNull { it.rankKey }
         ?: allowed.maxByOrNull { it.rankKey }
+}
+
+/**
+ * Salaar (2026-11-12) — the print Play actually starts on. A locked print is never
+ * the answer when a free print can play: the hero's Watch Now and the print rows
+ * step down to the best allowed print first, and only show the VIP lock when no
+ * allowed print remains. The old shape showed the lock for a locked best print
+ * even while a 720p copy of the same title sat playable — Salaar's detail said
+ * "4K and 1080p are part of VIP" for a film with a free 720p print. Null means
+ * "locked, and nothing free to fall back to".
+ */
+internal fun playStartPrint(
+    layout: ReleaseLayout?,
+    print: RankedPrint,
+    premiumAccess: Boolean,
+    freeQualityCap: String,
+): RankedPrint? =
+    if (VipQualityGate.allowsResolution(print.resolution, premiumAccess)) print
+    else stepDownPrint(layout, print, premiumAccess, freeQualityCap)
+
+/**
+ * Salaar (2026-11-12) — the rung the quality card actually starts on. Same rule as
+ * [playStartPrint], for a tapped ladder rung: a locked rung steps down to the best
+ * allowed rung that plays here (the ladder is best-first, so the first allowed
+ * playable rung is the best free picture), and only when no rung survives does the
+ * tap become the VIP lock. A provider page is never a step-down target — a hop
+ * must never land on a page — and the failed rung itself is excluded.
+ */
+internal fun stepDownRung(
+    ladder: LadderForScope,
+    failed: QualityOption,
+    premiumAccess: Boolean,
+    freeQualityCap: String,
+): QualityOption? {
+    if (premiumAccess) return null
+    return ladder.options.firstOrNull {
+        it.band != failed.band &&
+            !it.isProviderPage &&
+            it.playsHere &&
+            it.streamId.isNotBlank() &&
+            VipQualityGate.allowsBand(it.band, premiumAccess, freeQualityCap) &&
+            !VipQualityGate.isPremiumLabel(it.title, freeQualityCap)
+    }
 }
 
 /**

@@ -154,7 +154,35 @@ class CacheCoordinator(
                     recordRetry(taskId, task.attempt, "transient")
                     return
                 }
+                FetchOutcome.GATED -> {
+                    // Salaar (2026-11-12): our redirector refused this rung
+                    // (the quality gate's 402). Not transient, not an engine
+                    // failure — a preview of a rung that cannot play is
+                    // dropped silently, a keep parks with the reason.
+                    handleGated(task)
+                    return
+                }
             }
+        }
+    }
+
+    /**
+     * A task whose rung the server refused. An auto-preview is dropped outright
+     * (row, manifest, bytes and file rows — the mirror of [cancelTask] without
+     * the job cancel, since this runs inside the drive job itself), so no FAILED
+     * chip ever names it; a user-requested keep parks with the reason instead,
+     * so a VIP upgrade can resume it and the list can say why it waits.
+     */
+    private suspend fun handleGated(task: CacheTaskEntity) {
+        playheadBytes.remove(task.id)
+        if (task.priorityEnum == CachePriority.AUTO_PREVIEW) {
+            manifestDao.deleteForTask(task.id)
+            runCatching { storage.deleteOnDisk(task.sourceKey) }
+            fileDao.listByTask(task.id).forEach { fileDao.deleteById(it.fileId) }
+            taskDao.deleteById(task.id)
+        } else {
+            safeTransition(task.id, task.stateEnum, CacheTaskState.PAUSED)
+            taskDao.setParkReason(task.id, ERR_GATED)
         }
     }
 
@@ -182,6 +210,7 @@ class CacheCoordinator(
             aheadSegments = if (mode == FetchMode.FULL_DOWNLOAD) Int.MAX_VALUE else AHEAD_SEGMENTS,
         )
         return when {
+            result.gated -> FetchOutcome.GATED
             result.sourceDead -> FetchOutcome.NEEDS_RERESOLVE
             result.error != null -> FetchOutcome.RETRY_LATER
             result.isComplete -> FetchOutcome.COMPLETED
@@ -217,6 +246,7 @@ class CacheCoordinator(
                 )
                 safeTransition(task.id, CacheTaskState.LOADING, CacheTaskState.COMPLETED)
             }
+            is RangeFetchResult.GateRefused -> handleGated(task)
             else -> recordRetry(task.id, task.attempt, "sequential_failed")
         }
     }
@@ -382,6 +412,9 @@ class CacheCoordinator(
 
         /** Stable park-reason token for a keep the device had no room for. Never UI text. */
         const val ERR_NO_SPACE = "no_space"
+
+        /** Stable park-reason token for a rung the server refused (quality gate 402). Never UI text. */
+        const val ERR_GATED = "gated"
     }
 }
 

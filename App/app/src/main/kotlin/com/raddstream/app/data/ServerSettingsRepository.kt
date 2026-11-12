@@ -539,12 +539,17 @@ class ServerSettingsRepository @Inject constructor(
     }
 
     /**
-     * Whether the operator has chosen to charge VIP for 1080p/4K. Off unless the server says
-     * on — the inverse of the feature switches above, because this one takes content away rather
-     * than offering a feature, and a deployment that never set it must not go dark by default.
+     * Whether the operator has chosen to charge VIP for 1080p/4K. On until the server says
+     * off — the fail-closed mirror of the server's own gate, which is seeded ON
+     * (`Fast_Fetch/api_v2.py::_gate_is_on`) and live ON: a deployment that never fetched
+     * remote config yet must not offer a free viewer rungs the server will 402 at press
+     * time (Salaar, 2026-11-12 — the client-built ladder's Auto pointed at 2160p while
+     * the gate was still at its old off default, and the player burned its whole start
+     * budget on copies that cannot play). The watcher overwrites this on the first
+     * fetched body either way, so `false` here means the server positively said off.
      */
     val qualityGateEnabled: Flow<Boolean> = dataStore.data.map { preferences ->
-        preferences[FEATURE_QUALITY_GATE_KEY] ?: false
+        preferences[FEATURE_QUALITY_GATE_KEY] ?: true
     }
 
     /**

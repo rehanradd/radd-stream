@@ -278,4 +278,108 @@ class PreResolveTest {
         assertEquals(31, failed.releaseId)
         assertEquals(11, stepDownPrint(layout, failed, premiumAccess = false, freeQualityCap = "480p")?.releaseId)
     }
+
+    // ── Salaar (2026-11-12): never start on a server-gated rung ─────────────
+
+    private fun pageRung(band: String, handle: String) = QualityOption(
+        band = band,
+        title = band,
+        streamId = handle,
+        playUrl = "https://raddstream.duckdns.org/api/v1/stream?id=$handle",
+        sizeBytes = null,
+        backupHandles = emptyList(),
+        playsHere = true,
+        resumable = true,
+        copies = 1,
+        isProviderPage = true,
+    )
+
+    @Test
+    fun `playStartPrint passes a free print through unchanged`() {
+        val layout = movieLayout()
+        val free = bestPrintOf(ReleaseLayoutBuilder.build("movie", listOf(ReleaseDetail(id = 11, quality = "480p"))))!!
+
+        assertEquals(11, playStartPrint(layout, free, premiumAccess = false, freeQualityCap = "720p")?.releaseId)
+    }
+
+    @Test
+    fun `playStartPrint steps a locked best print down to the free one`() {
+        // Salaar: the best print is 1080p (gated for a free viewer) and the layout
+        // also carries a 480p print — Play must start on the 480p, never mint the
+        // 1080p and never show the VIP lock.
+        val layout = movieLayout()
+        val best = bestPrintOf(layout)!!
+        assertEquals(22, best.releaseId)
+
+        assertEquals(11, playStartPrint(layout, best, premiumAccess = false, freeQualityCap = "720p")?.releaseId)
+    }
+
+    @Test
+    fun `playStartPrint returns null when the lock leaves nothing free`() {
+        val layout = ReleaseLayoutBuilder.build("movie", listOf(ReleaseDetail(id = 22, quality = "1080p")))
+        val best = bestPrintOf(layout)!!
+
+        assertNull(playStartPrint(layout, best, premiumAccess = false, freeQualityCap = "720p"))
+    }
+
+    @Test
+    fun `playStartPrint never steps a premium viewer down`() {
+        val layout = movieLayout()
+        val best = bestPrintOf(layout)!!
+
+        assertEquals(22, playStartPrint(layout, best, premiumAccess = true, freeQualityCap = "720p")?.releaseId)
+    }
+
+    @Test
+    fun `stepDownRung takes the best free rung that plays here`() {
+        val ladder = LadderForScope(
+            options = listOf(
+                rung("2160p", "h2160", true),
+                rung("1080p", "h1080", true),
+                rung("720p", "h720", true),
+                rung("480p", "h480", true),
+            ),
+            autoBand = "2160p",
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertEquals("720p", stepDownRung(ladder, failedBand = "2160p", premiumAccess = false, freeQualityCap = "720p")?.band)
+    }
+
+    @Test
+    fun `stepDownRung skips provider pages and download-only rungs`() {
+        val ladder = LadderForScope(
+            options = listOf(
+                pageRung("720p", "h720page"),
+                rung("1080p", "h1080", false),
+                rung("480p", "h480", true),
+            ),
+            autoBand = "2160p",
+            downloadOnlyBands = listOf("1080p"),
+        )
+
+        assertEquals("480p", stepDownRung(ladder, failedBand = "2160p", premiumAccess = false, freeQualityCap = "720p")?.band)
+    }
+
+    @Test
+    fun `stepDownRung is null when no free rung plays here`() {
+        val ladder = LadderForScope(
+            options = listOf(rung("2160p", "h2160", true), rung("1080p", "h1080", true)),
+            autoBand = "2160p",
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertNull(stepDownRung(ladder, failedBand = "2160p", premiumAccess = false, freeQualityCap = "720p"))
+    }
+
+    @Test
+    fun `stepDownRung is null for a premium caller`() {
+        val ladder = LadderForScope(
+            options = listOf(rung("720p", "h720", true), rung("480p", "h480", true)),
+            autoBand = "2160p",
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertNull(stepDownRung(ladder, failedBand = "2160p", premiumAccess = true, freeQualityCap = "720p"))
+    }
 }

@@ -1,5 +1,6 @@
 package com.raddstream.app.data.cache
 
+import com.raddstream.app.player.GATE_REFUSED_HTTP_STATUS
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -31,6 +32,14 @@ class HlsAheadBuffer(
         val localPlaylist: File?,
         val sourceDead: Boolean,
         val error: String?,
+        /**
+         * Salaar (2026-11-12): our redirector refused the manifest with the quality
+         * gate's 402 — the rung cannot play for this viewer, and no retry or
+         * re-resolve will change that. Distinct from [sourceDead]: a gated rung is
+         * not a rotted URL. A 402 on a *segment* is upstream's, not ours, and
+         * stays a plain failure — only the manifest fetch can be the gate.
+         */
+        val gated: Boolean = false,
     ) {
         val isComplete: Boolean get() = segments.isNotEmpty() && coveredIndices.size == segments.size
     }
@@ -47,7 +56,14 @@ class HlsAheadBuffer(
         aheadSegments: Int,
     ): Result = withContext(Dispatchers.IO) {
         if (!workDir.exists()) workDir.mkdirs()
-        val media = loadMediaPlaylist(manifestUrl)
+        val loaded = loadMediaPlaylist(manifestUrl)
+        if (loaded.gated) {
+            return@withContext Result(
+                emptyList(), emptySet(), null,
+                sourceDead = false, error = "manifest_gated", gated = true,
+            )
+        }
+        val media = loaded.playlist
             ?: return@withContext Result(emptyList(), emptySet(), null, sourceDead = true, error = "manifest_unreachable")
         val mediaText = media.text
 
@@ -145,11 +161,52 @@ class HlsAheadBuffer(
     }
 
     /** Fetch a media playlist; if the URL is a master, descend to the highest-bandwidth variant. */
-    private suspend fun loadMediaPlaylist(url: String): FetchedPlaylist? {
-        val first = fetchText(url) ?: return null
-        if (!HlsPlaylist.isMaster(first.text)) return first
-        val variant = pickVariantUrl(first.text, first.finalUrl) ?: return first
-        return fetchText(variant) ?: first
+    private suspend fun loadMediaPlaylist(url: String): ManifestLoad {
+        val first = fetchText(url)
+        if (first.gated) return ManifestLoad(null, gated = true)
+        val firstPlaylist = first.playlist ?: return ManifestLoad(null, gated = false)
+        if (!HlsPlaylist.isMaster(firstPlaylist.text)) return ManifestLoad(firstPlaylist, gated = false)
+        val variant = pickVariantUrl(firstPlaylist.text, firstPlaylist.finalUrl)
+            ?: return ManifestLoad(firstPlaylist, gated = false)
+        val second = fetchText(variant)
+        if (second.gated) return ManifestLoad(null, gated = true)
+        return ManifestLoad(second.playlist ?: firstPlaylist, gated = false)
+    }
+
+    /** A media playlist plus whether our redirector refused it with the gate's 402. */
+    private data class ManifestLoad(val playlist: FetchedPlaylist?, val gated: Boolean)
+
+    /** One text fetch: the playlist when the fetch succeeded, and whether it was gate-refused. */
+    private data class TextFetch(val playlist: FetchedPlaylist?, val gated: Boolean)
+
+    private suspend fun fetchText(url: String): TextFetch {
+        val request = Request.Builder().url(url).build()
+        var response: okhttp3.Response? = null
+        return try {
+            response = client.newCall(request).execute()
+            if (response.isSuccessful) {
+                val body = response.body?.string() ?: return TextFetch(null, gated = false)
+                // The URL the bytes actually came from: after our redirector's 302 this
+                // is the playlist host, and relative segment refs resolve against it.
+                TextFetch(FetchedPlaylist(body, response.request.url.toString()), gated = false)
+            } else {
+                // A 402 that arrived without a redirect is OUR gate refusing the
+                // rung; a 402 after a redirect is upstream's, and stays a plain
+                // unreachable manifest.
+                TextFetch(
+                    null,
+                    gated = response.code == GATE_REFUSED_HTTP_STATUS &&
+                        response.request.url.toString() == url,
+                )
+            }
+        } catch (_: IOException) {
+            TextFetch(null, gated = false)
+        } finally {
+            try {
+                response?.close()
+            } catch (_: IOException) {
+            }
+        }
     }
 
     private fun pickVariantUrl(master: String, masterUrl: String): String? {
@@ -162,29 +219,6 @@ class HlsAheadBuffer(
             }
         }
         return last?.let { resolveUrl(masterUrl, it) }
-    }
-
-    private suspend fun fetchText(url: String): FetchedPlaylist? {
-        val request = Request.Builder().url(url).build()
-        var response: okhttp3.Response? = null
-        return try {
-            response = client.newCall(request).execute()
-            if (response.isSuccessful) {
-                val body = response.body?.string() ?: return null
-                // The URL the bytes actually came from: after our redirector's 302 this
-                // is the playlist host, and relative segment refs resolve against it.
-                FetchedPlaylist(body, response.request.url.toString())
-            } else {
-                null
-            }
-        } catch (_: IOException) {
-            null
-        } finally {
-            try {
-                response?.close()
-            } catch (_: IOException) {
-            }
-        }
     }
 
     /** A fetched playlist plus the URL it actually came from (after redirects). */

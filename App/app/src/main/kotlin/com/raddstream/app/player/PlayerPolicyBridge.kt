@@ -269,6 +269,21 @@ class AutoQualityDirector(
 
     fun rungFor(band: String?): LadderRung? = if (band == null) null else rungs.firstOrNull { it.band == band }
 
+    /**
+     * Salaar (2026-11-12): the best rung strictly below [band] — the step-down
+     * target when the rung now playing is refused (the quality gate's 402). The
+     * rungs arrive in server order, but the pick is by nominal bitrate, so an
+     * unordered ladder still steps down to the highest rung cheaper than the
+     * current one, never sideways and never up. Null when nothing below exists
+     * (or the band is unknown), so the caller falls back to the failover plan.
+     */
+    fun lowerRungThan(band: String?): LadderRung? {
+        val current = band?.let { AdaptiveQualitySwitcher.nominalBitrateFor(it) } ?: return null
+        return rungs
+            .filter { AdaptiveQualitySwitcher.nominalBitrateFor(it.band) < current }
+            .maxByOrNull { AdaptiveQualitySwitcher.nominalBitrateFor(it.band) }
+    }
+
     /** The handle of ours that plays [band]; null when that rung is not in this scope. */
     fun handleFor(band: String?): String? = rungFor(band)?.streamId
 

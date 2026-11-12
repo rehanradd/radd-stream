@@ -1,5 +1,33 @@
 package com.raddstream.app.player
+import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.HttpDataSource
 import com.raddstream.app.network.models.Playability
+
+/** The HTTP status our own redirector answers when the quality gate refuses a rung. */
+const val GATE_REFUSED_HTTP_STATUS: Int = 402
+
+/**
+ * Salaar (2026-11-12): did this player error come from OUR redirector refusing the
+ * rung — the quality gate's 402 — rather than from a copy that merely failed?
+ * Media3 1.3.1 (the pinned version) carries the status in the exception two ways:
+ * the message of [HttpDataSource.InvalidResponseCodeException] is exactly
+ * "Response code: 402", and the cause chain holds the exception itself. Either
+ * signal is enough; a 404/403 is NOT a refusal (that handle may be dead while its
+ * same-rung runner-ups are fine), and any other code is not a gate at all.
+ */
+internal fun isGateRefusalError(error: PlaybackException): Boolean {
+    if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+        error.message?.contains("Response code: $GATE_REFUSED_HTTP_STATUS") == true
+    ) return true
+    var cause: Throwable? = error.cause
+    while (cause != null) {
+        if (cause is HttpDataSource.InvalidResponseCodeException &&
+            cause.responseCode == GATE_REFUSED_HTTP_STATUS
+        ) return true
+        cause = cause.cause
+    }
+    return false
+}
 
 /**
  * Pure failover policy for a [PlayBundle], implementing API_V2.md §5:
@@ -41,6 +69,14 @@ enum class HandoffWhy {
      * playable", because the fix is a fresh link, not another print.
      */
     EXPIRED_LINK,
+    /**
+     * Salaar (2026-11-12): the server refused every rung it was handed with the
+     * quality gate's 402 — the best quality is VIP-only and no free rung was left
+     * to step down to. The give-up card must say that plainly ("this quality
+     * needs VIP"), not the generic "nothing playable", because the fix is a lower
+     * quality or VIP, not another retry of the same rung.
+     */
+    GATE_REFUSED,
 }
 
 sealed class FailoverDecision {
@@ -182,8 +218,19 @@ class FailoverStateMachine(
      * same failure wearing a different address. An expiry goes straight to the handoff with
      * [HandoffWhy.EXPIRED_LINK], so the card can say the link expired instead of the
      * generic "nothing playable".
+     *
+     * [isGateRefusal] marks a 402 from our own redirector: the quality gate refused this
+     * rung, and every copy of the rung shares the refusal (the gate is per print band,
+     * not per handle). Retrying the same address and hopping to same-rung runner-ups
+     * are both futile — each hop re-pays Media3's ~3 s of loader retries before it
+     * 402s again — so a refusal skips straight to the next rank (or the handoff when
+     * no rank remains), instead of burning the start budget on copies that cannot play.
      */
-    fun onFailure(errorSummary: String, isExpiry: Boolean = false): FailoverDecision {
+    fun onFailure(
+        errorSummary: String,
+        isExpiry: Boolean = false,
+        isGateRefusal: Boolean = false,
+    ): FailoverDecision {
         // Session 121 (P-6): the summary may be a raw ExoPlayer code; the machine is the
         // single funnel every failure passes through, so translate it here — the Handoff
         // detail (the give-up card's message) and the FailoverRecord reason (the print
@@ -196,6 +243,15 @@ class FailoverStateMachine(
             val record = FailoverRecord(current.rank, current.releaseId, current.displayLabel(), displaySummary, "expired")
             _log.add(record)
             return FailoverDecision.Handoff(HandoffWhy.EXPIRED_LINK, displaySummary, record)
+        }
+        if (isGateRefusal) {
+            // The gate refused the whole rung: no retry, no same-rung hop — the next
+            // rank (or the honest give-up) is the only move that can play.
+            val record = FailoverRecord(
+                current.rank, current.releaseId, current.displayLabel(),
+                displaySummary, "gate refused this rung",
+            )
+            return advanceToNextRank(index, displaySummary, record, HandoffWhy.GATE_REFUSED)
         }
         // Read-modify-write instead of `HashMap.merge`: `merge` is a Java 8 default method and
         // lint correctly refuses it against minSdk 21 (it ships in API 24). The count below is
@@ -230,37 +286,53 @@ class FailoverStateMachine(
                         record = record.copy(action = "hopped to a runner-up of this rung"),
                     )
                 }
-                ranksBurned += 1
-                val next = (index + 1 until renditions.size).firstOrNull { isPlayable(it) }
-                _log.add(record.copy(action = "died → failover"))
-                // Walk forward while candidates are keep-only/none — record each skip honestly.
-                var probe = next
-                while (probe != null && !isPlayable(probe)) {
-                    val skipped = renditions[probe]
-                    _log.add(skipRecord(probe, skipped))
-                    probe = (probe + 1 until renditions.size).firstOrNull { isPlayable(it) }
-                }
-                when {
-                    probe != null && ranksBurned < policy.maxRanks -> {
-                        activeIndex = probe
-                        val target = renditions[probe]
-                        FailoverDecision.Advance(probe, target.displayLabel(), record)
-                    }
-                    probe != null && ranksBurned >= policy.maxRanks -> {
-                        // §5: never beyond max_ranks, even if a later rank looks alive.
-                        FailoverDecision.Handoff(
-                            HandoffWhy.NO_CANDIDATE_LEFT,
-                            "Reached max_ranks=${policy.maxRanks} without stable playback",
-                            record.copy(action = "stopped (max_ranks)"),
-                        )
-                    }
-                    else -> FailoverDecision.Handoff(
-                        HandoffWhy.NO_CANDIDATE_LEFT,
-                        displaySummary,
-                        record.copy(action = "no candidates remain"),
-                    )
-                }
+                advanceToNextRank(index, displaySummary, record)
             }
+        }
+    }
+
+    /**
+     * Move to the next playable rank after this one, or hand off when no rank remains.
+     * Shared by the ordinary exhaustion path and the gate-refusal path, so both agree
+     * about what "no candidates remain" means.
+     */
+    private fun advanceToNextRank(
+        index: Int,
+        displaySummary: String,
+        record: FailoverRecord,
+        handoffWhy: HandoffWhy = HandoffWhy.NO_CANDIDATE_LEFT,
+    ): FailoverDecision {
+        ranksBurned += 1
+        val next = (index + 1 until renditions.size).firstOrNull { isPlayable(it) }
+        // A record that already names its action (the gate refusal) keeps it; the
+        // ordinary path arrives with a blank action and gets the generic one.
+        _log.add(record.copy(action = record.action.ifBlank { "died → failover" }))
+        // Walk forward while candidates are keep-only/none — record each skip honestly.
+        var probe = next
+        while (probe != null && !isPlayable(probe)) {
+            val skipped = renditions[probe]
+            _log.add(skipRecord(probe, skipped))
+            probe = (probe + 1 until renditions.size).firstOrNull { isPlayable(it) }
+        }
+        return when {
+            probe != null && ranksBurned < policy.maxRanks -> {
+                activeIndex = probe
+                val target = renditions[probe]
+                FailoverDecision.Advance(probe, target.displayLabel(), record)
+            }
+            probe != null && ranksBurned >= policy.maxRanks -> {
+                // §5: never beyond max_ranks, even if a later rank looks alive.
+                FailoverDecision.Handoff(
+                    handoffWhy,
+                    "Reached max_ranks=${policy.maxRanks} without stable playback",
+                    record.copy(action = "stopped (max_ranks)"),
+                )
+            }
+            else -> FailoverDecision.Handoff(
+                handoffWhy,
+                displaySummary,
+                record.copy(action = "no candidates remain"),
+            )
         }
     }
 
