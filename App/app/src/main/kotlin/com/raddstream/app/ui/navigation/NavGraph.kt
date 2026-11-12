@@ -1,5 +1,6 @@
 package com.raddstream.app.ui.navigation
 
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -26,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.vectorResource
@@ -114,6 +117,13 @@ internal fun RowScope.BottomNavTab(
     selected: Boolean,
     onClick: () -> Unit,
 ) {
+    // Restyle 2026-11-13: the selected icon settles onto its spring (M3
+    // Expressive fast spatial) instead of snapping to 1.12x.
+    val iconScale by animateFloatAsState(
+        targetValue = if (selected) 1.12f else 1f,
+        animationSpec = RaddMotion.fastSpatial(),
+        label = "navIconScale",
+    )
     Box(
         modifier = Modifier
             .weight(1f)
@@ -134,8 +144,12 @@ internal fun RowScope.BottomNavTab(
                 modifier = Modifier
                     .size(width = 64.dp, height = 48.dp)
                     .background(
+                        // Restyle: the active pill is primaryContainer, not
+                        // surfaceContainerHighest — the jade tint says
+                        // "you are here" at a glance, and the icon/label
+                        // pair with onPrimaryContainer (never raw hex).
                         color = if (selected) {
-                            MaterialTheme.colorScheme.surfaceContainerHighest
+                            MaterialTheme.colorScheme.primaryContainer
                         } else {
                             Color.Transparent
                         },
@@ -148,18 +162,20 @@ internal fun RowScope.BottomNavTab(
                     icon,
                     contentDescription = null,
                     tint = if (selected) {
-                        MaterialTheme.colorScheme.primary
+                        MaterialTheme.colorScheme.onPrimaryContainer
                     } else {
                         MaterialTheme.colorScheme.onSurfaceVariant
                     },
-                    modifier = Modifier.size(24.dp),
+                    modifier = Modifier
+                        .size(24.dp)
+                        .graphicsLayer(scaleX = iconScale, scaleY = iconScale),
                 )
             }
             Text(
                 label,
                 style = MaterialTheme.typography.labelMedium,
                 color = if (selected) {
-                    MaterialTheme.colorScheme.primary
+                    MaterialTheme.colorScheme.onPrimaryContainer
                 } else {
                     MaterialTheme.colorScheme.onSurfaceVariant
                 },
@@ -294,8 +310,18 @@ fun RaddStreamNavGraph(
         containerColor = MaterialTheme.colorScheme.background,
         bottomBar = {
             if (showBottomBar) {
-                NavigationBar(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainer,
+                Column {
+                    // Restyle 2026-11-13: a 1dp specular edge on the bar's
+                    // top — the faint light line that makes the bar read as
+                    // glass sitting over the content instead of a flat slab.
+                    Box(
+                        Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(Color.White.copy(alpha = 0.08f)),
+                    )
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainer,
                     // Robo run 6: the bottom-nav touch target STILL measured
                     // 32dp — and the run-5 pill is 48dp, so the pill was never
                     // the measured node. The measured node is the tab itself,
@@ -345,6 +371,7 @@ fun RaddStreamNavGraph(
                             },
                         )
                     }
+                }
                 }
             }
         },
