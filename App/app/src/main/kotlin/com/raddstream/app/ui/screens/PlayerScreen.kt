@@ -20,7 +20,6 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -200,6 +199,7 @@ import com.raddstream.app.ui.theme.RaddDanger
 import com.raddstream.app.ui.theme.PlayerChromeTheme
 import com.raddstream.app.ui.theme.RaddHudPillIdle
 import com.raddstream.app.ui.theme.RaddHudToast
+import com.raddstream.app.ui.theme.RaddMotion
 import com.raddstream.app.ui.theme.RaddNarrationCheck
 import com.raddstream.app.ui.theme.RaddNarrationPlate
 import com.raddstream.app.ui.theme.RaddPlayerDialog
@@ -1255,8 +1255,8 @@ private fun DoubleTapRipple(state: PlayerUiState) {
         // flash.
         AnimatedVisibility(
             visible = state.ripple != null,
-            enter = fadeIn(tween(120)),
-            exit = fadeOut(tween(220)),
+            enter = fadeIn(RaddMotion.fastEffects()),
+            exit = fadeOut(RaddMotion.defaultEffects()),
         ) {
             Surface(
                 color = chrome.card,
@@ -1274,7 +1274,7 @@ private fun DoubleTapRipple(state: PlayerUiState) {
                         modifier = Modifier.size(26.dp),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text(label, color = Color.White, fontSize = brandSp(15), fontWeight = FontWeight.Bold)
+                    Text(label, color = Color.White, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -1403,6 +1403,10 @@ private fun BoostBadge() {
 private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit) {
     val print = state.activeRendition
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
+    // Restyle 2026-11-13: the bar ends in a 1dp specular line where it meets
+    // the picture — the same glass edge the bottom bar carries on its top —
+    // so the chrome reads as a sheet over the frame, not a black slab.
+    Column(Modifier.fillMaxWidth()) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1418,7 +1422,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
             Text(
                 state.pendingTitle ?: print?.displayLabel() ?: Brand.name,
                 color = Color.White,
-                fontSize = brandSp(15),
+                style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -1462,7 +1466,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
                         // E-C2: 11sp white at 72% over the 53%-black top bar was
                         // ~3.13:1 over a bright frame. Full white now.
                         color = Color.White,
-                        fontSize = brandSp(11),
+                        style = MaterialTheme.typography.labelSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -1483,7 +1487,7 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
             Text(
                 stringResource(R.string.player_speed_short, state.speed),
                 color = RaddCurrent500,
-                fontSize = brandSp(13),
+                style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.padding(end = 6.dp),
             )
@@ -1494,6 +1498,13 @@ private fun TopBar(vm: PlayerViewModel, state: PlayerUiState, onBack: () -> Unit
         IconButton(onClick = { vm.showPrintSheet() }) {
             Icon(Icons.Default.ListAlt, stringResource(R.string.player_prints_tools), tint = Color.White)
         }
+    }
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(Color.White.copy(alpha = 0.08f)),
+        )
     }
 }
 
@@ -1700,6 +1711,15 @@ private fun BottomControls(
                 .fillMaxWidth()
                 .background(chrome.bar),
         ) {
+            // Restyle 2026-11-13: a 1dp specular line on the bar's top edge,
+            // where it meets the picture — the same glass edge the top bar
+            // carries on its bottom.
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(Color.White.copy(alpha = 0.08f)),
+            )
             // SC §3: pause is discovery — the cast strip. Tapping an actor
             // searches them. Only while paused: a strip that appears mid-play
             // is a strip that steals the picture. The cast list itself is the
@@ -1767,17 +1787,17 @@ private fun BottomControls(
                 Text(
                     text = state.positionMs.formatTime(),
                     color = Color.White,
-                    fontSize = brandSp(12),
+                    style = MaterialTheme.typography.labelMedium,
                 )
                 if (statusWord != null) {
                     Spacer(Modifier.width(8.dp))
-                    Text(statusWord, color = Color.White.copy(alpha = 0.85f), fontSize = brandSp(12))
+                    Text(statusWord, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
                 }
                 Spacer(Modifier.weight(1f))
                 Text(
                     state.durationMs.takeIf { it > 0 }?.formatTime() ?: "--:--",
                     color = Color.White,
-                    fontSize = brandSp(12),
+                    style = MaterialTheme.typography.labelMedium,
                 )
             }
             Row(
@@ -2106,21 +2126,21 @@ private fun Scrubber(
             Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxWidth()
-                .height(3.dp)
+                .height(4.dp)
                 .background(Color.White.copy(alpha = 0.28f)),
         )
         Box(
             Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(bufFraction)
-                .height(3.dp)
+                .height(4.dp)
                 .background(Color.White.copy(alpha = 0.5f)),
         )
         Box(
             Modifier
                 .align(Alignment.CenterStart)
                 .fillMaxWidth(posFraction)
-                .height(3.dp)
+                .height(4.dp)
                 .background(chrome.played),
         )
         // One short white mark per chapter, straddling the track. Tapping one seeks —
@@ -2140,7 +2160,7 @@ private fun Scrubber(
             Modifier
                 .align(Alignment.CenterStart)
                 .offset(x = maxWidth * posFraction.coerceIn(0f, 0.98f))
-                .size(13.dp)
+                .size(16.dp)
                 .background(chrome.played, shape = CircleShape),
         )
         if (enabled && durationMs > 0) {
