@@ -836,7 +836,7 @@ private fun PrimaryActions(
                 interactionSource = playSource,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp)
+                    .height(56.dp)
                     .pressScale(playSource),
                 // D-29: a disabled Play keeps the same shape and language as the
                 // enabled one — a tonal fill, not a dead grey slab. The reason it
@@ -859,7 +859,7 @@ private fun PrimaryActions(
                 onClick = onPlay,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(56.dp),
             ) {
                 Icon(Icons.Default.OpenInNew, contentDescription = null, modifier = Modifier.size(20.dp))
                 Spacer(Modifier.width(8.dp))
@@ -893,7 +893,7 @@ private fun PrimaryActions(
                 enabled = hasAnyPrint,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(52.dp),
+                    .height(56.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     disabledContainerColor = MaterialTheme.colorScheme.primaryContainer,

@@ -1,5 +1,6 @@
 package com.raddstream.app.ui.components
 
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.contentDescription
@@ -29,6 +31,7 @@ import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.player.carriesPreferredAudio
 import com.raddstream.app.player.preferredAudioFirst
+import com.raddstream.app.ui.theme.RaddMotion
 
 /**
  * The quality switch and the download card, in one row per rung — exactly one option
@@ -109,8 +112,16 @@ private fun RungRow(
     onPlay: () -> Unit,
     onKeep: () -> Unit,
 ) {
+    // Restyle 2026-11-13: the selected rung's container morphs — its corners
+    // open from 12dp to 28dp on the default-spatial spring, so the chosen
+    // quality visibly settles instead of just changing colour.
+    val corner by animateDpAsState(
+        targetValue = if (selected) 28.dp else 12.dp,
+        animationSpec = RaddMotion.defaultSpatial(),
+        label = "rungCorner",
+    )
     Surface(
-        shape = RoundedCornerShape(12.dp),
+        shape = RoundedCornerShape(corner),
         color = if (selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface,
         tonalElevation = if (selected) 2.dp else 0.dp,
         modifier = Modifier.fillMaxWidth(),
