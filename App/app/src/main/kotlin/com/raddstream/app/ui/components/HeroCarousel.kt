@@ -3,7 +3,6 @@ package com.raddstream.app.ui.components
 import android.os.SystemClock
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -61,6 +60,8 @@ import com.raddstream.app.brand.Brand
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.WireText
 import com.raddstream.app.ui.theme.PressHaptics
+import com.raddstream.app.ui.theme.RaddEmphasized
+import com.raddstream.app.ui.theme.RaddMotion
 import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.ui.theme.pressScale
 import kotlinx.coroutines.delay
@@ -174,7 +175,10 @@ fun HeroCarousel(
                 )
             ) continue
             lastChangeMs = SystemClock.uptimeMillis()
-            pagerState.animateScrollToPage(nextHeroPage(pagerState.currentPage, posts.size))
+            pagerState.animateScrollToPage(
+                nextHeroPage(pagerState.currentPage, posts.size),
+                animationSpec = RaddMotion.defaultSpatial(),
+            )
         }
     }
 
@@ -213,7 +217,9 @@ fun HeroCarousel(
                 // a beat later (Samsung RTL v1.1.2, Issue 3).
                 onSelect = { index ->
                     lastChangeMs = SystemClock.uptimeMillis()
-                    scrollScope.launch { pagerState.animateScrollToPage(index) }
+                    scrollScope.launch {
+                        pagerState.animateScrollToPage(index, animationSpec = RaddMotion.defaultSpatial())
+                    }
                 },
                 // Top end, NOT the bottom strip: the dots' 48dp hit boxes used to sit
                 // in the buttons' band (bottom 20dp), declared after the pager so on
@@ -261,7 +267,7 @@ fun HeroSkeleton(modifier: Modifier = Modifier) {
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 ShimmerBox(
-                    Modifier.fillMaxWidth(0.55f).height(26.dp),
+                    Modifier.fillMaxWidth(0.55f).height(36.dp),
                     shape = RoundedCornerShape(8.dp),
                 )
                 ShimmerBox(
@@ -269,7 +275,7 @@ fun HeroSkeleton(modifier: Modifier = Modifier) {
                     shape = RoundedCornerShape(8.dp),
                 )
                 ShimmerBox(
-                    Modifier.width(150.dp).height(52.dp),
+                    Modifier.width(150.dp).height(HERO_BUTTON_HEIGHT_DP.dp),
                     shape = RoundedCornerShape(28.dp),
                 )
             }
@@ -289,7 +295,7 @@ private fun HeroAmbientGlow(currentPage: Int, modifier: Modifier = Modifier) {
         listOf(scheme.primary, scheme.secondary, scheme.tertiary)
     }
     val reduceMotion = rememberReduceMotion()
-    val fade = if (reduceMotion) snap<Color>() else tween<Color>(durationMillis = 900)
+    val fade = if (reduceMotion) snap<Color>() else RaddMotion.slowEffects()
     val leading by animateColorAsState(accents[currentPage % accents.size], fade, label = "heroGlowLeading")
     val trailing by animateColorAsState(accents[(currentPage + 1) % accents.size], fade, label = "heroGlowTrailing")
 
@@ -385,8 +391,7 @@ private fun HeroSlide(
         ) {
             Text(
                 text = title,
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold,
+                style = RaddEmphasized.displaySmall,
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
@@ -597,7 +602,7 @@ internal fun shouldAdvanceHero(
  * same band as the buttons, and its hit boxes (on top in z-order) ate the taps.
  */
 internal const val HERO_INDICATOR_TOP_DP = 16f
-internal const val HERO_BUTTON_HEIGHT_DP = 52f
+internal const val HERO_BUTTON_HEIGHT_DP = 56f
 internal const val HERO_ACTION_BOTTOM_DP = 20f
 private const val DOT_TOUCH_HEIGHT_DP = 48f
 
