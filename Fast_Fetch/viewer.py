@@ -4107,6 +4107,37 @@ def _works_sort_groups(groups, sort_key: str):
     return sorted(groups, key=lambda g: -int(g["work_id"]))
 
 
+def _works_search_candidate_ids(conn, query: str) -> list[int]:
+    """The post ids a works search query names, before grouping.
+
+    THE swap point for search speed (user quality bar, 2026-11-12):
+    every works search funnels through this one function, so the
+    benchmark winner (FTS5, a title index, whatever the
+    search-performance agent recommends) lands here and nowhere else
+    — same contract in, same contract out: a query string in, the
+    post ids it names literally out. Today that is the posts route's
+    own literal match: whole-word title matching for a single
+    stopword / 1–2 letter token (`the` must not match `other`), else
+    the substring LIKE over title/slug/cast. No adult clause here —
+    the grouping scan reads flagged rows deliberately and applies the
+    work-level corroborated rule itself. The fuzzy fallback and the
+    mood fallback live in the caller, not here: this is the literal
+    pass only.
+    """
+    if works.is_whole_word_query(query):
+        clause, clause_params = works.whole_word_title_clause(query)
+        rows = conn.execute(
+            f"SELECT p.id FROM posts p WHERE {clause}",
+            clause_params).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT p.id FROM posts p WHERE"
+            " (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?"
+            " OR p.cast_names LIKE ?)",
+            [f"%{query}%"] * 4).fetchall()
+    return [int(r["id"]) for r in rows]
+
+
 def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -4182,17 +4213,7 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
         mood_params: list = []
         exact_missed = False
         if query and not work_ref:
-            if works.is_whole_word_query(query):
-                clause, clause_params = works.whole_word_title_clause(query)
-                candidate_ids = [int(r["id"]) for r in conn.execute(
-                    f"SELECT p.id FROM posts p WHERE {clause}",
-                    clause_params).fetchall()]
-            else:
-                candidate_ids = [int(r["id"]) for r in conn.execute(
-                    "SELECT p.id FROM posts p WHERE"
-                    " (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?"
-                    " OR p.cast_names LIKE ?)",
-                    [f"%{query}%"] * 4).fetchall()]
+            candidate_ids = _works_search_candidate_ids(conn, query)
             exact_missed = not candidate_ids
             if exact_missed and mood_genres \
                     and not mood_search.strip_mood_words(query):

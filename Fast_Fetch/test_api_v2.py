@@ -1609,7 +1609,23 @@ class V2OpaqueHandleTests(V2WireFixture):
             self.assertIn(again.status, (200, 409))
             if again.status == 200:
                 round_trips += 1
-                self.assertEqual(again.json["stream_id"], handle)
+                # The resolve answer names the same link, not the same
+                # string: a v2 handle embeds its expiry second, so a
+                # bundle handle and a resolve handle minted a second
+                # apart MUST differ — string equality only ever passed
+                # by same-second luck (Backend CI 43144509726 crossed
+                # the boundary: `...dKmQVY` vs `...Z15f0u`). What the
+                # client needs is the same link behind the handle,
+                # which is the round-trip property: the answer parses
+                # to the link id the bundle named. (Session 107
+                # precedent in test_redact.py: a luck-based assertion
+                # is replaced by the structural property it stood in
+                # for, not re-rolled.)
+                self.assertEqual(
+                    redact.parse_token(again.json["stream_id"], self.secret,
+                                       signed_only=True),
+                    link["link_id"],
+                    "the resolve answer names a different link than the bundle did")
             else:
                 self.assert_problem(again, code="no_playable_source", status=409,
                                     instance=f"/api/v2/resolve/{handle}")

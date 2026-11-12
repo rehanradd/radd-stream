@@ -262,7 +262,40 @@ Base moved while this branch was uncommitted: main is now `88019eccc`
   documented load flake (AGENTS.md: local HTTP tests time out under
   load), not a regression from this branch.
 
-## 8. What is NOT in this change
+## 8. Scale + search speed (user quality bars, 2026-11-12)
+
+- **One swap point for search.** Every works search funnels through
+  `viewer._works_search_candidate_ids(conn, query)` — a query string
+  in, the post ids it names literally out. The search-performance
+  benchmark's winner (FTS5, a title index, whatever it recommends)
+  lands THERE and nowhere else: the grouping, the filters, the
+  envelope and the tests never see which technique produced the ids.
+  The posts route keeps its own literal match; the two share the
+  whole-word rule (`works.whole_word_title_clause`) but not the
+  candidate query, so a works-side swap cannot change `/posts`.
+- **100K users, read path.** The grouped works list is cached
+  in-process 120 s per exact filter tuple (`_WORKS_LIST_CACHE`, 32
+  entries) — grouping is a full scan of the filtered post set plus a
+  Python union-find (WINDOW 10, O(G·10)), paid once per cache miss,
+  never per page. Counts are page-only (the posts two-step); the
+  trending/most-copies order pays one grouped count query per cache
+  miss. The 10 s search deadline still applies via the progress
+  handler; a grouping that trips it answers 503 like a slow search.
+  Browse never resolves a link: works list/detail mint no handles
+  and call no resolver — links resolve lazily, on press, through
+  the existing `/api/v1/stream` route (the lazy-first rule; only the
+  pressed link is resolved, never a page of them). No code here
+  trusts `expires_at` — handles carry their own expiry
+  (`redact.mint_token`).
+- **Unproven at scale, stated plainly.** No FTS5 table exists yet
+  (that is the benchmark agent's recommendation to come); the
+  grouping scan's wall time on the live 224k-post catalog is
+  unmeasured from this branch — the gate deploy must probe
+  `/api/v1/works` (unfiltered + `q=salaar`) for latency before
+  calling the route fast. The cache makes the second page cheap;
+  the first page after a merge is the cost to watch.
+
+## 9. What is NOT in this change
 
 - No change to `/api/v1/posts` response shape or ordering, except the
   three additive, documented behaviours in §5 (`did_you_mean` on poor
