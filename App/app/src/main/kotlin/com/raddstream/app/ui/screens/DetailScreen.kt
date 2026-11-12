@@ -320,15 +320,11 @@ fun DetailScreen(
             pending = pending,
             onConfirm = viewModel::confirmKeep,
             onDismiss = viewModel::dismissKeep,
-            // Session 73 (Phase 5): a free viewer asking for a file gets the
-            // external-browser route as well — the browser follows the server's
-            // redirect to ShrinkMe (when enabled) or the file. VIP viewers never
-            // see it; their downloads are already direct.
-            showWebLink = !state.vip,
-            onWebLink = { openWebPage(context, viewModel.webDownloadUrlFor(pending.handle)) },
-            // Session 76 (Build 4): the same free viewer can spend coins on a
-            // direct link instead — the button is there only when the server
-            // published a price, and only enabled when the wallet covers it.
+            // 2026-11-12 rework: the free web-link row is GONE — the
+            // browser route to the shortener is closed, so free downloads
+            // go through the in-app download service only. The coins
+            // direct link stays: a bought credit, a direct file, clearly
+            // labelled with its price.
             showDirectLink = !state.vip && state.downloadCreditPrice > 0,
             directLinkPrice = state.downloadCreditPrice,
             directLinkEnabled = state.coinBalance >= state.downloadCreditPrice,
@@ -354,8 +350,6 @@ private fun KeepConfirmDialog(
     pending: PendingKeep,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
-    showWebLink: Boolean = false,
-    onWebLink: () -> Unit = {},
     showDirectLink: Boolean = false,
     directLinkPrice: Int = 0,
     directLinkEnabled: Boolean = false,
@@ -380,22 +374,6 @@ private fun KeepConfirmDialog(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                if (showWebLink) {
-                    // Audit #9/#10: the free web link is a SEPARATE, clearly
-                    // labelled secondary row — never the Download button's
-                    // action, never a competing primary. It opens in the
-                    // browser and has a captcha; the viewer hears that
-                    // before tapping, not after.
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        "Need a free link instead?",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    TextButton(onClick = onWebLink) {
-                        Text("Open web link — opens in browser, has a captcha")
-                    }
-                }
                 if (showDirectLink) {
                     // Session 76 (Build 4): a direct link for one movie, bought
                     // with coins — the button is disabled while the wallet is

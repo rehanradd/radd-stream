@@ -214,7 +214,7 @@ fun SearchScreen(
                 }
                 PastedText.YouTube -> {
                     Text(
-                        text = "YouTube links can't play in Radd. Paste a direct .mp4 or .m3u8 link instead.",
+                        text = "YouTube links can't play in Radd.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
@@ -235,20 +235,8 @@ fun SearchScreen(
                     Spacer(Modifier.height(8.dp))
                 }
                 PastedText.NotAUrl -> {
-                    // A direct .mp4 or .m3u8 link plays in the app — the
-                    // field only reacts once a URL is typed. One honest
-                    // line, while the field holds a half-typed address, not
-                    // only while it is empty — a hint that vanishes the
-                    // moment typing starts teaches nothing.
-                    if (state.query.isEmpty() || looksLikeUrlPrefix(state.query)) {
-                        Text(
-                            text = "You can also paste a direct video link (.mp4 or .m3u8) here to play it.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                        )
-                        Spacer(Modifier.height(8.dp))
-                    }
+                    // A plain title: no hint here. The search bar searches
+                    // the catalog only — no address behaviour is advertised.
                 }
             }
             // The rail stays up whatever is pasted: a link replaces the
@@ -405,12 +393,6 @@ private fun DirectVideoRow(url: String, title: String, onPlay: () -> Unit) {
             Text("Play")
         }
     }
-}
-
-/** A half-typed address: the paste hint stays up while the field holds one. */
-private fun looksLikeUrlPrefix(query: String): Boolean {
-    val text = query.trim().lowercase()
-    return text.startsWith("http") || text.startsWith("www.") || text.contains("://")
 }
 
 /**

@@ -9,9 +9,9 @@ import java.nio.charset.StandardCharsets
  * play, or a title to search for", as a pure rule with no network, no store,
  * no clock. Only a direct video file over http(s) is playable here: a
  * YouTube address names a page whose file this player cannot open, and any
- * other http(s) address names a page this app never renders — the viewer is
- * offered the system browser for it instead. A title, a fragment, or
- * anything without a scheme is the catalog search's job.
+ * other http(s) address names a page this app never renders and never
+ * opens. A title, a fragment, or anything without a scheme is the catalog
+ * search's job.
  */
 sealed interface PastedText {
     /** A direct video file the player can open at once: .mp4 or .m3u8 over http(s). */
@@ -22,8 +22,8 @@ sealed interface PastedText {
 
     /**
      * An http(s) address that is not a video file: a page. The app never
-     * renders it — the row offers to open it in the system browser, which
-     * is the browser-identity handoff without building a web browser.
+     * renders it and never opens it — the search screen says so plainly
+     * and points back at the catalog.
      */
     data class PageLink(val url: String) : PastedText
 

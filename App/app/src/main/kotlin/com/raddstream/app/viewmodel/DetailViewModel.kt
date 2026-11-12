@@ -34,8 +34,7 @@ import com.raddstream.app.player.PreviewRequest
 import com.raddstream.app.player.QualityLadder
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.player.SubtitleTrackInfo
-import com.raddstream.app.player.webDownloadUrl
-import com.raddstream.app.player.webDownloadUrlWithCredit
+import com.raddstream.app.player.creditDownloadUrl
 import com.raddstream.app.repository.CatalogRepository
 import com.raddstream.app.repository.FavoritesRepository
 import com.raddstream.app.repository.V2PlayResult
@@ -232,9 +231,9 @@ class DetailViewModel @Inject constructor(
     }
 
     /**
-     * Session 73 (Phase 5): keep the server origin for the [Get Free Web Link]
-     * action — the link opens `<origin>/api/v1/download?id=<handle>&via=web`
-     * in the external browser, never inside the app.
+     * Keep the server origin for the coins "Direct Link" action — the
+     * bought-credit URL is built off it. Free downloads never leave the
+     * app: there is no free web-link route any more.
      */
     private fun observeServerBase() {
         viewModelScope.launch {
@@ -243,13 +242,6 @@ class DetailViewModel @Inject constructor(
             }
         }
     }
-
-    /**
-     * Session 73 (Phase 5): the external-browser download URL for a pending keep's
-     * handle. Pure builder in [webDownloadUrl]; the browser, not the app, is
-     * what follows the server's redirect — the app never shortens anything itself.
-     */
-    fun webDownloadUrlFor(handle: String): String = webDownloadUrl(serverBaseUrl, handle)
 
     /**
      * Whether this viewer is owed a page without the house card. Both inputs are pushed, so a
@@ -784,7 +776,7 @@ class DetailViewModel @Inject constructor(
             return null
         }
         _uiState.update { it.copy(coinBalance = credit.balance, directLinkMessage = null) }
-        return webDownloadUrlWithCredit(serverBaseUrl, handle, token)
+        return creditDownloadUrl(serverBaseUrl, handle, token)
     }
 
     /**

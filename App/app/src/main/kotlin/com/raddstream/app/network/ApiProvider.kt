@@ -157,8 +157,7 @@ fun streamRedirectUrl(baseUrl: String, streamId: String): String {
  * a 302 to the file, exactly like `/api/v1/stream`, and the download
  * client follows it with Range resume. (The HLS keep engine still fetches
  * its playlist through the play redirector — a segmented keep, not a file
- * download.) The `via=web` form (ShrinkMe interstitial) is a different
- * route — a separate external-browser flow — and is never built here.
+ * download.)
  */
 fun downloadRedirectUrl(baseUrl: String, streamId: String): String {
     val origin = baseUrl.trim().run { if (endsWith("/")) dropLast(1) else this }
