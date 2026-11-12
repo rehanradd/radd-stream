@@ -128,6 +128,13 @@ fun HeroCarousel(
     // a LaunchedEffect key: restarting the effect would cancel an in-flight
     // animateScrollToPage and strand the pager between pages).
     var watchNowPressed by remember { mutableStateOf(false) }
+    // Self-heal for the press flag: if the pressed slide is ever disposed mid-press
+    // (a two-finger drag paging away under the finger), its release callback never
+    // fires and the flag would stick true, parking auto-advance forever. A page
+    // change means the pressed button is gone, so the flag is stale by definition.
+    // A normal press can never trip this — the loop below holds its tick while the
+    // flag is true, and a dot tap needs the finger to be on a dot, not the button.
+    LaunchedEffect(pagerState.currentPage) { watchNowPressed = false }
 
     LaunchedEffect(posts.size, reduceMotion, autoplay, intervalMs) {
         if (!autoplay || posts.size < 2 || reduceMotion) return@LaunchedEffect
