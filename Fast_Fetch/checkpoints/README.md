@@ -5,6 +5,15 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-12 — Player Fix v2 server [PLAYERFIX-V2-SERVER]: serve-time
+  verification (cached-first; a band serves only a live-verified link or
+  hides), warm-all-bands, 2-hard/3-flaky strike quarantine-then-delete,
+  host circuit breaker + measured priority seeded from link-check CSVs by
+  bridge domain, warmup_count 50 → 200. Two test-caught bugs fixed
+  (`tiers` shadow, second-connection lock wait). Tests:
+  `test_serve_verify.py` (51, new, in CI). NOT live — deploy + §0 probes
+  are the coordinator's call. Full note:
+  `20261112-playerfix-v2-server.md`.
 - 2026-11-12 — app-fix builder [APPFIX-DETAIL-SALAAR]: Appetize FAILED 2 (first detail load fails,
   Retry works) + FAILED 1 (Salaar default version does not play). Root causes measured on the
   Oracle VM: the family work-ref lookup is a 4.8 s full-table scan (`idx_posts_year` added) and
