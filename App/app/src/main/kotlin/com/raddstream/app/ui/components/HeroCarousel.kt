@@ -6,6 +6,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,8 +35,10 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -73,10 +76,16 @@ import kotlinx.coroutines.launch
  *  - a vertical scrim that goes from clear at the top to the page background at the
  *    bottom, so the title and buttons stay readable over any poster;
  *  - the title, a year badge and up to [MAX_LANGUAGE_PILLS] language pills;
+ *  - page dots, which double as the manual affordance — tapping a dot jumps to that slide.
+ *    They sit at the TOP end of the banner, in a contrast pill: bottom-anchored they shared
+ *    the buttons' strip, and their 48dp hit boxes (declared after the pager, so on top in
+ *    z-order) covered the Watch Now button's centre on a 6-dot hero — a centred tap hit a
+ *    dot, which just re-selected the slide, so Watch Now looked dead while the banner tap
+ *    (above the strip) worked. The top band never meets the button strip; see
+ *    [heroIndicatorOverlapsActionRow].
  *  - a prominent Watch Now button, which starts the title (the slide's own tap target
  *    only opens the details — the button is the part that says "play"); beside it, a
  *    My List toggle, so saving a title does not need a trip to its details page;
- *  - page dots, which double as the manual affordance — tapping a dot jumps to that slide.
  *
  * WHAT THE HERO PAINTS (App/AGENTS.md §5): `GET /api/v1/posts` projects a
  * `backdrop_urls` column alongside `poster_url` (`Fast_Fetch/viewer.py` `_art_pair()`),
@@ -90,7 +99,10 @@ import kotlinx.coroutines.launch
  * ([rememberReduceMotion]): with animations off the banner still paginates by hand, it just
  * never moves on its own, and the glow cuts instead of cross-fading. A drag also gets the
  * pager back immediately — the loop waits for `isScrollInProgress` to clear before it takes
- * the page away again.
+ * the page away again. The same guard covers a finger already down on Watch Now: an
+ * advance that STARTS mid-press slides the button out from under it, and the tap
+ * detector cancels a press whose target moved away — so the loop skips its tick while
+ * the button reports pressed (`watchNowPressed`) instead of stealing the tap.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -111,14 +123,23 @@ fun HeroCarousel(
     val reduceMotion = rememberReduceMotion()
     val pagerState = rememberPagerState(pageCount = { posts.size })
     val scrollScope = rememberCoroutineScope()
+    // True while a finger is down on the visible slide's Watch Now button, reported
+    // up by HeroSlide. The advance loop reads it per tick (it is deliberately NOT
+    // a LaunchedEffect key: restarting the effect would cancel an in-flight
+    // animateScrollToPage and strand the pager between pages).
+    var watchNowPressed by remember { mutableStateOf(false) }
 
     LaunchedEffect(posts.size, reduceMotion, autoplay, intervalMs) {
         if (!autoplay || posts.size < 2 || reduceMotion) return@LaunchedEffect
         while (true) {
             delay(intervalMs)
-            if (pagerState.isScrollInProgress) continue
-            val next = (pagerState.currentPage + 1) % posts.size
-            pagerState.animateScrollToPage(next)
+            // A drag in progress, or a press on Watch Now: let the tick go. The
+            // press is the one that matters — an advance starting under a finger
+            // moves the button away before tap-up, and the tap is then cancelled
+            // instead of navigating. Waiting one more interval costs nothing;
+            // stealing the tap costs the whole action.
+            if (pagerState.isScrollInProgress || watchNowPressed) continue
+            pagerState.animateScrollToPage(nextHeroPage(pagerState.currentPage, posts.size))
         }
     }
 
@@ -138,6 +159,7 @@ fun HeroCarousel(
                 backdropUrl = backdropFor(post),
                 onClick = { onPostClick(post) },
                 onWatchNow = { onWatchNow(post) },
+                onWatchNowPressChange = { watchNowPressed = it },
                 isFavorite = isFavorite(post),
                 onToggleFavorite = { onToggleFavorite(post) },
                 modifier = Modifier.clip(RoundedCornerShape(HERO_CORNER)),
@@ -151,9 +173,15 @@ fun HeroCarousel(
                 // Scrolling is a suspending pager call, so the dot's click launches it on the
                 // composition's scope instead of pretending the tap can wait for it inline.
                 onSelect = { index -> scrollScope.launch { pagerState.animateScrollToPage(index) } },
+                // Top end, NOT the bottom strip: the dots' 48dp hit boxes used to sit
+                // in the buttons' band (bottom 20dp), declared after the pager so on
+                // top in z-order, and on a 6-dot hero they covered the Watch Now
+                // button's centre — a centred tap hit a dot, not the button. Up here
+                // no dot can cover any control; the pill keeps them readable over
+                // bright artwork, where the top scrim is clear.
                 modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = 20.dp),
+                    .align(Alignment.TopEnd)
+                    .padding(top = HERO_INDICATOR_TOP_DP.dp, end = 16.dp),
             )
         }
     }
@@ -236,6 +264,10 @@ private fun HeroSlide(
     backdropUrl: String?,
     onClick: () -> Unit,
     onWatchNow: () -> Unit = onClick,
+    /** Reports the Watch Now button's press state up, so the auto-advance loop can
+     *  hold its tick while a finger is down on it instead of sliding the button
+     *  away mid-tap. Default no-op: the slide is still fully usable without it. */
+    onWatchNowPressChange: (Boolean) -> Unit = {},
     isFavorite: Boolean = false,
     onToggleFavorite: () -> Unit = {},
     modifier: Modifier = Modifier,
@@ -293,7 +325,7 @@ private fun HeroSlide(
                 .align(Alignment.BottomStart)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = 20.dp),
+                .padding(bottom = HERO_ACTION_BOTTOM_DP.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
@@ -321,6 +353,12 @@ private fun HeroSlide(
                 // UI-fix P1-X1: press scale + haptic on the hero's primary action.
                 val watchNowSource = remember { MutableInteractionSource() }
                 PressHaptics(watchNowSource)
+                // The same press state the haptic reads, reported up: the carousel
+                // holds its auto-advance tick while this is true. Collected here,
+                // not in the carousel, because the source belongs to this slide's
+                // button — the carousel only ever sees the visible slide's press.
+                val watchNowPressed by watchNowSource.collectIsPressedAsState()
+                LaunchedEffect(watchNowPressed) { onWatchNowPressChange(watchNowPressed) }
                 Button(
                     onClick = onWatchNow,
                     shape = RoundedCornerShape(24.dp),
@@ -329,7 +367,7 @@ private fun HeroSlide(
                         contentColor = MaterialTheme.colorScheme.onPrimary,
                     ),
                     interactionSource = watchNowSource,
-                    modifier = Modifier.height(52.dp).pressScale(watchNowSource),
+                    modifier = Modifier.height(HERO_BUTTON_HEIGHT_DP.dp).pressScale(watchNowSource),
                 ) {
                     Icon(
                         imageVector = Icons.Default.PlayArrow,
@@ -353,7 +391,7 @@ private fun HeroSlide(
                     // as the nav tab — so it announces what the tap does instead:
                     // "Save to My List", or "Saved to My List" once saved.
                     modifier = Modifier
-                        .height(52.dp)
+                        .height(HERO_BUTTON_HEIGHT_DP.dp)
                         .semantics { contentDescription = if (isFavorite) "Saved to My List" else "Save to My List" },
                 ) {
                     Icon(
@@ -403,8 +441,12 @@ private fun HeroBadge(text: String, subdued: Boolean = false) {
  * The painted dot is 7dp tall and used to be the only thing a finger could aim at. Each one now
  * sits inside the [DOT_TOUCH_WIDTH] by [DOT_TOUCH_HEIGHT] box — 48dp square, the WCAG 2.2 AA
  * minimum in both directions (the 24dp width it used to have failed Robo's 48dp touch-target
- * floor). Six 48dp dots crowd the Watch Now button, so the inter-dot spacing is 2dp instead of
- * 6dp; a dot whose hit box covers another control does not help anyone. Each dot also says what
+ * floor). The row rides at the TOP end of the hero, in a contrast pill: at the bottom end
+ * its hit boxes shared the buttons' strip and, on a 6-dot hero, covered the Watch Now
+ * button's centre — a centred tap selected a dot instead of starting the title. Up here
+ * the row can be as wide as the dot count needs without covering any control, and the
+ * pill (the same 0.55f surface as the badges and the My List button) keeps the dots
+ * readable over bright artwork, where the top scrim is clear. Each dot also says what
  * it is in words and carries a `selected` state, because the visual stretch was the only thing
  * that used to show which slide is up.
  */
@@ -417,7 +459,10 @@ private fun HeroIndicator(
 ) {
     val scheme = MaterialTheme.colorScheme
     Row(
-        modifier = modifier,
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .background(scheme.surface.copy(alpha = 0.55f))
+            .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -457,6 +502,36 @@ internal fun heroLanguagePills(raw: String?, max: Int = MAX_LANGUAGE_PILLS): Lis
         .distinct()
         .take(max)
 
+/**
+ * The auto-advance step, pure so the wrap-around is testable: the next page, or page 0
+ * again after the last one. A degenerate count advances nowhere.
+ */
+internal fun nextHeroPage(currentPage: Int, pageCount: Int): Int =
+    if (pageCount <= 0) 0 else (currentPage + 1) % pageCount
+
+/**
+ * The vertical bands the hero's top and bottom controls live in, in dp from the hero's
+ * top edge — the single source of truth for both the layout above and the regression
+ * test (HeroCarouselTest). The indicator is top-anchored at [HERO_INDICATOR_TOP_DP]
+ * with height [DOT_TOUCH_HEIGHT_DP]; the action row (Watch Now + My List) is
+ * bottom-anchored, [HERO_ACTION_BOTTOM_DP] up from the bottom edge, [HERO_BUTTON_HEIGHT_DP]
+ * tall. [heroIndicatorOverlapsActionRow] is false exactly when the two bands do not
+ * meet — which is what broke Watch Now: the old bottom-anchored indicator sat in the
+ * same band as the buttons, and its hit boxes (on top in z-order) ate the taps.
+ */
+internal const val HERO_INDICATOR_TOP_DP = 16f
+internal const val HERO_BUTTON_HEIGHT_DP = 52f
+internal const val HERO_ACTION_BOTTOM_DP = 20f
+private const val DOT_TOUCH_HEIGHT_DP = 48f
+
+/** True when an indicator whose top edge sits [indicatorTopDp] below the hero's top edge
+ *  would overlap the Watch Now / My List button strip of a hero [heroHeightDp] tall. */
+internal fun heroIndicatorOverlapsActionRow(heroHeightDp: Float, indicatorTopDp: Float): Boolean {
+    val indicatorBottom = indicatorTopDp + DOT_TOUCH_HEIGHT_DP
+    val actionsTop = heroHeightDp - HERO_ACTION_BOTTOM_DP - HERO_BUTTON_HEIGHT_DP
+    return indicatorBottom > actionsTop
+}
+
 private const val MAX_LANGUAGE_PILLS = 3
 private const val MAX_PILL_LENGTH = 18
 private const val AUTO_ADVANCE_MS = 5_000L
@@ -465,7 +540,7 @@ private const val AUTO_ADVANCE_MS = 5_000L
  * The page dot's hit box: 48dp square, the WCAG 2.2 AA minimum in both directions.
  * The painted dot inside it stays 7dp.
  */
-private val DOT_TOUCH_HEIGHT: Dp = 48.dp
+private val DOT_TOUCH_HEIGHT: Dp = DOT_TOUCH_HEIGHT_DP.dp
 private val DOT_TOUCH_WIDTH: Dp = 48.dp
 
 /**
