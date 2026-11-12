@@ -357,6 +357,51 @@ class CoverageTests(ProjectionTestCase):
         rel = self.releases(work["id"])[0]
         self.assertEqual(rel["season_number"], 2)
 
+    def test_mixed_spelling_seasons_land_in_one_cat_season(self):
+        """Releases filed as season '1' and 'S01' are one season in the
+        projection, not two — the ingest spelling no longer splits it."""
+        work = self.series_releases([
+            {"release_title": "Campus Beats S01E01", "season": "1", "episode": "1",
+             "quality": "720p"},
+            {"release_title": "Campus Beats S01E02", "season": "S01", "episode": "E02",
+             "quality": "720p"},
+        ])
+        seasons = self.conn.execute(
+            "SELECT number FROM cat_seasons WHERE work_id = ? ORDER BY number",
+            (work["id"],)).fetchall()
+        self.assertEqual([s["number"] for s in seasons], [1])
+        eps = self.conn.execute(
+            "SELECT COUNT(*) FROM cat_episodes WHERE work_id = ?",
+            (work["id"],)).fetchone()[0]
+        self.assertEqual(eps, 2)
+
+    def test_ongoing_season_rescrape_projects_to_one_work(self):
+        """Two ledger rows of one ongoing season whose clean titles differ only
+        by the episode count (S01E08 vs S01E09) are one work in the projection:
+        the volatile count is stripped from the work key, not just the ledger key."""
+        self.add_post("site-a", "https://a.test/one-piece-s01e08/",
+                      clean_title="One Piece S01E08", year=2023,
+                      content_type="ongoing_season",
+                      releases=[{"release_title": "One Piece S01E08 720p",
+                                 "season": "1", "episode": "8"}])
+        first_id = self.conn.execute(
+            "SELECT id FROM posts WHERE url = 'https://a.test/one-piece-s01e08/'"
+        ).fetchone()[0]
+        # A second ledger row for the re-scrape, filed the way a pre-fix ingest
+        # would have filed it (its own key, its own episode count).
+        self.conn.execute(
+            "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+            " source_site, is_18_plus, canonical_key)"
+            " SELECT 'https://a.test/one-piece-s01e09/', 'one-piece-s01e09',"
+            " 'One Piece S01E09 (2023)', 'One Piece S01E09', year, content_type,"
+            " source_site, is_18_plus, 'one-piece-s01e09_2023' FROM posts WHERE id = ?",
+            (first_id,))
+        self.conn.commit()
+        self.project()
+        self.assertEqual(
+            self.conn.execute("SELECT COUNT(*) FROM cat_works").fetchone()[0], 1,
+            "the S01E08 and S01E09 pages are one work, not two")
+
     def test_multi_season_series_keeps_seasons_apart(self):
         work = self.series_releases([
             {"release_title": "Campus Beats S01E01", "season": "1", "episode": "1"},

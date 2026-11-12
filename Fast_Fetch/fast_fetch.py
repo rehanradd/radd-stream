@@ -768,18 +768,115 @@ def classify_media(source_site: str, title: str, slug: str, html: str = "") -> d
     }
 
 
+#: Episode-count suffixes a re-scrape rewrites every time an ongoing season
+#: gains an episode ("[S01E08 Added]" -> "[S01E09 Added]", "S01E08" ->
+#: "S01E09"). They name the *page*, not the work: stripping them before keying
+#: is what makes a re-scrape attach to the existing post instead of creating a
+#: duplicate. Bracketed segments are already stripped by
+#: :func:`generate_canonical_key`; these patterns catch the unbracketed forms.
+#: Deliberately NOT here: `Part N` / `Chapter N` (Salaar Part 1 vs Part 2 are
+#: different films), a bare year, or a bare `Episode` with no digits.
+#: `catalog_v2.normalize_title` mirrors this strip so the projection groups the
+#: same rows into one work; keep the two in sync.
+_VOLATILE_EPISODE_RES = (
+    # S01E08, S1E8, S01 E08 — season+episode in one token.
+    re.compile(r"\bs\d{1,2}\s*e\d{1,4}\b", re.IGNORECASE),
+    # S07EP — the "(01-06)" half is already gone with the brackets.
+    re.compile(r"\bs\d{1,2}\s*eps?\b", re.IGNORECASE),
+    # EP(01-06), Episode 8, E08, Ep 12, Episode 01-06.
+    re.compile(r"\bep(?:isode)?s?\s*\(?\d{1,3}\s*(?:[-–]\s*\d{1,3})?\)?",
+               re.IGNORECASE),
+    # Season 1 Episode 8 (bare "Season 2" is stripped by the token list below).
+    re.compile(r"\bseason\s*\d{1,3}\s*(?:episode|ep)\s*\d{1,4}\b", re.IGNORECASE),
+    # The scraper's volatile word: "… S01E08 Added" -> "… S01E08" -> gone.
+    re.compile(r"\badded\b", re.IGNORECASE),
+)
+
+
+def strip_volatile_episode_suffix(title: str) -> str:
+    """The title with its re-scrape episode-count suffix removed.
+
+    Only the key builder uses this: the stored `clean_title` keeps what the page
+    said, so a display title never loses its episode marker — the *identity*
+    does.
+    """
+    text = str(title or "")
+    for pattern in _VOLATILE_EPISODE_RES:
+        text = pattern.sub(" ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+#: One number, optionally prefixed, is a season/episode; anything else (a range,
+#: a pack label, a word) is presentation data, not a number — it passes through
+#: untouched, because collapsing "01-06" to "E01" would invent an episode.
+#: The one exception is the pack word itself (below): it names the *release*,
+#: not an episode, so it becomes NULL rather than a bogus episode value.
+_SINGLE_SEASON_RE = re.compile(r"^\s*(?:s(?:eason)?\s*)?(\d{1,3})\s*$", re.IGNORECASE)
+_SINGLE_EPISODE_RE = re.compile(r"^\s*(?:e(?:p(?:isode)?)?\s*)?(\d{1,3})\s*$", re.IGNORECASE)
+
+#: Pack/batch labels are not numbers: a release filed as episode `Batch` is a
+#: whole-pack print, not episode "Batch". Measured on the live catalog
+#: 2026-11-12 (baseline): `Batch` is the ONLY non-numeric episode value
+#: (10,525 releases); seasons carry no such value. Mapping it to NULL is the
+#: honest "no single episode" — the pack-ness still shows in the release
+#: title / `is_pack`, and no other unparseable value is NULLed out.
+_PACK_LABELS = frozenset({"batch"})
+
+
+def _normalize_numbered(value, pattern, prefix: str):
+    """`"1"` / `"S01"` / `"Season 2"` -> `"S01"` / `"S02"` (or the `E` form).
+
+    Blank means unknown (None); the literal pack label `Batch` also means
+    unknown (NULL — it names the pack, not an episode); a value the pattern
+    does not match — a range, a word, a list — is returned as-is, never
+    silently rewritten.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        return f"{prefix}{int(value):02d}"
+    text = str(value).strip()
+    if not text:
+        return None
+    if text.casefold() in _PACK_LABELS:
+        return None
+    match = pattern.match(text)
+    if not match:
+        return text
+    return f"{prefix}{int(match.group(1)):02d}"
+
+
+def normalize_season(value):
+    """One canonical spelling for a season at ingest: `1`, `S01`, `Season 2`
+    all become `S01`, `S02`. The pack label `Batch` becomes NULL; ranges and
+    other labels pass through unchanged."""
+    return _normalize_numbered(value, _SINGLE_SEASON_RE, "S")
+
+
+def normalize_episode(value):
+    """One canonical spelling for an episode at ingest: `1`, `E01`, `Episode 3`
+    all become `E01`, `E03`. The pack label `Batch` becomes NULL (10,525 live
+    rows carry it as a bogus episode value); ranges and other labels pass
+    through unchanged."""
+    return _normalize_numbered(value, _SINGLE_EPISODE_RE, "E")
+
+
 def generate_canonical_key(title: str, year: int | None = None) -> str:
     """
     Produces a normalized canonical key for cross-site media deduplication.
     e.g. 'Dune: Part Two (2024)' -> 'dune-part-two_2024'
     'The Royal Cat aka Jin Ling Yu Mao (2024)' -> 'the-royal-cat_2024'
     'The Silent Planet 2024' -> 'the-silent-planet_2024'
+    'One Piece S01E08 (2023)' -> 'one-piece_2023' (same as the S01E09 re-scrape)
     """
     if not title:
         return "unknown"
     t = title.lower()
     t = re.sub(r"\baka\b.*$", "", t)
     t = re.sub(r"\[.*?\]|\(.*?\)", "", t)
+    t = strip_volatile_episode_suffix(t)
     t = re.sub(
         r"\b(480p|720p|1080p|2160p|4k|bluray|web-dl|hdrip|esubs|dual audio|multi audio|hindi|org|full movie|season\s*\d+|s\d+|complete|download|watch|series)\b",
         "",
@@ -5167,6 +5264,79 @@ def _post_type_matches(post, content_type: str) -> bool:
     return not existing_type or existing_type == incoming_type
 
 
+def _fuzzy_key_base(canonical_key) -> str:
+    """The title half of a key with every spelling difference flattened.
+
+    The trailing year claim is dropped, separators are unified (`-`, `_`, `.`
+    all become one), and the volatile episode suffix is stripped the same way
+    :func:`generate_canonical_key` strips it — so the legacy slug key
+    `puli-2015`, the derived key `puli_2015`, and a pre-fix key
+    `one-piece-s01e08_2023` all reduce to the same base. Used only by the
+    fuzzy fallback in :func:`_find_existing_post`; it never rewrites a stored key.
+    """
+    key = str(canonical_key or "").strip().lower()
+    # Unify separators first, so `puli-2015`, `puli.2015` and `puli_2015` all
+    # read the same; then drop the trailing year claim (the last token, when
+    # it is a year) and the volatile episode suffix. `_KEY_YEAR_TAIL` alone
+    # cannot do this: it only matches the underscore form, so a hyphen slug
+    # key would keep its year and never equal the derived base.
+    slug = re.sub(r"[^a-z0-9]+", " ", key)
+    tokens = slug.split()
+    if tokens and _YEAR_TOKEN.match(tokens[-1]):
+        tokens = tokens[:-1]
+    slug = strip_volatile_episode_suffix(" ".join(tokens))
+    return "-".join(slug.split())
+
+
+def _find_fuzzy_title_year_match(conn: sqlite3.Connection, *, clean_title, year,
+                                 content_type, tmdb_id, imdb_id,
+                                 is_18_plus=None):
+    """Attach to the one existing row that is the same work under a different
+    key spelling — or refuse loudly when the match is ambiguous.
+
+    Fires only after URL, external-ID and exact-key matching all missed. The
+    bar is deliberately narrow: same year (both sides must carry one), same
+    media family, no conflicting external IDs, and the normalized key bases
+    must be *equal* — a subtitle variant (`salaar` vs `salaar-part-1-ceasefire`)
+    does not match, and neither does a different-year remake. Exactly one
+    candidate attaches; more than one raises, so the merge path records it in
+    `merge_conflicts` instead of merging two different movies. Zero candidates
+    means a genuinely new post, as before.
+
+    The adult flag is part of the match, not an afterthought: a flagged row
+    attaching to an unflagged twin would hide that twin through `MAX` +
+    `inherit_key_adult` without the evidence the merge fold demands
+    (`reconcile_adult_on_merge` only folds a flag `is_adult_title()` can
+    reproduce — the 407-work boundary). So a candidate whose flag disagrees
+    with the incoming row is not a candidate here at all: the twin stays for
+    the fold to decide, exactly as it did before this fallback existed.
+    """
+    if year in (None, ""):
+        return None
+    try:
+        year_int = int(str(year).strip()[:4])
+    except (TypeError, ValueError):
+        return None
+    derived = _fuzzy_key_base(generate_canonical_key(clean_title))
+    if not derived or derived == "unknown":
+        return None
+    candidates = [
+        row for row in conn.execute(
+            "SELECT * FROM posts WHERE year = ? ORDER BY id", (year_int,)).fetchall()
+        if _post_type_matches(row, content_type)
+        and not _identity_values_conflict(row, tmdb_id, imdb_id)
+        and _fuzzy_key_base(row["canonical_key"]) == derived
+        and (is_18_plus is None
+             or int(row["is_18_plus"] or 0) == int(is_18_plus or 0))
+    ]
+    if len(candidates) > 1:
+        raise ValueError(
+            f"Fuzzy title+year match is ambiguous: {clean_title!r} ({year_int}) matches "
+            f"{len(candidates)} existing records; refusing an arbitrary merge"
+        )
+    return candidates[0] if candidates else None
+
+
 def _find_existing_post(
     conn: sqlite3.Connection,
     *,
@@ -5177,6 +5347,8 @@ def _find_existing_post(
     year,
     tmdb_id,
     imdb_id,
+    clean_title: str = "",
+    is_18_plus=None,
 ):
     """Resolve an existing media row without silently merging ambiguous identities."""
     page_row = conn.execute(
@@ -5257,7 +5429,21 @@ def _find_existing_post(
         raise ValueError(
             f"Canonical key {canonical_key!r} matches multiple records; refusing an arbitrary merge"
         )
-    return candidates[0] if candidates else None
+    if candidates:
+        return candidates[0]
+
+    # Last resort: the same work filed under a differently-spelled key (a
+    # legacy slug key, a pre-fix episode-suffixed key). Narrow by construction —
+    # see _find_fuzzy_title_year_match — and loud when it cannot decide.
+    return _find_fuzzy_title_year_match(
+        conn,
+        clean_title=clean_title,
+        year=year,
+        content_type=content_type,
+        tmdb_id=tmdb_id,
+        imdb_id=imdb_id,
+        is_18_plus=is_18_plus,
+    )
 
 
 def _validate_scraped_data(data: dict):
@@ -5402,6 +5588,17 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
     """
     url, clean_title, title, source_site, content_type, valid_releases = _validate_scraped_data(data)
 
+    # One spelling for season/episode from here on: '1' and 'S01' become 'S01',
+    # '1' and 'E01' become 'E01', the pack label 'Batch' becomes NULL. Every
+    # scraper and every merge funnels through this function, so this is the one
+    # place the rule has to live; ranges and other labels pass through intact.
+    valid_releases = [
+        {**rel,
+         "season": normalize_season(rel.get("season")),
+         "episode": normalize_episode(rel.get("episode"))}
+        for rel in valid_releases
+    ]
+
     year = data.get("year")
     tmdb_id = data.get("tmdb_id")
     imdb_id = data.get("imdb_id")
@@ -5430,6 +5627,8 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
             year=year,
             tmdb_id=tmdb_id,
             imdb_id=imdb_id,
+            clean_title=clean_title,
+            is_18_plus=data.get("is_18_plus", 0),
         )
 
         if existing:

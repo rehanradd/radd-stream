@@ -447,5 +447,169 @@ class MergeTimeAdultReconciliationTests(unittest.TestCase):
             self.assertEqual(journal, [])
 
 
+class IngestDedupMergeTests(unittest.TestCase):
+    """A re-scrape must attach at merge time, even when the staging rows still
+    carry the per-episode keys a pre-fix scraper wrote."""
+
+    def _make_ongoing_staging_db(self, path: Path):
+        conn = sqlite3.connect(path)
+        conn.executescript(
+            """
+            CREATE TABLE posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                canonical_key TEXT, title TEXT, original_title TEXT, year INTEGER,
+                media_type TEXT, imdb_id TEXT, tmdb_id TEXT, poster_url TEXT,
+                backdrop_url TEXT, rating REAL, genres TEXT, synopsis TEXT,
+                languages TEXT, is_18_plus INTEGER DEFAULT 0, site TEXT, post_url TEXT
+            );
+            CREATE TABLE releases (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER, label TEXT, quality TEXT, resolution TEXT,
+                size_bytes INTEGER, season_number INTEGER, episode_number INTEGER,
+                codec TEXT, bridge_url TEXT, audio_languages TEXT
+            );
+            CREATE TABLE sources (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                release_id INTEGER, source_name TEXT, service TEXT, resource_id TEXT,
+                source_url TEXT, final_url TEXT, is_temporary INTEGER, quality TEXT
+            );
+            """
+        )
+        # Two pages of one ongoing season. The staging keys are what a pre-fix
+        # scraper filed (one per episode count); the clean titles are what the
+        # merge re-derives the identity from, so both must land on one post.
+        for key, title, url, episode in (
+            ("one-piece-s01e08_2023", "One Piece S01E08",
+             "https://7starhd.example/one-piece-s01e08/", 8),
+            ("one-piece-s01e09_2023", "One Piece S01E09",
+             "https://7starhd.example/one-piece-s01e09/", 9),
+        ):
+            cur = conn.execute(
+                "INSERT INTO posts (canonical_key, title, year, media_type, site,"
+                " post_url) VALUES (?, ?, 2023, 'ongoing_season', '7starhd', ?)",
+                (key, title, url))
+            pid = cur.lastrowid
+            conn.execute(
+                "INSERT INTO releases (post_id, label, quality, size_bytes,"
+                " season_number, episode_number, codec, bridge_url)"
+                " VALUES (?, ?, '720p', 1073741824, 1, ?, 'x264',"
+                " 'https://vcloud.example/1')", (pid, title, episode))
+        conn.commit()
+        conn.close()
+
+    def test_ongoing_season_rescrape_merges_to_one_post(self):
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "7starhd.db"
+            tgt_db = Path(td) / "unified.db"
+            self._make_ongoing_staging_db(src_db)
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_conflicted"], 0)
+            self.assertEqual(stats["posts_merged"], 2)
+
+            with sqlite3.connect(tgt_db) as db:
+                db.row_factory = sqlite3.Row
+                posts = db.execute("SELECT id, canonical_key FROM posts").fetchall()
+                self.assertEqual(len(posts), 1)
+                self.assertEqual(posts[0]["canonical_key"], "one-piece_2023")
+                rels = db.execute(
+                    "SELECT season, episode FROM releases ORDER BY episode"
+                ).fetchall()
+                self.assertEqual(
+                    [(r["season"], r["episode"]) for r in rels],
+                    [("S01", "E08"), ("S01", "E09")],
+                    "bare staging numbers arrive in the one S##/E## spelling",
+                )
+
+    def test_ambiguous_fuzzy_match_is_recorded_and_merge_continues(self):
+        """Two legacy slug rows normalize to one title+year: the incoming row
+        must be journalled in merge_conflicts, not guessed onto either — and
+        the clean post beside it still merges."""
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "filmyzilla.db"
+            tgt_db = Path(td) / "unified.db"
+            # Target already holds both legacy spellings of the same work.
+            fast_fetch.DB_PATH = tgt_db
+            fast_fetch.init_db()
+            with sqlite3.connect(tgt_db) as conn:
+                for url, key in (
+                    ("https://9xmovies.example/puli-2015/", "puli-2015"),
+                    ("https://9xmovies.example/puli.2015/", "puli.2015"),
+                ):
+                    conn.execute(
+                        "INSERT INTO posts (url, slug, title, clean_title, year,"
+                        " content_type, source_site, is_18_plus, canonical_key)"
+                        " VALUES (?, ?, 'Puli (2015)', 'Puli', 2015, 'movie',"
+                        " '9xmovies', 0, ?)", (url, url.rstrip("/").split("/")[-1], key))
+            # Source carries the ambiguous work plus one clean film.
+            fast_fetch.DB_PATH = src_db
+            fast_fetch.init_db()
+            with sqlite3.connect(src_db) as conn:
+                for url, title, clean, year, key in (
+                    ("https://filmyzilla.example/puli-2015/", "Puli (2015)",
+                     "Puli", 2015, "puli_2015"),
+                    ("https://filmyzilla.example/other-2021/", "Other (2021)",
+                     "Other", 2021, "other_2021"),
+                ):
+                    conn.execute(
+                        "INSERT INTO posts (url, slug, title, clean_title, year,"
+                        " content_type, source_site, is_18_plus, canonical_key)"
+                        " VALUES (?, ?, ?, ?, ?, 'movie', 'filmyzilla', 0, ?)",
+                        (url, url.rstrip("/").split("/")[-1], title, clean, year, key))
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_conflicted"], 1)
+            self.assertEqual(stats["posts_merged"], 1)
+
+            with sqlite3.connect(tgt_db) as db:
+                db.row_factory = sqlite3.Row
+                conflict = db.execute(
+                    "SELECT url, error FROM merge_conflicts").fetchone()
+                self.assertIsNotNone(conflict)
+                self.assertIn("puli-2015", conflict["url"])
+                self.assertIn("ambiguous", conflict["error"])
+                titles = {r[0] for r in db.execute("SELECT clean_title FROM posts")}
+                self.assertIn("Other", titles)
+                self.assertEqual(
+                    len([t for t in titles if t == "Puli"]), 1,
+                    "no third Puli twin was created by the refused merge")
+
+    def test_batch_episode_arrives_as_null_at_merge(self):
+        """A unified source whose release carries episode 'Batch' merges with a
+        NULL episode, not a bogus 'episode Batch'."""
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "source.db"
+            tgt_db = Path(td) / "unified.db"
+            fast_fetch.DB_PATH = src_db
+            fast_fetch.init_db()
+            fast_fetch.save_scraped_data(
+                {
+                    "url": "https://site.example/batch-show/",
+                    "slug": "batch-show",
+                    "title": "Batch Show (2024)",
+                    "clean_title": "Batch Show",
+                    "year": 2024,
+                    "content_type": "series",
+                    "source_site": "site",
+                    "releases": [{
+                        "release_title": "Batch Show S01 Batch",
+                        "quality": "720p",
+                        "season": "1",
+                        "episode": "Batch",
+                        "sources": [],
+                    }],
+                },
+                enrich_metadata=False,
+                ensure_db=False,
+            )
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_merged"], 1)
+            with sqlite3.connect(tgt_db) as db:
+                db.row_factory = sqlite3.Row
+                rel = db.execute("SELECT season, episode FROM releases").fetchone()
+                self.assertEqual((rel["season"], rel["episode"]), ("S01", None))
+
+
 if __name__ == "__main__":
     unittest.main()

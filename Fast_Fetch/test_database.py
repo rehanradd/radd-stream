@@ -434,6 +434,142 @@ class DatabaseSaveTests(unittest.TestCase):
             fast_fetch.save_scraped_data(incoming)
         self.assertEqual(self.rows("SELECT COUNT(*) FROM posts")[0][0], 2)
 
+    def test_fuzzy_match_refuses_when_adult_flags_disagree(self):
+        """A flagged page must not attach to an unflagged twin through the fuzzy
+        path: that would hide the twin via MAX + inherit_key_adult without the
+        evidence the merge fold demands. The twin stays for the fold to decide."""
+        self._insert_legacy_row(
+            "https://site-a.example/puli-2015/", "Puli", 2015, "puli-2015")
+        incoming = self.media(
+            "site_b", "https://site-b.example/puli-2015/",
+            title="Puli (2015) 18+ Hindi Dubbed", clean_title="Puli", year=2015,
+        )
+        incoming["is_18_plus"] = 1
+        fast_fetch.save_scraped_data(incoming)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM posts")[0][0], 2)
+        self.assertEqual(
+            [(r[0], r[1]) for r in self.rows(
+                "SELECT clean_title, is_18_plus FROM posts ORDER BY id")],
+            [("Puli", 0), ("Puli", 1)],
+        )
+
+    def test_ongoing_season_rescrape_with_new_episode_count_attaches(self):
+        """A re-scrape that writes S01E09 where the last scrape wrote S01E08 is
+        the same season, not a new post — the volatile episode count is stripped
+        before the key is computed."""
+        first = self.media(
+            "site_a", "https://site-a.example/one-piece-s01e08/",
+            title="One Piece S01E08 Hindi", clean_title="One Piece S01E08",
+            year=2023, content_type="ongoing_season",
+        )
+        second = self.media(
+            "site_a", "https://site-a.example/one-piece-s01e09/",
+            title="One Piece S01E09 Hindi", clean_title="One Piece S01E09",
+            year=2023, content_type="ongoing_season",
+        )
+        bracketed = self.media(
+            "site_a", "https://site-a.example/one-piece-s01e10/",
+            title="One Piece [S01E10 Added]", clean_title="One Piece [S01E10 Added]",
+            year=2023, content_type="ongoing_season",
+        )
+        first_id = fast_fetch.save_scraped_data(first)
+        self.assertEqual(fast_fetch.save_scraped_data(second), first_id)
+        self.assertEqual(fast_fetch.save_scraped_data(bracketed), first_id)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM posts")[0][0], 1)
+        self.assertEqual(
+            self.rows("SELECT canonical_key FROM posts WHERE id = ?", (first_id,))[0][0],
+            "one-piece_2023",
+        )
+
+    def _insert_legacy_row(self, url, clean_title, year, canonical_key, site="site_a"):
+        with fast_fetch.get_db() as conn:
+            cur = conn.execute(
+                "INSERT INTO posts (url, slug, title, clean_title, year, content_type,"
+                " source_site, is_18_plus, canonical_key)"
+                " VALUES (?, ?, ?, ?, ?, 'movie', ?, 0, ?)",
+                (url, url.rstrip("/").split("/")[-1], f"{clean_title} ({year})",
+                 clean_title, year, site, canonical_key),
+            )
+            return cur.lastrowid
+
+    def test_fuzzy_match_attaches_to_legacy_slug_keyed_row(self):
+        """The catalog still carries slug-keyed rows (`puli-2015`); a new scrape
+        filed under the derived key (`puli_2015`) must attach to it, not twin it."""
+        legacy_id = self._insert_legacy_row(
+            "https://site-a.example/puli-2015/", "Puli", 2015, "puli-2015")
+        incoming = self.media(
+            "site_b", "https://site-b.example/puli-2015/",
+            title="Puli (2015)", clean_title="Puli", year=2015,
+        )
+        self.assertEqual(fast_fetch.save_scraped_data(incoming), legacy_id)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM posts")[0][0], 1)
+
+    def test_ambiguous_fuzzy_match_raises_and_creates_nothing(self):
+        """Two legacy rows normalize to the same title+year: attaching to either
+        would be a guess, so the ingest refuses and leaves both rows alone."""
+        self._insert_legacy_row(
+            "https://site-a.example/puli-2015/", "Puli", 2015, "puli-2015")
+        self._insert_legacy_row(
+            "https://site-b.example/puli.2015/", "Puli", 2015, "puli.2015",
+            site="site_b")
+        incoming = self.media(
+            "site_c", "https://site-c.example/puli-2015/",
+            title="Puli (2015)", clean_title="Puli", year=2015,
+        )
+        with self.assertRaisesRegex(ValueError, "Fuzzy title\\+year match is ambiguous"):
+            fast_fetch.save_scraped_data(incoming)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM posts")[0][0], 2)
+
+    def test_fuzzy_match_does_not_merge_different_year(self):
+        self._insert_legacy_row(
+            "https://site-a.example/puli-2015/", "Puli", 2015, "puli-2015")
+        incoming = self.media(
+            "site_b", "https://site-b.example/puli-2016/",
+            title="Puli (2016)", clean_title="Puli", year=2016,
+        )
+        new_id = fast_fetch.save_scraped_data(incoming)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM posts")[0][0], 2)
+        self.assertEqual(
+            self.rows("SELECT year FROM posts WHERE id = ?", (new_id,))[0][0], 2016)
+
+    def test_fuzzy_match_does_not_merge_subtitle_variant(self):
+        """`Salaar` and `Salaar Part 1 Ceasefire` share words, not an identity:
+        different normalized bases must stay different posts."""
+        self._insert_legacy_row(
+            "https://site-a.example/salaar-part-1-ceasefire/", "Salaar Part 1 Ceasefire",
+            2023, "salaar-part-1-ceasefire_2023")
+        incoming = self.media(
+            "site_b", "https://site-b.example/salaar/",
+            title="Salaar (2023)", clean_title="Salaar", year=2023,
+        )
+        fast_fetch.save_scraped_data(incoming)
+        self.assertEqual(self.rows("SELECT COUNT(*) FROM posts")[0][0], 2)
+
+    def test_season_and_episode_normalized_to_one_spelling(self):
+        data = self.media("site_a", "https://site-a.example/example-series/",
+                          content_type="series")
+        data["releases"] = [
+            {"release_title": "Example Series S01E01", "quality": "720p",
+             "season": "1", "episode": "1", "sources": []},
+            {"release_title": "Example Series S01E02", "quality": "720p",
+             "season": "S01", "episode": "E01", "sources": []},
+            {"release_title": "Example Series S02E03", "quality": "720p",
+             "season": "Season 2", "episode": "Episode 3", "sources": []},
+            {"release_title": "Example Series S01 Batch", "quality": "720p",
+             "season": "Batch", "episode": "Batch", "sources": []},
+            {"release_title": "Example Series EP(01-06)", "quality": "720p",
+             "season": "1", "episode": "01-06", "sources": []},
+        ]
+        post_id = fast_fetch.save_scraped_data(data)
+        stored = self.rows(
+            "SELECT season, episode FROM releases WHERE post_id = ? ORDER BY id",
+            (post_id,))
+        self.assertEqual(
+            [(r[0], r[1]) for r in stored],
+            [("S01", "E01"), ("S01", "E01"), ("S02", "E03"),
+             (None, None), ("S01", "01-06")],
+        )
+
     def test_malformed_legacy_json_metadata_does_not_break_a_merge(self):
         post_id = fast_fetch.save_scraped_data(
             self.media("site_a", "https://site-a.example/example-film/")

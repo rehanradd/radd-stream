@@ -529,9 +529,26 @@ RANK_SCORE_EXPR = """
 
 # ── Identity ─────────────────────────────────────────────────────────────────
 
+#: The volatile episode-count suffix, mirrored from
+#: `fast_fetch._VOLATILE_EPISODE_RES`: a re-scrape rewrites "[S01E08 Added]" as
+#: "[S01E09 Added]", and the projection must group both pages into one work.
+#: Keep the two in sync — `catalog_v2` must not import the 8,800-line
+#: `fast_fetch` for one regex.
+_VOLATILE_EPISODE_RES = (
+    re.compile(r"\bs\d{1,2}\s*e\d{1,4}\b", re.IGNORECASE),
+    re.compile(r"\bs\d{1,2}\s*eps?\b", re.IGNORECASE),
+    re.compile(r"\bep(?:isode)?s?\s*\(?\d{1,3}\s*(?:[-–]\s*\d{1,3})?\)?",
+               re.IGNORECASE),
+    re.compile(r"\bseason\s*\d{1,3}\s*(?:episode|ep)\s*\d{1,4}\b", re.IGNORECASE),
+    re.compile(r"\badded\b", re.IGNORECASE),
+)
+
+
 def normalize_title(title: str) -> str:
     text = (title or "").casefold()
     text = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", text)
+    for pattern in _VOLATILE_EPISODE_RES:
+        text = pattern.sub(" ", text)
     text = re.sub(r"[^\w\s]", " ", text, flags=re.UNICODE)
     return " ".join(text.split())
 
