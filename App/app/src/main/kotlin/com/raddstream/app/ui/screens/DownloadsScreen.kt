@@ -40,6 +40,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -343,7 +344,15 @@ internal fun DeviceDownloadRow(
         if (item.state == DeviceDownloadState.DOWNLOADING ||
             item.state == DeviceDownloadState.QUEUED
         ) {
-            LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth())
+            // Restyle 2026-11-13: rounded ends + a visible track — the bar
+            // reads as a progress bar, not a hairline.
+            LinearProgressIndicator(
+                progress = { item.progress },
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                strokeCap = StrokeCap.Round,
+            )
             val total = if (item.bytesTotal > 0) formatMiB(item.bytesTotal) else "unknown size"
             // Audit #12: % + MB + speed + ETA, from the same rolling rate the
             // service reports — "calculating" until the second tick, never a
@@ -453,7 +462,15 @@ internal fun KeptItemRow(
         }
         Text(statusLine(item), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurface)
         if (item.state == KeepState.DOWNLOADING || item.state == KeepState.QUEUED || item.state == KeepState.NO_SPACE) {
-            LinearProgressIndicator(progress = { item.progress }, modifier = Modifier.fillMaxWidth())
+            // Restyle 2026-11-13: rounded ends + a visible track, same as
+            // the active-download bar above — one progress language.
+            LinearProgressIndicator(
+                progress = { item.progress },
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+                strokeCap = StrokeCap.Round,
+            )
             val total = if (item.bytesTotal > 0) formatMiB(item.bytesTotal) else "unknown size"
             Text("${formatMiB(item.bytesDownloaded)} / $total", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

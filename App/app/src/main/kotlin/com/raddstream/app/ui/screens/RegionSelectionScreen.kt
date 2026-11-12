@@ -134,7 +134,7 @@ fun RegionSelectionScreen(
             enabled = !state.isSaving,
             modifier = Modifier
                 .fillMaxWidth()
-                .height(52.dp),
+                .height(56.dp),
             shape = RoundedCornerShape(12.dp),
         ) {
             if (state.isSaving) {

@@ -30,6 +30,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.ui.theme.RaddBrandLockup
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.viewmodel.SetupViewModel
 
@@ -57,7 +58,14 @@ fun SetupScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(Brand.name, style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
+        // Restyle 2026-11-13: first run opens on the brand lockup — mark +
+        // two-tone wordmark — instead of a bare name in headline type. The
+        // tagline lives in the body copy below, so the lockup stays clean.
+        RaddBrandLockup(
+            markSize = 40.dp,
+            onName = MaterialTheme.colorScheme.onBackground,
+            onStream = MaterialTheme.colorScheme.primary,
+        )
         Spacer(Modifier.height(8.dp))
         Text(
             text = "${Brand.name} connects automatically. If that fails, you can enter a different address — or continue offline with your saved titles.",
@@ -133,7 +141,7 @@ fun SetupScreen(
         Button(
             onClick = onConnected,
             enabled = state.isConnected && !state.isChecking,
-            modifier = Modifier.fillMaxWidth().height(52.dp),
+            modifier = Modifier.fillMaxWidth().height(56.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,

@@ -76,6 +76,7 @@ import com.raddstream.app.player.AudioBoostUi
 import com.raddstream.app.share.LanShareStatus
 import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.raddFilterChipColors
+import com.raddstream.app.ui.theme.RaddTokens
 import com.raddstream.app.viewmodel.AccountCardCopy
 import com.raddstream.app.viewmodel.AccountUiState
 import com.raddstream.app.viewmodel.ContactUiState
@@ -1002,7 +1003,7 @@ private fun SettingsCard(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(RaddTokens.Radius.Card))
             .background(MaterialTheme.colorScheme.surface)
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
