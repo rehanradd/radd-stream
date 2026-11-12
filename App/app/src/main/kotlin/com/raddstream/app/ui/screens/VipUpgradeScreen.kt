@@ -64,6 +64,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.VipPendingSubmission
 import com.raddstream.app.network.models.DownloadCreditPrice
 import com.raddstream.app.network.models.PassTier
@@ -249,7 +250,7 @@ fun VipUpgradeScreen(
                         VerificationSection(state = state, viewModel = viewModel)
                     }
                     Text(
-                        "Payment details are published by Radd Stream. " +
+                        "Payment details are published by ${Brand.name}. " +
                             "This app never sees your transfer: it sends only the reference you type " +
                             "here, for verification.",
                         style = MaterialTheme.typography.labelSmall,

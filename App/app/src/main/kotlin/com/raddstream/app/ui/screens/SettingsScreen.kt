@@ -869,7 +869,7 @@ fun SettingsScreen(
             // dialog asked, changeable here at any time.
             SettingsCard(title = "Anonymous usage totals", icon = Icons.Default.Info) {
                 Text(
-                    "Share anonymous totals with Radd Stream: plays, " +
+                    "Share anonymous totals with ${Brand.name}: plays, " +
                         "playback failures, and crashes. Nothing that can " +
                         "identify you or what you watch is ever sent.",
                     style = MaterialTheme.typography.bodySmall,

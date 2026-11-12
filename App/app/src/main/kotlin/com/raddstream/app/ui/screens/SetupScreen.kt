@@ -60,7 +60,7 @@ fun SetupScreen(
         Text(Brand.name, style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onBackground)
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Radd Stream connects automatically. If that fails, you can enter a different address — or continue offline with your saved titles.",
+            text = "${Brand.name} connects automatically. If that fails, you can enter a different address — or continue offline with your saved titles.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
