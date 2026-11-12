@@ -1,7 +1,6 @@
 package com.raddstream.app.ui.theme
 
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.runtime.Composable
@@ -20,6 +19,10 @@ import com.raddstream.app.ui.components.rememberReduceMotion
  * press state instead of a second gesture detector fighting it. Reduced-motion
  * users get the haptic only, never the scale.
  *
+ * Restyle 2026-11-13: the scale rides the M3 Expressive default-effects
+ * spring (critically damped, stiffness 1600) instead of a fixed 80/120 ms
+ * tween, so a press settles instead of cutting — the same press, alive.
+ *
  * Usage: create the source once in the composable, pass it to the clickable /
  * Button's `interactionSource`, apply [pressScale] to the same node, and call
  * [PressHaptics] once in the body.
@@ -34,7 +37,7 @@ fun Modifier.pressScale(
     val target = if (pressed && enabled && !reduceMotion) RaddTokens.Motion.PressScale else 1f
     val scale by animateFloatAsState(
         targetValue = target,
-        animationSpec = tween(durationMillis = if (pressed) 80 else RaddMotion.DurationQuick),
+        animationSpec = RaddMotion.defaultEffects(),
         label = "pressScale",
     )
     return this.graphicsLayer(scaleX = scale, scaleY = scale)

@@ -2,6 +2,7 @@ package com.raddstream.app.ui.theme
 
 import android.os.Build
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -154,6 +155,35 @@ object RaddMotion {
     val Emphasized = CubicBezierEasing(0.2f, 0f, 0f, 1f)
     /** Linear-ish for continuous things (shimmer sweep). */
     val Linearish = CubicBezierEasing(0f, 0f, 1f, 1f)
+
+    // ── EXPRESSIVE SPRINGS (M3 Expressive motion tokens) ────────────────
+    // Spring physics, not fixed durations, for component motion — what moves
+    // inside a screen. Token values are the M3 Expressive tokens: spatial
+    // springs may overshoot (damping < 1) so a move settles with a little
+    // life; effects springs (fades, colour) are critically damped (1.0) so
+    // they never overshoot. Screen enter/exit transitions keep the legacy
+    // tween durations above — the skill keeps those for transitions.
+    // (MotionScheme itself is not read from MaterialTheme here: the pinned
+    // BOM 2024.06.00 / material3 1.3.0 could not be confirmed to carry it,
+    // so these specs carry the same token values directly. Wiring
+    // MaterialTheme.motionScheme is the BOM-bump follow-up.)
+    /** Fast move: small shape/bounds changes. */
+    fun <T> fastSpatial() = spring<T>(dampingRatio = 0.6f, stiffness = 800f)
+
+    /** Default move: rails arriving, cards settling, pager pages. */
+    fun <T> defaultSpatial() = spring<T>(dampingRatio = 0.8f, stiffness = 380f)
+
+    /** Slow move: hero glow, large containers. */
+    fun <T> slowSpatial() = spring<T>(dampingRatio = 0.8f, stiffness = 200f)
+
+    /** Fast fade/colour: HUD showing, chip state. */
+    fun <T> fastEffects() = spring<T>(dampingRatio = 1.0f, stiffness = 3800f)
+
+    /** Default fade/colour: press scale, HUD hiding, selection. */
+    fun <T> defaultEffects() = spring<T>(dampingRatio = 1.0f, stiffness = 1600f)
+
+    /** Slow fade/colour: glow crossfades, large fades. */
+    fun <T> slowEffects() = spring<T>(dampingRatio = 1.0f, stiffness = 800f)
 
     /** Respect Reduce-Motion: screens wrap durations with this. */
     const val FadeWhenReduced = 30 // ms, pure alpha crossfade, no movement
