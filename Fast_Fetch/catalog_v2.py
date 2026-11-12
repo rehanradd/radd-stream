@@ -476,6 +476,12 @@ CREATE TABLE IF NOT EXISTS cat_review_resolutions (
 CREATE INDEX IF NOT EXISTS idx_cat_works_title ON cat_works(title, year);
 CREATE INDEX IF NOT EXISTS idx_cat_works_type ON cat_works(work_type, is_18_plus);
 CREATE INDEX IF NOT EXISTS idx_cat_works_browse ON cat_works(updated_at DESC);
+-- Appetize FAILED 2 (2026-11-12): `catalog_rev` is `MAX(source_rev)` and runs
+-- on every v2 GET; without an index it is a full scan of `cat_works`
+-- (0.25-0.37 s measured on 197k rows, 1-vCPU box). The index makes it a
+-- seek on the last entry. `fast_fetch.init_db` mints the same index on the
+-- live DB; this is the rebuild path.
+CREATE INDEX IF NOT EXISTS idx_cat_works_source_rev ON cat_works(source_rev);
 CREATE INDEX IF NOT EXISTS idx_cat_releases_work ON cat_releases(work_id, quality_score DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_links_release ON cat_links(release_id, rank_score DESC);
 CREATE INDEX IF NOT EXISTS idx_cat_links_state ON cat_links(state, playability);

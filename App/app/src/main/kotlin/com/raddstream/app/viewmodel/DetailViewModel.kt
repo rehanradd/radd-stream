@@ -42,7 +42,9 @@ import com.raddstream.app.sync.SyncAccountRepository
 import com.raddstream.app.ui.navigation.Screen
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -457,13 +459,23 @@ class DetailViewModel @Inject constructor(
         }
     }
 
-    fun loadDetail() {
-        if (postId < 0 && workId < 0) {
-            _uiState.update { it.copy(isLoading = false, error = "This title could not be opened.") }
-            return
-        }
-        viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+    /**
+     * Appetize FAILED 2 (2026-11-12) — the detail fetch, retried.
+     *
+     * The first load failed and a manual Retry always loaded fully, so the
+     * load retries itself: up to [DETAIL_LOAD_MAX_ATTEMPTS] attempts for a
+     * transient error ([isTransientDetailError]), and one retry of a null
+     * detail ([DETAIL_LOAD_NULL_RETRIES]) — the v2 path swallows HTTP/IO
+     * failures into null inside the repository, so a null is the only shape
+     * a 429/503 takes there. A cancelled load is not a failed load: the
+     * [CancellationException] is rethrown so the coroutine ends cancelled
+     * instead of painting an error over a screen the viewer already left.
+     */
+    private suspend fun fetchDetailWithRetry(): PostDetail? {
+        var nullRetries = 0
+        var attempt = 0
+        while (true) {
+            attempt++
             try {
                 // Phase 7 (M1): a v2 row opens through the v2 detail route —
                 // the work id is the only key it has. The repository bridges
@@ -488,6 +500,31 @@ class DetailViewModel @Inject constructor(
                         audio = detailWarmAudio(userRegion),
                     )
                 }
+                if (detail != null) return detail
+                if (nullRetries < DETAIL_LOAD_NULL_RETRIES) {
+                    nullRetries++
+                    delay(detailLoadBackoffMs(attempt))
+                    continue
+                }
+                return null
+            } catch (ex: CancellationException) {
+                throw ex
+            } catch (ex: Exception) {
+                if (attempt >= DETAIL_LOAD_MAX_ATTEMPTS || !isTransientDetailError(ex)) throw ex
+                delay(detailLoadBackoffMs(attempt))
+            }
+        }
+    }
+
+    fun loadDetail() {
+        if (postId < 0 && workId < 0) {
+            _uiState.update { it.copy(isLoading = false, error = "This title could not be opened.") }
+            return
+        }
+        viewModelScope.launch {
+            _uiState.update { it.copy(isLoading = true, error = null) }
+            try {
+                val detail = fetchDetailWithRetry()
                 if (detail != null) {
                     // Wide art only: a portrait poster cropped into a 16:9 still looks broken,
                     // so it is used just when the catalog has no backdrop at all.
@@ -533,6 +570,11 @@ class DetailViewModel @Inject constructor(
                         it.copy(isLoading = false, error = "This title is not available on the connected server.")
                     }
                 }
+            } catch (ex: CancellationException) {
+                // A cancelled load is not a failed load: rethrow so the
+                // coroutine ends cancelled instead of painting an error
+                // over a screen the viewer already left.
+                throw ex
             } catch (ex: Exception) {
                 _uiState.update {
                     it.copy(isLoading = false, error = friendlyNetworkError(ex, "Failed to load details. Check connection."))
@@ -661,19 +703,21 @@ class DetailViewModel @Inject constructor(
      * live-resolves the link and banks the answer, so the Play press 302s
      * from cache instead. One warm in flight, cancelled when the viewer
      * opens another scope; a warm that fails is silent — Play still works,
-     * it just waits on the first bytes again. A handle warmed once is not
-     * warmed again: the banked answer lives for hours, and re-asking on
-     * every card open would spend the server's resolve budget for nothing.
+     * it just waits on the first bytes again. A handle warmed successfully
+     * once is not warmed again: the banked answer lives for hours, and
+     * re-asking on every card open would spend the server's resolve budget
+     * for nothing. A warm that FAILS marks nothing, so reopening the card
+     * retries the link it still needs.
      */
     private fun warmScopeLink(ladder: LadderForScope) {
         val handle = scopeWarmHandle(ladder) ?: return
         if (handle == lastScopeWarmHandle) return
-        lastScopeWarmHandle = handle
         scopeWarmJob?.cancel()
         scopeWarmJob = viewModelScope.launch {
-            runCatching {
+            val warmed = runCatching {
                 withTimeout(30_000) { catalogRepository.resolveStream(handle) }
-            }
+            }.isSuccess
+            if (warmed) lastScopeWarmHandle = handle
         }
     }
 
@@ -978,10 +1022,10 @@ class DetailViewModel @Inject constructor(
 
     /**
      * Gap A2: resolve the best print's `playV2` bundle while the viewer is
-     * still on the detail page. Same 2 s ceiling and same quality
-     * preference as the Play-press call, same print Play would pick, and a
-     * locked print is never warmed — warming a rung the viewer may not
-     * play would spend the server's answer on nothing.
+     * still on the detail page. Same ceiling ([PRERESOLVE_TIMEOUT_MS]) and
+     * same quality preference as the Play-press call, same print Play would
+     * pick, and a locked print is never warmed — warming a rung the viewer
+     * may not play would spend the server's answer on nothing.
      *
      * On Wi-Fi the winner's first bytes are also pre-buffered through the
      * engine's preview seed (the same bounded, silent seed the player uses
@@ -998,7 +1042,7 @@ class DetailViewModel @Inject constructor(
         if (!VipQualityGate.allowsResolution(best.resolution, premiumAccess)) return
         preresolveJob = viewModelScope.launch {
             val result = runCatching {
-                withTimeout(2_000) {
+                withTimeout(PRERESOLVE_TIMEOUT_MS) {
                     catalogRepository.playV2(
                         best.releaseId,
                         prefer = DataSaver.playPrefer(dataSaver, onWifi),
@@ -1165,8 +1209,10 @@ class DetailViewModel @Inject constructor(
         // the server's probes, and only it carries the print's coverage. Any failure
         // — a 403 while nginx still blocks the route, a timeout, a dead socket — falls
         // back to the client-side link above, so Play never gets slower or stricter
-        // than it was. Two seconds is the ceiling: the server is on the same host,
-        // so a healthy call answers in milliseconds.
+        // than it was. The ceiling is [PLAY_V2_TIMEOUT_MS]: the old 2 s timed out
+        // a healthy call under load (the server alone pays 0.25-0.37 s of CPU per
+        // request before the bundle reads), and the fallback is a cold single link
+        // — strictly worse than the ranked bundle with its runner-ups.
         viewModelScope.launch {
             // Gap A2: the detail-open pre-resolve, when it is fresh and for
             // this very print — Play then starts on the bundle that is
@@ -1176,7 +1222,7 @@ class DetailViewModel @Inject constructor(
             }
             if (cached != null && playV2Bundle(cached, print, external)) return@launch
             val v2 = runCatching {
-                withTimeout(2_000) {
+                withTimeout(PLAY_V2_TIMEOUT_MS) {
                     catalogRepository.playV2(
                         print.releaseId,
                         prefer = DataSaver.playPrefer(dataSaver, onWifi),

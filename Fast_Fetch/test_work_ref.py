@@ -8,6 +8,7 @@ at every step, so a flagged work is indistinguishable from a missing one.
 """
 
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -146,6 +147,29 @@ class WorkRefResolveTests(unittest.TestCase):
     def test_a_handle_for_a_work_that_is_not_here_is_empty(self):
         resp = self.posts(work_ref=self.handle_for("imdb:tt0000000"), limit=10)
         self.assertEqual(resp["total"], 0)
+
+    def test_family_lookup_with_a_year_seeks_the_year_index(self):
+        """Appetize FAILED 2: the family lookup was a 4.8 s full-table scan
+        on the live catalog, because the UDF term has no index and nothing
+        else in the WHERE could seek. `idx_posts_year` (minted by
+        `fast_fetch.init_db`) lets the planner seek the year's rows before
+        the UDF runs. The statement is transcribed from
+        `viewer._resolve_work_ref`; the plan is asserted, not remembered.
+        """
+        conn = sqlite3.connect(self.db_path)
+        conn.create_function(
+            "radd_norm_title", 1, catalog_v2.normalize_title, deterministic=True)
+        sql = ("SELECT id, clean_title, title, year, content_type, is_animated"
+               " FROM posts p"
+               " WHERE (p.is_18_plus IS NULL OR p.is_18_plus = 0)"
+               " AND radd_norm_title(COALESCE(p.clean_title, p.title)) = ?"
+               " AND p.year = ? ORDER BY id DESC")
+        plan = [row[3] for row in conn.execute(
+            "EXPLAIN QUERY PLAN " + sql, ("avengers endgame", 2019)).fetchall()]
+        conn.close()
+        self.assertTrue(
+            any("USING INDEX idx_posts_year" in step for step in plan),
+            f"family lookup scans instead of seeking the year index: {plan}")
 
 
 if __name__ == "__main__":

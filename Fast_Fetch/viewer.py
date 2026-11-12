@@ -15,6 +15,7 @@ from __future__ import annotations
 import sys
 import json
 import sqlite3
+import threading
 import time
 import urllib.parse
 import urllib.request
@@ -3058,8 +3059,10 @@ def _resolve_work_ref(conn, work_ref: str):
     `catalog_v2.work_key_for` mints: `imdb:tt…` and `tmdb:…` match the id
     columns; `family:normalized title:year` matches the title the same way
     the key was derived from it (the UDF is registered on this connection
-    only, and only for this lookup — a full scan is the price of a key that
-    was never a column). The family is checked in Python, because the ledger
+    only, and only for this lookup). When the year is known, `idx_posts_year`
+    seeks that year's rows before the UDF runs; a no-year key ("ny") still
+    pays the full scan, because it has no term to seek on. The family is
+    checked in Python, because the ledger
     stores the content type, not the family. The adult clause applies at
     every step: a flagged work is indistinguishable from a missing one.
     """
@@ -5203,6 +5206,79 @@ def _preresolve_is_warm(source_id: int) -> bool:
         return False
 
 
+# Resolve coalescing (Appetize FAILED 1, 2026-11-12): one in-flight live
+# resolve per (source, contract), shared by every caller that needs it.
+#
+# The failure it fixes: a detail open starts a daemon warm of the auto
+# tier's link (`_resolve_and_bank`, 9.25 s measured for Salaar 720p). A Play
+# press before it banks finds a cache MISS and starts a SECOND full resolve,
+# and the player's 8 s watchdog fires before either finishes; the retry
+# starts a THIRD resolve and the failover hop a FOURTH — ~30 s of parallel
+# cold resolves, all abandoned, ending in NO_CANDIDATE_LEFT. The resolver
+# has no internal lock, so nothing ever stopped the duplication. With
+# coalescing the Play press joins the warm's resolve and 302s when it banks,
+# inside the retry watchdog window.
+#
+# The leader runs the resolve; a waiter joins the in-flight one for up to
+# `_RESOLVE_WAIT_SECONDS` and then uses the leader's answer. A waiter that
+# times out, or whose leader failed, falls back to its own resolve — the old
+# behaviour — so a stuck leader can never wedge a request. The key includes
+# `v2` and `want` because the resolver's answer shape depends on both; a
+# download must never inherit a watch-shaped answer or vice versa. The v2
+# metadata resolve (`resolve_target` in api_v2.py) is deliberately NOT
+# coalesced: it is a metadata read, not a playback path, and waiting up to
+# 12 s on a play resolve would slow it. The wait bound sits under nginx's
+# 15 s proxy read timeout so a joined resolve still answers in time.
+_RESOLVE_IN_FLIGHT: dict = {}
+_RESOLVE_IN_FLIGHT_LOCK = threading.Lock()
+_RESOLVE_WAIT_SECONDS = 12.0
+
+
+class _InFlightResolve:
+    """One in-flight live resolve: the event the leader sets when done."""
+
+    __slots__ = ("event", "result")
+
+    def __init__(self):
+        self.event = threading.Event()
+        self.result = None
+
+
+def _resolve_coalesced(source_id: int, *, v2: bool = False,
+                       want: str = "watch") -> dict:
+    """Resolve one link, joining an in-flight resolve for the same source.
+
+    Returns the resolver's dict, a fresh copy per caller so nobody mutates a
+    shared answer. A waiter that times out, or whose leader left no usable
+    answer, resolves on its own, exactly as before this change.
+    """
+    import fast_fetch
+    key = (int(source_id), bool(v2), str(want))
+    with _RESOLVE_IN_FLIGHT_LOCK:
+        inflight = _RESOLVE_IN_FLIGHT.get(key)
+        if inflight is None:
+            inflight = _InFlightResolve()
+            _RESOLVE_IN_FLIGHT[key] = inflight
+            leader = True
+        else:
+            leader = False
+    if not leader:
+        if inflight.event.wait(timeout=_RESOLVE_WAIT_SECONDS):
+            result = inflight.result
+            if isinstance(result, dict):
+                return dict(result)
+        return fast_fetch.resolve_live_source(int(source_id), v2=v2, want=want)
+    try:
+        result = fast_fetch.resolve_live_source(int(source_id), v2=v2, want=want)
+        inflight.result = result if isinstance(result, dict) else {"success": False}
+        return dict(inflight.result)
+    finally:
+        inflight.event.set()
+        with _RESOLVE_IN_FLIGHT_LOCK:
+            if _RESOLVE_IN_FLIGHT.get(key) is inflight:
+                del _RESOLVE_IN_FLIGHT[key]
+
+
 def _resolve_and_bank(source_id: int) -> None:
     """Resolve one link and bank it, for the background pre-resolve.
 
@@ -5210,9 +5286,8 @@ def _resolve_and_bank(source_id: int) -> None:
     Play press pays the live resolve exactly as it would have without one.
     """
     try:
-        import fast_fetch
         import resolved_cache
-        res = fast_fetch.resolve_live_source(int(source_id), want="watch")
+        res = _resolve_coalesced(int(source_id), want="watch")
         if res.get("success") and res.get("url") and not res.get("stale"):
             with get_db() as conn:
                 resolved_cache.record_resolved_cache(conn, int(source_id), res)
@@ -6337,7 +6412,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(_plain_stream_error(blocked), status=402)
                 return
 
-            import fast_fetch
             redirect_flag = query_params.get("redirect", ["1"])[0]
 
             # Phase-1 resolved_cache: a fresh, probe-accepted row answers the
@@ -6386,8 +6460,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
 
             # Stage-2: the stream caller needs watch media — a playlist
             # or a single file. A playlist is never a download, and a
-            # page is never either; the resolver enforces both.
-            res = fast_fetch.resolve_live_source(int(source_id), want="watch")
+            # page is never either; the resolver enforces both. Coalesced
+            # with the detail warm for the same link (see
+            # `_resolve_coalesced`): a Play press during the warm joins
+            # that resolve instead of starting a second one the 8 s
+            # player watchdog would abandon.
+            res = _resolve_coalesced(int(source_id), want="watch")
 
             if res.get("success") and res.get("stale"):
                 # Audit critical 2: the v1 resolver answers a failed re-resolve with
@@ -6496,7 +6574,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.send_json(_plain_stream_error(blocked), status=402)
                 return
 
-            import fast_fetch
             # Phase-1 resolved_cache on the download twin. Same ordering rule
             # the stream route proved: the adult gate ABOVE always runs before
             # any cache lookup, and the cache is consulted on the public port
@@ -6546,8 +6623,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 # of this route has that history.
                 # Stage-2: the download caller needs a single file only.
                 # A playlist answer here would be segments, not a file.
-                res = fast_fetch.resolve_live_source(int(source_id), v2=True,
-                                                     want="download")
+                # Coalesced like the stream route (see `_resolve_coalesced`).
+                res = _resolve_coalesced(int(source_id), v2=True,
+                                         want="download")
                 # Bank the fresh answer for the next downloader (and player —
                 # the watch route accepts file rows too). Stale URLs are never
                 # stored, and a cache write must never alter this response.

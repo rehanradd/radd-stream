@@ -5,6 +5,15 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-12 — app-fix builder [APPFIX-DETAIL-SALAAR]: Appetize FAILED 2 (first detail load fails,
+  Retry works) + FAILED 1 (Salaar default version does not play). Root causes measured on the
+  Oracle VM: the family work-ref lookup is a 4.8 s full-table scan (`idx_posts_year` added) and
+  `catalog_rev` is a 0.25–0.37 s `MAX(source_rev)` scan on every v2 GET (`idx_cat_works_source_rev`
+  added); Play during the daemon warm started a second cold resolve the 8 s watchdog abandoned
+  (resolve coalescing in `viewer.py`, 12 s wait bound). App: `loadDetail` auto-retries transient
+  failures (3 attempts, 600 ms → 1.5 s), `playV2` ceilings 2 s → 10 s / 6 s, scope-warm marker set
+  only on success. Tests: 563 backend green locally across 8 suites, 5 new app unit tests; CI
+  verdicts pending. Full note: `20261112-appfix-detail-salaar.md`.
 - 2026-11-12 — FTS5 search [SEARCH-PERFORMANCE]: the benchmark winner
   (`fts_posts` on `clean_title` + `cast_names`, trigram correction with
   Damerau transpositions and exact-title evidence ranking) landed in the

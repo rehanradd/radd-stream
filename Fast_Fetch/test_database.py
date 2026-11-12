@@ -642,6 +642,46 @@ class DatabaseSaveTests(unittest.TestCase):
         # Unknown legacy attribution is left unknown instead of being guessed from posts.source_site.
         self.assertIsNone(self.rows("SELECT source_site FROM releases WHERE post_id = ?", (post_id,))[0][0])
 
+    def test_init_db_creates_the_detail_path_indexes(self):
+        """Appetize FAILED 2: `init_db` must mint `idx_posts_year` (the
+        family work-ref lookup seeks it) and, when the projection table is
+        present WITH its column, `idx_cat_works_source_rev` (the per-v2-GET
+        `catalog_rev` seeks it). A fresh ledger-only DB has no `cat_works`
+        table, and a hand-made stub table may lack `source_rev` — both
+        cases must skip the index, never break `init_db`.
+        """
+        with fast_fetch.get_db() as conn:
+            names = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'index'")}
+            has_cat_works = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table'"
+                " AND name = 'cat_works'").fetchone()
+        self.assertIn("idx_posts_year", names)
+        if has_cat_works:
+            self.assertIn("idx_cat_works_source_rev", names)
+        else:
+            self.assertNotIn("idx_cat_works_source_rev", names)
+            # The stub shape a test fixture carries: no `source_rev`, so
+            # `init_db` must sail past it without raising.
+            with fast_fetch.get_db() as conn:
+                conn.execute(
+                    "CREATE TABLE cat_works"
+                    " (work_key TEXT PRIMARY KEY, runtime_minutes INTEGER)")
+            fast_fetch.init_db()
+            with fast_fetch.get_db() as conn:
+                names = {row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index'")}
+            self.assertNotIn("idx_cat_works_source_rev", names)
+            # ...and once the column exists, `init_db` mints the index.
+            with fast_fetch.get_db() as conn:
+                conn.execute(
+                    "ALTER TABLE cat_works ADD COLUMN source_rev INTEGER")
+            fast_fetch.init_db()
+            with fast_fetch.get_db() as conn:
+                names = {row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'index'")}
+            self.assertIn("idx_cat_works_source_rev", names)
+
     def test_domain_migration_updates_per_site_source_pages(self):
         fast_fetch.save_scraped_data(
             self.media("site_a", "https://old.example/example-film/")

@@ -6,11 +6,17 @@ import com.raddstream.app.network.models.ReleaseDetail
 import com.raddstream.app.network.models.SourceDetail
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
+import java.io.IOException
+import java.net.SocketTimeoutException
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import retrofit2.HttpException
+import retrofit2.Response
 
 /**
  * Gap A2: the pre-resolve warms exactly the link Play would press, and a
@@ -182,5 +188,49 @@ class PreResolveTest {
         val chosen = print.links.first()
 
         assertTrue(siblingBackupHandles(print, chosen).isEmpty())
+    }
+
+    // Appetize FAILED 2 (2026-11-12): the first detail load failed transiently
+    // and a manual Retry always loaded fully, so the load retries itself —
+    // but only for failures a retry can cure.
+
+    private fun httpError(code: Int): HttpException =
+        HttpException(Response.error<Any>(code, "x".toResponseBody("text/plain".toMediaType())))
+
+    @Test
+    fun `transient detail errors are IO failures and retryable HTTP statuses`() {
+        assertTrue(isTransientDetailError(IOException("connection reset")))
+        assertTrue(isTransientDetailError(SocketTimeoutException("timed out")))
+        assertTrue(isTransientDetailError(httpError(429)))
+        assertTrue(isTransientDetailError(httpError(500)))
+        assertTrue(isTransientDetailError(httpError(503)))
+    }
+
+    @Test
+    fun `deterministic detail errors never retry`() {
+        assertFalse(isTransientDetailError(httpError(400)))
+        assertFalse(isTransientDetailError(httpError(403)))
+        assertFalse(isTransientDetailError(httpError(404)))
+        assertFalse(isTransientDetailError(IllegalStateException("bad state")))
+    }
+
+    @Test
+    fun `detail backoff is short then settles`() {
+        assertEquals(600L, detailLoadBackoffMs(1))
+        assertEquals(1_500L, detailLoadBackoffMs(2))
+        assertEquals(1_500L, detailLoadBackoffMs(3))
+    }
+
+    @Test
+    fun `detail load retries at most three times with one null retry`() {
+        assertEquals(3, DETAIL_LOAD_MAX_ATTEMPTS)
+        assertEquals(1, DETAIL_LOAD_NULL_RETRIES)
+    }
+
+    @Test
+    fun `playV2 ceilings give the server room under load`() {
+        assertEquals(10_000L, PRERESOLVE_TIMEOUT_MS)
+        assertEquals(6_000L, PLAY_V2_TIMEOUT_MS)
+        assertTrue(PLAY_V2_TIMEOUT_MS < PRERESOLVE_TIMEOUT_MS)
     }
 }

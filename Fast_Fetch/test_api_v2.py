@@ -1741,6 +1741,23 @@ class V2CachingTests(V2WireFixture):
                                   ).status, 200,
                          "a stale validator was accepted after the catalog moved")
 
+    def test_catalog_rev_seeks_the_source_rev_index(self):
+        """Appetize FAILED 2: `catalog_rev` is `MAX(source_rev)` and runs on
+        every v2 GET — 0.25-0.37 s of full scan over `cat_works` without an
+        index. The projection DDL mints `idx_cat_works_source_rev`; the plan
+        must seek it, and the revision must still read correctly.
+        """
+        self.project(rev=1)
+        plan = [row[3] for row in self.conn.execute(
+            "EXPLAIN QUERY PLAN"
+            " SELECT COALESCE(MAX(source_rev), 0) AS v FROM cat_works"
+        ).fetchall()]
+        self.assertTrue(
+            any(step.startswith("SEARCH cat_works USING")
+                and "idx_cat_works_source_rev" in step for step in plan),
+            f"catalog_rev scans cat_works instead of seeking the index: {plan}")
+        self.assertEqual(api_v2.catalog_rev(self.conn), 1)
+
     def test_no_store_routes_never_validate(self):
         """§16.2: a play bundle or a health answer that can be cached cannot be trusted."""
         for label, reply in (("health", self.get("/api/v2/health")),

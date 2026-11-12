@@ -24,13 +24,16 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 os.environ.setdefault("RADD_SKIP_LIVE_ENRICH", "1")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import fast_fetch          # noqa: E402
 import redact              # noqa: E402
 import test_redact as tr   # noqa: E402  (fixture harness only, not its assertions)
 import viewer              # noqa: E402
@@ -209,6 +212,126 @@ class ArtHandleStillResolvesTests(tr.FixtureMixin):
         self.assertEqual(redact.art_url_for(int(self.second_id), "poster", 0,
                                             str(viewer.DB_PATH)),
                          "https://img.hdhub4u.example/poster.jpg")
+
+
+class ResolveCoalescingTests(unittest.TestCase):
+    """`viewer._resolve_coalesced` (Appetize FAILED 1): a Play press during
+    the detail warm must JOIN the warm's live resolve instead of starting a
+    second one the 8 s player watchdog abandons. The upstream resolver is
+    stubbed — no network, no catalog — so these tests pin the sharing, not
+    the resolving.
+    """
+
+    def _run_threads(self, calls):
+        """Run each zero-arg callable in its own thread; return their
+        (result, error) pairs in call order, joined."""
+        outcomes = [None] * len(calls)
+
+        def run(index, fn):
+            try:
+                outcomes[index] = (fn(), None)
+            except Exception as exc:  # noqa: BLE001 — the error IS the outcome
+                outcomes[index] = (None, exc)
+
+        threads = [threading.Thread(target=run, args=(i, fn))
+                   for i, fn in enumerate(calls)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+            self.assertFalse(thread.is_alive(), "a resolve thread hung")
+        return outcomes
+
+    def test_two_concurrent_resolves_run_the_upstream_once(self):
+        calls = []
+
+        def slow_resolve(source_id, *, v2=False, want="either", _failover=True):
+            calls.append((source_id, v2, want))
+            time.sleep(0.2)
+            return {"success": True, "url": "https://cdn.example/film.mp4"}
+
+        with mock.patch.object(fast_fetch, "resolve_live_source",
+                               side_effect=slow_resolve):
+            outcomes = self._run_threads([
+                lambda: viewer._resolve_coalesced(7, want="watch"),
+                lambda: viewer._resolve_coalesced(7, want="watch"),
+            ])
+        self.assertEqual(len(calls), 1,
+                         "the second caller started its own resolve")
+        self.assertEqual([outcome[1] for outcome in outcomes], [None, None])
+        self.assertTrue(all(outcome[0].get("success") for outcome in outcomes))
+        self.assertEqual(outcomes[0][0]["url"], outcomes[1][0]["url"])
+        self.assertIsNot(outcomes[0][0], outcomes[1][0],
+                         "callers share one dict object — a mutation would leak")
+        self.assertEqual(viewer._RESOLVE_IN_FLIGHT, {})
+
+    def test_different_contracts_do_not_share_a_resolve(self):
+        """`v2` and `want` shape the answer, so they are part of the key: a
+        download must never inherit a watch-shaped answer or vice versa."""
+        calls = []
+
+        def instant_resolve(source_id, *, v2=False, want="either", _failover=True):
+            calls.append((source_id, v2, want))
+            return {"success": True, "url": "https://cdn.example/film.mp4"}
+
+        with mock.patch.object(fast_fetch, "resolve_live_source",
+                               side_effect=instant_resolve):
+            outcomes = self._run_threads([
+                lambda: viewer._resolve_coalesced(7, want="watch"),
+                lambda: viewer._resolve_coalesced(7, v2=True, want="download"),
+            ])
+        self.assertEqual(len(calls), 2)
+        self.assertEqual({tuple(call) for call in calls},
+                         {(7, False, "watch"), (7, True, "download")})
+        self.assertTrue(all(outcome[0].get("success") for outcome in outcomes))
+        self.assertEqual(viewer._RESOLVE_IN_FLIGHT, {})
+
+    def test_a_waiter_whose_leader_fails_resolves_on_its_own(self):
+        calls = []
+
+        def fail_once(source_id, *, v2=False, want="either", _failover=True):
+            calls.append((source_id, v2, want))
+            if len(calls) == 1:
+                raise RuntimeError("upstream blew up")
+            return {"success": True, "url": "https://cdn.example/film.mp4"}
+
+        with mock.patch.object(fast_fetch, "resolve_live_source",
+                               side_effect=fail_once):
+            outcomes = self._run_threads([
+                lambda: viewer._resolve_coalesced(7, want="watch"),
+                lambda: viewer._resolve_coalesced(7, want="watch"),
+            ])
+        self.assertEqual(len(calls), 2,
+                         "the waiter must fall back to its own resolve")
+        errors = [outcome[1] for outcome in outcomes if outcome[1] is not None]
+        successes = [outcome[0] for outcome in outcomes if outcome[0] is not None]
+        self.assertEqual(len(errors), 1, "the leader's raise must propagate")
+        self.assertIsInstance(errors[0], RuntimeError)
+        self.assertEqual(len(successes), 1)
+        self.assertTrue(successes[0].get("success"))
+        self.assertEqual(viewer._RESOLVE_IN_FLIGHT, {})
+
+    def test_a_timed_out_waiter_resolves_on_its_own(self):
+        """A leader stuck past the wait bound must never wedge a request:
+        the waiter falls back to the old behaviour — its own resolve."""
+        calls = []
+
+        def slow_resolve(source_id, *, v2=False, want="either", _failover=True):
+            calls.append((source_id, v2, want))
+            time.sleep(0.5)
+            return {"success": True, "url": "https://cdn.example/film.mp4"}
+
+        with mock.patch.object(fast_fetch, "resolve_live_source",
+                               side_effect=slow_resolve), \
+                mock.patch.object(viewer, "_RESOLVE_WAIT_SECONDS", 0.05):
+            outcomes = self._run_threads([
+                lambda: viewer._resolve_coalesced(7, want="watch"),
+                lambda: viewer._resolve_coalesced(7, want="watch"),
+            ])
+        self.assertEqual(len(calls), 2,
+                         "the timed-out waiter must resolve on its own")
+        self.assertTrue(all(outcome[0].get("success") for outcome in outcomes))
+        self.assertEqual(viewer._RESOLVE_IN_FLIGHT, {})
 
 
 if __name__ == "__main__":

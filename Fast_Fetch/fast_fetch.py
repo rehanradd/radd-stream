@@ -1732,11 +1732,46 @@ def _init_db(db_path: Path | None = None) -> None:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_cat_links_work"
                 " ON cat_links(work_id, playability, state)")
+        # Appetize FAILED 2 (2026-11-12): every v2 GET pays `catalog_rev`,
+        # which is `MAX(source_rev)` over all 197k `cat_works` rows — 0.25-0.37 s
+        # of CPU per call on a 1-vCPU box, before any real work starts. The
+        # index turns it into a seek on the last entry (~0 ms). Same shape as
+        # `idx_cat_links_work` above: a fresh ledger-only DB has no `cat_works`
+        # table, so the index is created only when the table exists; the
+        # projection DDL mints it for future rebuilds. One-time build on the
+        # first request after restart. The guard also needs the COLUMN: a
+        # hand-made stub `cat_works` (a test fixture carries one with only
+        # work_key + runtime_minutes) has no `source_rev`, and forcing the
+        # index there would break every `init_db` call with "no such column".
+        has_cat_works = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'cat_works'"
+        ).fetchone()
+        if has_cat_works:
+            has_source_rev = any(
+                row[1] == "source_rev"
+                for row in conn.execute("PRAGMA table_info(cat_works)").fetchall())
+            if has_source_rev:
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_cat_works_source_rev"
+                    " ON cat_works(source_rev)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_site ON sitemap_cache(site, scraped)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_retry ON sitemap_cache(scraped, attempts)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_tmdb ON posts(tmdb_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_imdb ON posts(imdb_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug)")
+        # Appetize FAILED 2 (2026-11-12): the v2 detail chain resolves a
+        # work's handle to its post through `_resolve_work_ref`, and for a
+        # family:title:year key that runs a full-table scan applying the
+        # Python `radd_norm_title` UDF to every row — 4.8 s measured on the
+        # live catalog for one lookup, which is what made the first detail
+        # load take 6.5-10 s end to end. Seeking `year` first narrows the
+        # scan to that year's rows before the UDF runs (~0.1 s). No-year
+        # family keys ("movie:title:ny") still scan; they have no term to
+        # seek on. A posts title-expression index was measured and REJECTED
+        # (it makes the grouped page query 3-4x slower — see viewer.py),
+        # so this narrow index is the only new one on posts. One-time
+        # build on the first request after restart (~340k rows, seconds).
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_posts_year ON posts(year)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sitemap_slug ON sitemap_cache(slug)")
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS post_sources (
