@@ -2227,6 +2227,7 @@ class DatabaseSaveTests(unittest.TestCase):
         SERVICE_PKEMBED = "pkembed"
         SERVICE_ANIMAHD = "animahd-player"
         SERVICE_GOFILE = "gofile"
+        SERVICE_FILEPRESS = "filepress"
         SERVICE_STREAMTAPE = "streamtape"
         SERVICE_STREAM = "stream"
         SERVICE_STREAMWISH = "streamwish"
@@ -2338,6 +2339,16 @@ class DatabaseSaveTests(unittest.TestCase):
                 "is_temporary": True, "expires_in": None,
                 "content_type": "video/mp4", "http_status": 206,
                 "size_bytes": 2000000000}
+
+        def unwrap_filepress(self, url, fetch=None, verify=True):
+            self.calls.append(("filepress", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://aws.flapdoodle.cyou/download/abc123/"
+                             "Film.2024.1080p.mkv",
+                "is_temporary": True, "expires_in": None,
+                "content_type": "video/x-matroska", "http_status": 206,
+                "size_bytes": 1800000000}
 
         def unwrap_streamtape(self, embed_url, fetch=None, verify=True):
             self.calls.append(("streamtape", embed_url, verify))
@@ -2649,6 +2660,111 @@ class DatabaseSaveTests(unittest.TestCase):
         self.assertEqual(verdict["status"], "unknown", verdict)
         self.assertIn("GOFILE_WT_SALT", " ".join(verdict["notes"]))
 
+    def test_filepress_unwrap_mints_then_probes_active(self):
+        """Filepress cracked 2026-11-13: POST downlaod/ (method
+        indexDownlaod — the API's own spelling) mints a 24-hex token,
+        POST downlaod2/ swaps it for a direct .mkv link, and the Range
+        probe of that link is the gate. The minted filename carries raw
+        spaces/brackets, so the final URL must be percent-encoded."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            if url.endswith("/api/file/downlaod/") and method == "POST":
+                body = json.loads(data.decode("utf-8"))
+                self.assertEqual(body["method"], "indexDownlaod")
+                self.assertIsNone(body["captchaValue"])
+                self.assertEqual(headers.get("Referer"),
+                                 "https://new3.filepress.lat")
+                return (200, json.dumps(
+                    {"status": True, "statusCode": 200,
+                     "data": "6ad7ecde69b577b115172142"}).encode(), {}, url)
+            if url.endswith("/api/file/downlaod2/") and method == "POST":
+                body = json.loads(data.decode("utf-8"))
+                self.assertEqual(body["id"], "6ad7ecde69b577b115172142")
+                return (200, json.dumps(
+                    {"status": True, "statusCode": 200,
+                     "data": ["https://aws.flapdoodle.cyou/download/abc123/"
+                              "Film (2024) [1080p].mkv"]}).encode(), {}, url)
+            self.assertIn("Range", headers or {})
+            return (206, b"\x1a\x45\xdf\xa3" + b"\x00" * 508,
+                    {"content-type": "video/x-matroska",
+                     "content-range": "bytes 0-511/1800000000"}, url)
+
+        verdict = hr.unwrap_filepress(
+            "https://new3.filepress.lat/file/6ad7ecde69b577b115172142/",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "active", verdict)
+        self.assertEqual(verdict["final_url"],
+                         "https://aws.flapdoodle.cyou/download/abc123/"
+                         "Film%20%282024%29%20%5B1080p%5D.mkv")
+        self.assertEqual(verdict["content_type"], "video/x-matroska")
+        self.assertEqual(verdict["http_status"], 206)
+
+    def test_filepress_unwrap_522_origin_is_error_never_active(self):
+        """The download origin aws.flapdoodle.cyou answers 522 on every
+        /download/* path (measured ~50 min, both egresses, 2026-11-13).
+        A minted link that cannot be read is an error, never active — the
+        gate must refuse it, and the row must not be served."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            if url.endswith("/api/file/downlaod/"):
+                return (200, json.dumps(
+                    {"status": True, "statusCode": 200,
+                     "data": "6ad7ecde69b577b115172142"}).encode(), {}, url)
+            if url.endswith("/api/file/downlaod2/"):
+                return (200, json.dumps(
+                    {"status": True, "statusCode": 200,
+                     "data": ["https://aws.flapdoodle.cyou/download/abc123/"
+                              "Film.mkv"]}).encode(), {}, url)
+            return (522, b"", {"content-type": "text/html"}, url)
+
+        verdict = hr.unwrap_filepress(
+            "https://new3.filepress.lat/file/6ad7ecde69b577b115172142/",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "error", verdict)
+        self.assertEqual(verdict["http_status"], 522)
+        self.assertIn("HTTP 522", " ".join(verdict["notes"]))
+
+    def test_filepress_unwrap_method_hidden_is_unknown(self):
+        """METHOD_HIDDEN is the API's misleading name for 'this file is
+        not in this mirror's index' — unknown, never dead: the file may
+        mint fine from another mirror."""
+        hr = fast_fetch._embed_resolvers()
+
+        def fake_fetch(url, headers=None, timeout=25, method="GET",
+                       follow=True, data=None):
+            return (200, json.dumps(
+                {"status": False, "statusCode": 404,
+                 "data": "METHOD_HIDDEN"}).encode(), {}, url)
+
+        verdict = hr.unwrap_filepress(
+            "https://new2.filepress.lat/file/6ad7599b69b577b115024f89/",
+            fetch=fake_fetch)
+        self.assertEqual(verdict["status"], "unknown", verdict)
+        self.assertIn("METHOD_HIDDEN", " ".join(verdict["notes"]))
+
+    def test_filepress_unwrap_no_file_id_is_unknown(self):
+        hr = fast_fetch._embed_resolvers()
+        verdict = hr.unwrap_filepress("https://new3.filepress.lat/",
+                                      fetch=lambda *a, **k: (404, b"", {}, ""))
+        self.assertEqual(verdict["status"], "unknown", verdict)
+        self.assertIn("no file id", " ".join(verdict["notes"]))
+
+    def test_filepress_filename_encoding_is_idempotent(self):
+        """A raw filename and an already-encoded one must mint the same
+        URL — double-encoding (%25) breaks the signature."""
+        hr = fast_fetch._embed_resolvers()
+        raw = hr._filepress_encode_filename(
+            "https://x.cyou/download/abc/Film (2024) [1080p].mkv")
+        encoded = hr._filepress_encode_filename(
+            "https://x.cyou/download/abc/Film%20%282024%29%20%5B1080p%5D.mkv")
+        self.assertEqual(raw, encoded)
+        self.assertEqual(raw, "https://x.cyou/download/abc/"
+                              "Film%20%282024%29%20%5B1080p%5D.mkv")
+
     def test_streamtape_rebuild_uses_norobotlink_not_the_decoy(self):
         """Session 103: the raw #ideoooolink div is a decoy (wrong id,
         answers {"status":500}); only the norobotlink/captchalink JS
@@ -2819,6 +2935,47 @@ class DatabaseSaveTests(unittest.TestCase):
                 " WHERE id = ?", (stored["id"],)).fetchone()
         self.assertEqual(row["final_url"],
                          "https://cold2.example/dl/abc/Film.2024.1080p.mkv")
+        self.assertEqual((row["is_temporary"], row["status"]), (1, "active"))
+
+    def test_resolve_live_source_unwraps_a_filepress_page_to_its_direct_mkv(self):
+        """Filepress cracked 2026-11-13 (FileBee downlaod/downlaod2).
+        The unwrapper's Range probe IS the gate evidence — the gate
+        probe is stubbed to FAIL here on purpose: success anyway proves
+        the skip. The minted link is a temporary signed file, never
+        permanent."""
+        stored = self._embed_source(
+            "moviesmela", "filepress",
+            "https://new3.filepress.lat/file/6ad7ecde69b577b115172142/")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing), \
+             patch.object(fast_fetch, "probe_url_ttl",
+                          return_value=(None, {"observed": False,
+                                               "reason": "no_directive"})):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://aws.flapdoodle.cyou/download/abc123/"
+                         "Film.2024.1080p.mkv")
+        self.assertTrue(res["refreshed"])
+        self.assertTrue(res["is_temporary"], "a minted file link is never permanent")
+        self.assertEqual(resolvers.calls,
+                         [("filepress",
+                           "https://new3.filepress.lat/file/6ad7ecde69b577b115172142/",
+                           True)])
+        with fast_fetch.get_db() as conn:
+            row = conn.execute(
+                "SELECT final_url, is_temporary, status FROM download_sources"
+                " WHERE id = ?", (stored["id"],)).fetchone()
+        self.assertEqual(row["final_url"],
+                         "https://aws.flapdoodle.cyou/download/abc123/"
+                         "Film.2024.1080p.mkv")
         self.assertEqual((row["is_temporary"], row["status"]), (1, "active"))
 
     def test_resolve_live_source_unwraps_a_streamtape_embed_to_its_signed_mp4(self):

@@ -334,6 +334,7 @@ SERVICE_PKEMBED = "pkembed"
 SERVICE_GDRIVE = "gdrive"
 SERVICE_ANIMAHD = "animahd-player"
 SERVICE_GOFILE = "gofile"
+SERVICE_FILEPRESS = "filepress"
 SERVICE_STREAMTAPE = "streamtape"
 SERVICE_STREAM = "stream"
 SERVICE_STREAMWISH = "streamwish"
@@ -2622,6 +2623,181 @@ def unwrap_gofile(url: str, fetch=None, verify: bool = True) -> dict:
                      method=method, follow=follow)
 
     return _finish_media(result, _authed_fetch, True)
+
+
+# ---------------------------------------------------------------------------
+# filepress / filebee — the FileBee download API chain
+# ---------------------------------------------------------------------------
+#
+# Proven live 2026-11-13 against the FileBee SPA (filepress.lat / filebee.xyz
+# family). The page itself is challenge-gated (403) from datacenter IPs, but
+# the JSON API underneath answers real JSON from the same egress — the
+# challenge applies to the HTML route, not the API route. Two POSTs, no
+# browser, no captcha, no JS:
+#
+#   POST https://new3.filepress.lat/api/file/downlaod/
+#     {"id": "<fileId>", "method": "indexDownlaod", "captchaValue": null}
+#     -> {"status": true, "statusCode": 200, "data": "<24-hex token>"}
+#   POST https://new3.filepress.lat/api/file/downlaod2/
+#     {"id": "<token>", "method": "indexDownlaod", "captchaValue": null}
+#     -> {"status": true, "statusCode": 200, "data": ["<direct .mkv link>"]}
+#
+# (Method name is the API's own spelling, "indexDownlaod" — a probe of 27
+# other spellings found it is the ONLY recognised method; everything else is
+# METHOD_NOT_FOUND.)
+#
+# The minted link is a direct file on aws.flapdoodle.cyou:
+#   https://aws.flapdoodle.cyou/download/<base64>/Filename.mkv
+# The base64 segment decodes to <fileKey>@<timestampMs>@<IPv6>@<signature>.
+# Tokens are stable per file for 10+ minutes. Filenames with spaces or
+# brackets MUST be percent-encoded or HTTP clients reject the URL.
+#
+# Measured limits, 2026-11-13 (must be re-measured before trusting):
+#   - The API base MUST be new3.filepress.lat with a matching Referer.
+#     new2 301s to new3 and filebee.xyz 301s to filebee.top (unreachable);
+#     a mismatched Referer turns the answer into INVALID_REQUEST.
+#   - The download origin aws.flapdoodle.cyou answered HTTP 522 on EVERY
+#     /download/* path for ~50 min from BOTH egresses, so no minted link
+#     has yet played. The unwrapper is built and gated so a dead origin can
+#     never be served: verify=True Range-probes the minted link and only an
+#     "active" verdict reaches the player.
+#   - The Oracle VM egress is 403-challenged on the API itself
+#     (cf-mitigated: challenge), so this resolver cannot run in production
+#     from the Oracle VM as-is. The unwrapper is still worth landing: it is
+#     the proven chain, it mints correctly, and it will serve the moment the
+#     API/origin answers from the production egress again.
+FILEPRESS_API_BASE = "https://new3.filepress.lat"
+FILEPRESS_METHOD = "indexDownlaod"
+FILEPRESS_TIMEOUT = 15
+_FILEPRESS_ID_RE = re.compile(r"^[0-9a-f]{24}$")
+
+
+def _filepress_extract_id(url: str) -> str:
+    """The 24-hex file id out of a filepress/filebee page URL, or ""."""
+    if not url:
+        return ""
+    u = url.strip()
+    # /file/<id>/..., /<id>/, or a bare id
+    m = re.search(r"/(?:file/)?([0-9a-f]{24})(?:[/?#]|$)", u)
+    if m:
+        return m.group(1)
+    if _FILEPRESS_ID_RE.match(u):
+        return u
+    return ""
+
+
+def _filepress_encode_filename(url: str) -> str:
+    """Percent-encode the last path segment of a minted link (spaces,
+    brackets and friends break HTTP clients otherwise)."""
+    if not url:
+        return url
+    head, sep, tail = url.rpartition("/")
+    if not sep:
+        return url
+    # Unquote first so an already-encoded segment is not double-encoded.
+    return head + sep + urllib.parse.quote(
+        urllib.parse.unquote(tail), safe=".-_~")
+
+
+def _filepress_api_call(fetch, endpoint: str, payload_id: str):
+    """One FileBee API POST. Returns (ok, data_or_error_note).
+
+    ok=True  -> data is the parsed "data" field (token str, or [link]).
+    ok=False -> data is a short machine-readable note for the verdict.
+    """
+    body = json.dumps({
+        "id": payload_id,
+        "method": FILEPRESS_METHOD,
+        "captchaValue": None,
+    }).encode("utf-8")
+    headers = {
+        "Content-Type": "application/json",
+        "Referer": FILEPRESS_API_BASE,
+        "User-Agent": USER_AGENT,
+    }
+    try:
+        status, raw, _hdrs, _url = fetch(
+            FILEPRESS_API_BASE + endpoint,
+            headers=headers, timeout=FILEPRESS_TIMEOUT,
+            method="POST", follow=False, data=body,
+        )
+    except Exception as exc:  # network-level failure: unknown, not dead
+        return False, "fetch_error:%s" % type(exc).__name__
+    if status in (403, 429):
+        return False, "blocked:%d" % status
+    if status in (404, 410):
+        return False, "dead:%d" % status
+    if status != 200:
+        return False, "http:%d" % status
+    try:
+        parsed = json.loads(raw.decode("utf-8", "replace"))
+    except Exception:
+        return False, "bad_json"
+    if not isinstance(parsed, dict):
+        return False, "bad_json"
+    if parsed.get("status") is not True:
+        # The API's own error vocabulary, verbatim:
+        #   METHOD_NOT_FOUND / METHOD_HIDDEN / INDEX_CLONE_FAILED /
+        #   INVALID_REQUEST. METHOD_HIDDEN is misleading — it means the
+        #   FILE is not in this mirror's index, not that the method is bad.
+        return False, str(parsed.get("data") or parsed.get("message") or "api_error")
+    return True, parsed.get("data")
+
+
+def unwrap_filepress(url, fetch=None, verify=True):
+    """Resolve a filepress/filebee page URL to a direct file link.
+
+    Returns a verdict dict like the other unwrap_* resolvers. The chain is
+    the two-POST FileBee API sequence above; with verify=True the minted
+    link is Range-probed and only a 206 with real video bytes is "active".
+    A dead download origin (522, timeout) is "error"/"unknown" — never
+    "dead" on one probe, and never served.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_FILEPRESS, url)
+    file_id = _filepress_extract_id(url)
+    if not file_id:
+        result["status"] = "unknown"
+        result["notes"].append("no file id in url")
+        return result
+
+    ok, token = _filepress_api_call(fetch, "/api/file/downlaod/", file_id)
+    if not ok:
+        note = "downlaod: %s" % token
+        if isinstance(token, str) and token.startswith("blocked:"):
+            result["status"] = "blocked"
+        elif isinstance(token, str) and token.startswith("dead:"):
+            result["status"] = "dead"
+        else:
+            result["status"] = "unknown"
+        result["notes"].append(note)
+        return result
+    if not isinstance(token, str) or not token:
+        result["status"] = "unknown"
+        result["notes"].append("downlaod: empty token")
+        return result
+
+    ok, links = _filepress_api_call(fetch, "/api/file/downlaod2/", token)
+    if not ok:
+        note = "downlaod2: %s" % links
+        if isinstance(links, str) and links.startswith("blocked:"):
+            result["status"] = "blocked"
+        elif isinstance(links, str) and links.startswith("dead:"):
+            result["status"] = "dead"
+        else:
+            result["status"] = "unknown"
+        result["notes"].append(note)
+        return result
+    if not isinstance(links, list) or not links or not links[0]:
+        result["status"] = "unknown"
+        result["notes"].append("downlaod2: empty link list")
+        return result
+
+    direct = _filepress_encode_filename(str(links[0]))
+    result["final_url"] = direct
+    result["status"] = "active"
+    result["notes"].append("minted via FileBee downlaod/downlaod2")
+    return _finish_media(result, fetch, verify)
 
 
 # ---------------------------------------------------------------------------

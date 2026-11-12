@@ -6687,7 +6687,11 @@ RESOLVE_FAILURE_CLASSES = ("probe_failed", "no_unwrapper", "unwrap_failed")
 #: (filmu/cineverse) change what the resolver does with a row, so v2
 #: failure records written under the broken gate/dispatcher are stale
 #: and the rows deserve one fresh press.
-RESOLVER_VERSION = 3
+#: 4 — the filepress/filebee unwrapper (Session: filepress crack
+#: 2026-11-13): filepress copies failed under v3 with no unwrapper, so
+#: their failure records are stale and the rows deserve one fresh press
+#: now that the downlaod/downlaod2 chain exists.
+RESOLVER_VERSION = 4
 
 
 def _is_transport_verdict(verdict) -> bool:
@@ -7536,6 +7540,30 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 # after the direct hosts.
                 _unwrap_branch_taken = True
                 verdict = hr.unwrap_gofile(hoster_input("gofile"), verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_FILEPRESS
+                         or "filepress" in source_u.lower()
+                         or "filepress" in cached_u.lower()
+                         or "filebee" in source_u.lower()
+                         or "filebee" in cached_u.lower()):
+                # Filepress cracked 2026-11-13 (FileBee downlaod/downlaod2
+                # API chain, no browser, no captcha — see host_resolvers).
+                # The unwrapper's Range probe IS the gate evidence: only a
+                # 206 with real video bytes is "active". Measured limits:
+                # the download origin aws.flapdoodle.cyou answers 522 on
+                # every /download/* path (both egresses, ~50 min), and the
+                # Oracle VM egress is 403-challenged on the API itself, so
+                # no filepress link plays from production yet — this branch
+                # mints correctly and serves the moment the origin/API
+                # answers from the production egress again.
+                _unwrap_branch_taken = True
+                verdict = hr.unwrap_filepress(hoster_input("filepress"),
+                                              verify=True)
                 direct_u = embed_from_verdict(verdict)
                 if direct_u:
                     fresh_url = direct_u
