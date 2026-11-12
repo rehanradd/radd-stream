@@ -130,7 +130,7 @@ class SearchFilterStateTest {
         assertEquals(
             "loadMore must not paint its failure over a newer search's list",
             1,
-            "if (generation == searchGeneration)".toRegex().findAll(body).count(),
+            "if \\(generation == searchGeneration\\)".toRegex().findAll(body).count(),
         )
     }
 
