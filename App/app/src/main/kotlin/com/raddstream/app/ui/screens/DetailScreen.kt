@@ -447,18 +447,34 @@ internal fun detailContentPadding(
     layoutDirection: LayoutDirection,
     baseHorizontal: Dp = 16.dp,
     bottomBreathing: Dp = 40.dp,
-): PaddingValues = PaddingValues(
-    start = maxOf(baseHorizontal, safeDrawingPadding.calculateStartPadding(layoutDirection)),
-    top = maxOf(
-        scaffoldPadding.calculateTopPadding(),
-        safeDrawingPadding.calculateTopPadding(),
-    ),
-    end = maxOf(baseHorizontal, safeDrawingPadding.calculateEndPadding(layoutDirection)),
-    bottom = maxOf(
-        scaffoldPadding.calculateBottomPadding(),
-        safeDrawingPadding.calculateBottomPadding(),
-    ) + bottomBreathing,
-)
+): PaddingValues {
+    // This Compose version (BOM 2024.06.00 / foundation-layout 1.7) has no
+    // calculateStartPadding/calculateEndPadding on PaddingValues, so
+    // start/end resolve through the left/right members: in LTR the start
+    // side is the physical left, in RTL it is the physical right.
+    val safeStart = if (layoutDirection == LayoutDirection.Ltr) {
+        safeDrawingPadding.calculateLeftPadding(layoutDirection)
+    } else {
+        safeDrawingPadding.calculateRightPadding(layoutDirection)
+    }
+    val safeEnd = if (layoutDirection == LayoutDirection.Ltr) {
+        safeDrawingPadding.calculateRightPadding(layoutDirection)
+    } else {
+        safeDrawingPadding.calculateLeftPadding(layoutDirection)
+    }
+    return PaddingValues(
+        start = maxOf(baseHorizontal, safeStart),
+        top = maxOf(
+            scaffoldPadding.calculateTopPadding(),
+            safeDrawingPadding.calculateTopPadding(),
+        ),
+        end = maxOf(baseHorizontal, safeEnd),
+        bottom = maxOf(
+            scaffoldPadding.calculateBottomPadding(),
+            safeDrawingPadding.calculateBottomPadding(),
+        ) + bottomBreathing,
+    )
+}
 
 @Composable
 private fun DetailContent(

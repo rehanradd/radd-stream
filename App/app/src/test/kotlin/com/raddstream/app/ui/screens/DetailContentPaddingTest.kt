@@ -13,6 +13,10 @@ import org.junit.Test
  * display cutout. The content padding takes the larger of the Scaffold's
  * ask and the safe-drawing inset per side, so the two are never
  * double-counted: portrait is unchanged, landscape clears the cutout.
+ *
+ * The assertions read left/right (not start/end): this Compose version
+ * (BOM 2024.06.00 / foundation-layout 1.7) has no
+ * calculateStartPadding/calculateEndPadding on PaddingValues.
  */
 class DetailContentPaddingTest {
 
@@ -25,8 +29,8 @@ class DetailContentPaddingTest {
             safeDrawingPadding = PaddingValues(0.dp),
             layoutDirection = LayoutDirection.Ltr,
         )
-        assertEquals(16.dp, padding.calculateStartPadding(LayoutDirection.Ltr))
-        assertEquals(16.dp, padding.calculateEndPadding(LayoutDirection.Ltr))
+        assertEquals(16.dp, padding.calculateLeftPadding(LayoutDirection.Ltr))
+        assertEquals(16.dp, padding.calculateRightPadding(LayoutDirection.Ltr))
         assertEquals(64.dp, padding.calculateTopPadding())
         assertEquals(64.dp, padding.calculateBottomPadding())
     }
@@ -40,8 +44,8 @@ class DetailContentPaddingTest {
             safeDrawingPadding = PaddingValues(start = 28.dp, bottom = 20.dp),
             layoutDirection = LayoutDirection.Ltr,
         )
-        assertEquals(28.dp, padding.calculateStartPadding(LayoutDirection.Ltr))
-        assertEquals(16.dp, padding.calculateEndPadding(LayoutDirection.Ltr))
+        assertEquals(28.dp, padding.calculateLeftPadding(LayoutDirection.Ltr))
+        assertEquals(16.dp, padding.calculateRightPadding(LayoutDirection.Ltr))
         assertEquals(60.dp, padding.calculateBottomPadding())
     }
 
@@ -53,8 +57,8 @@ class DetailContentPaddingTest {
             safeDrawingPadding = PaddingValues(end = 28.dp, bottom = 20.dp),
             layoutDirection = LayoutDirection.Ltr,
         )
-        assertEquals(16.dp, padding.calculateStartPadding(LayoutDirection.Ltr))
-        assertEquals(28.dp, padding.calculateEndPadding(LayoutDirection.Ltr))
+        assertEquals(16.dp, padding.calculateLeftPadding(LayoutDirection.Ltr))
+        assertEquals(28.dp, padding.calculateRightPadding(LayoutDirection.Ltr))
     }
 
     @Test
@@ -73,12 +77,14 @@ class DetailContentPaddingTest {
 
     @Test
     fun rtlKeepsStartAndEndStraight() {
+        // In RTL the start side is the physical right: a 28 dp cutout on
+        // the start side lands on the right, the base 16 dp on the left.
         val padding = detailContentPadding(
             scaffoldPadding = PaddingValues(0.dp),
             safeDrawingPadding = PaddingValues(start = 28.dp),
             layoutDirection = LayoutDirection.Rtl,
         )
-        assertEquals(28.dp, padding.calculateStartPadding(LayoutDirection.Rtl))
-        assertEquals(16.dp, padding.calculateEndPadding(LayoutDirection.Rtl))
+        assertEquals(16.dp, padding.calculateLeftPadding(LayoutDirection.Rtl))
+        assertEquals(28.dp, padding.calculateRightPadding(LayoutDirection.Rtl))
     }
 }
