@@ -94,7 +94,8 @@ def _build_panel(path):
         "warmup_count INTEGER, warmup_interval_h INTEGER, "
         "rate_limit_play_per_min INTEGER, import_cap INTEGER, "
         "import_concurrency INTEGER, prefetch_queue INTEGER, "
-        "prefetch_concurrency INTEGER, domain_check_interval_min INTEGER)")
+        "prefetch_concurrency INTEGER, domain_check_interval_min INTEGER, "
+        "quarantine_min_failures INTEGER, quarantine_min_days INTEGER)")
     conn.execute(
         "CREATE TABLE pauses (id INTEGER PRIMARY KEY, target_type TEXT NOT NULL, "
         "target_id TEXT NOT NULL, is_paused INTEGER NOT NULL DEFAULT 1, "
@@ -140,10 +141,10 @@ def _build_panel(path):
             (9, "No such target", "Nobody", "info", "everyone", None, now - 10, now + 3600, "published"),
         ])
     conn.execute(
-        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        "INSERT INTO tuning_settings VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (1, "light", "#2BC79A", 1, 0, 8, 4, "my_list,home,home,search",
          "Links come from public sites. We host nothing.", 3, "radddao1@gmail.com", 12, 20, "720p",
-         2, 10, 6, 50, 24, 30, 25, 1, 100, 1, 60))
+         2, 10, 6, 50, 24, 30, 25, 1, 100, 1, 60, 3, 2))
     conn.execute(
         "INSERT INTO app_remote_config_history VALUES (?,?,?,?,?)",
         (1, 5, '{"config": {"min_version_code": 42, "config_version": 5}}',
@@ -573,7 +574,8 @@ class PanelFeedTests(unittest.TestCase):
              "warmup_count": 50, "warmup_interval_h": 24,
              "rate_limit_play_per_min": 30, "import_cap": 25,
              "import_concurrency": 1, "prefetch_queue": 100,
-             "prefetch_concurrency": 1, "domain_check_interval_min": 60})
+             "prefetch_concurrency": 1, "domain_check_interval_min": 60,
+             "quarantine_min_failures": 3, "quarantine_min_days": 2})
 
     def test_tuning_knobs_clamp_to_panel_bounds(self):
         conn = sqlite3.connect(self.panel_path)

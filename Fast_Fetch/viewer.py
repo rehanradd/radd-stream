@@ -4565,9 +4565,14 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
 
 
 def api_v1_get_work_detail(work_id, full: bool = False,
-                           base_url: str = "", ladder: bool = True) -> dict | None:
+                           base_url: str = "", ladder: bool = True,
+                           verify: bool = False) -> dict | None:
     """GET /api/v1/works/<id> — one work, every copy of it.
 
+    `verify` is the serve-time verification rule (Player Fix v2): the
+    HTTP route passes True, direct callers keep the unverified ladder.
+
+    `<id>` is a post id: the work is the group holding it (the list
     `<id>` is a post id: the work is the group holding it (the list
     route's `id` is the minimum member post id). The response is the
     representative post's `post_detail` shape — same view, same art
@@ -4694,7 +4699,7 @@ def api_v1_get_work_detail(work_id, full: bool = False,
                 norm["season"] = r_dict["season"]
                 norm["episode"] = r_dict["episode"]
                 norm_releases.append(norm)
-            p_dict["option_groups"] = (_option_groups(norm_releases, rel_list)
+            p_dict["option_groups"] = (_option_groups(norm_releases, rel_list, verify=verify)
                                        if ladder else [])
         p_dict["releases"] = rel_list
         p_dict["id"] = int(group["work_id"])
@@ -4741,6 +4746,11 @@ def api_v1_get_work_detail(work_id, full: bool = False,
                                 0 if e["kind"] == "season_poster" else 1,
                                 e["episode"]))
         p_dict["season_artwork"] = art
+        if verify and not full:
+            # Serve-time verification is on: kick the all-band
+            # re-verification in the background, unreported — the next
+            # press answers from what it banks.
+            _preresolve_for_detail(p_dict)
         return p_dict
 
 
@@ -5001,7 +5011,7 @@ def _fetch_releases_with_sources(conn, post_ids, full: bool = False,
             WHERE release_id = ?
             ORDER BY
                 CASE
-                    WHEN status IN ('dead', 'broken', 'gone') THEN 3
+                    WHEN status IN ('dead', 'broken', 'gone', 'quarantined') THEN 3
                     WHEN status = 'expired' THEN 2
                     WHEN status = 'active'
                          AND last_checked_at IS NOT NULL
@@ -5040,7 +5050,14 @@ def _fetch_releases_with_sources(conn, post_ids, full: bool = False,
 def api_v1_get_post_detail(post_id: int, full: bool = False,
                            base_url: str = "", ladder: bool = True,
                            warm: bool = False, vip: bool = False,
-                           audio: str = "") -> dict | None:
+                           audio: str = "", verify: bool = False) -> dict | None:
+    """GET /api/v1/posts/<id> — one post, every copy of it.
+
+    `verify` is the serve-time verification rule (Player Fix v2): the
+    HTTP route passes True, direct callers keep the unverified ladder.
+    When it is on, the detail open also kicks the async all-band
+    re-verification, whether or not `?warm=1` was asked for.
+    """
     _ensure_schema()
     with get_db() as conn:
         post = conn.execute("SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
@@ -5079,7 +5096,8 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
         if not full:
             p_dict["option_groups"] = (
                 _option_groups(releases, rel_list, vip=vip,
-                               audio_languages=_split_audio_param(audio))
+                               audio_languages=_split_audio_param(audio),
+                               verify=verify)
                 if ladder else [])
         p_dict["season_artwork"] = _season_artwork(conn, post_id)
         p_dict["releases"] = rel_list
@@ -5088,12 +5106,219 @@ def api_v1_get_post_detail(post_id: int, full: bool = False,
             # the auto tier now means the press answers from the resolved
             # cache instead of paying a live 5–11 s resolve under the player.
             p_dict["preresolve"] = _preresolve_for_detail(p_dict)
+        elif verify and not full:
+            # Serve-time verification is on: kick the same all-band
+            # re-verification in the background, unreported — the next
+            # press answers from what it banks.
+            _preresolve_for_detail(p_dict)
         return p_dict
 
 
+def _verify_tier_link(link, conn):
+    """Verify one ladder candidate; the default `_option_groups` verifier.
+
+    Cached-first (research fold-in §1): the ledger row's own measured
+    verdict (active + HTTP 200–399 within the hot TTL) serves without a
+    probe, and a fresh banked resolution inside `verify_candidate` does
+    the same. Only a never-checked (or stale) candidate pays a live
+    re-resolve + final-file probe. Returns a result dict
+    ``{verified, reason, verified_at, source_id, evidence}``; failure
+    evidence is returned, NOT written — `_verify_option_tiers` applies
+    the poison-cache guard first and records afterwards.
+    """
+    import serve_verify
+    try:
+        source_id = redact.parse_token(link.get("stream_id") or "",
+                                       signing_secret(), signed_only=True)
+    except Exception:      # noqa: BLE001 — an unparseable handle is unavailable
+        return {"verified": False, "reason": "unparseable", "source_id": None}
+    if not source_id:
+        return {"verified": False, "reason": "unparseable", "source_id": None}
+    source_id = int(source_id)
+    if conn is not None:
+        try:
+            row = conn.execute(
+                "SELECT status, http_status, last_checked_at FROM download_sources"
+                " WHERE id = ?", (source_id,)).fetchone()
+        except sqlite3.Error:
+            row = None
+        if row is not None:
+            cached = {"status": row[0], "http_status": row[1],
+                      "last_checked_at": row[2]}
+            if serve_verify.is_known_good(cached):
+                stamp = serve_verify._epoch_of(cached["last_checked_at"])
+                return {"verified": True, "reason": "cached",
+                        "verified_at": stamp, "source_id": source_id}
+    result = serve_verify.verify_candidate(
+        source_id, resolver=_resolve_coalesced, conn=conn,
+        record_evidence=False)
+    result["source_id"] = source_id
+    return result
+
+
+def _source_host(conn, stream_id: str) -> str:
+    """The bridge host behind a ladder handle, for host-priority ordering.
+
+    The projected link never carries a host (provenance); the ledger row
+    does. An unparseable handle or a missing row answers "" (neutral).
+    """
+    try:
+        source_id = redact.parse_token(stream_id or "", signing_secret(),
+                                       signed_only=True)
+    except Exception:      # noqa: BLE001 — an unparseable handle is unavailable
+        return ""
+    if not source_id or conn is None:
+        return ""
+    try:
+        row = conn.execute("SELECT source_url FROM download_sources"
+                           " WHERE id = ?", (int(source_id),)).fetchone()
+    except sqlite3.Error:
+        return ""
+    if row is None:
+        return ""
+    try:
+        import urllib.parse
+        return urllib.parse.urlsplit(str(row[0] or "")).netloc.lower()
+    except ValueError:
+        return ""
+
+
+def _verify_option_tiers(tier_rows, *, timeout: float = 10.0,
+                         verifier=None, conn=None, host_of=None):
+    """Verify every tier's candidates; hide bands with no verified link.
+
+    All candidates (top 3 per band, across all bands) probe concurrently
+    under one `timeout` deadline — the wait is ~one probe, not the sum.
+    Candidates are ordered by measured host priority first (best/
+    most-active hosts first, weak hosts last, unmeasured neutral — the
+    user-ordered host ranking), then by their existing score order, so
+    the first verified candidate in that order wins the band. Returns
+    ``(kept_tiers, poisoned)``. When the batch is poisoned (over half
+    the candidates got no answer at all) the ladder is returned
+    unchanged and nothing is recorded. Otherwise failure evidence is
+    recorded for every failed candidate, the first verified candidate
+    wins its band (stamped `verified_at`), verified runners-up stay as
+    backups, and a band with no verified candidate is dropped.
+    """
+    import concurrent.futures
+    import serve_verify
+    verify = verifier or _verify_tier_link
+
+    def _candidates(tier) -> list:
+        seen: set = set()
+        out = []
+        for item in [tier.get("link")] + list(tier.get("backups") or []):
+            if not isinstance(item, dict):
+                continue
+            stream_id = item.get("stream_id")
+            if not stream_id or stream_id in seen:
+                continue
+            seen.add(stream_id)
+            out.append(item)
+        return out[:serve_verify.VERIFY_CANDIDATES_PER_BAND]
+
+    def _host_score(link) -> float:
+        if conn is None:
+            return serve_verify.HOST_UNMEASURED_RANK
+        try:
+            host = host_of(link) if host_of is not None \
+                else _source_host(conn, link.get("stream_id") or "")
+        except Exception:      # noqa: BLE001 — a host lookup fault is neutral
+            host = ""
+        return serve_verify.host_rank_score(conn, host)
+
+    by_tier = []
+    for tier in tier_rows:
+        candidates = _candidates(tier)
+        ranked = sorted(enumerate(candidates),
+                        key=lambda pair: (-_host_score(pair[1]), pair[0]))
+        by_tier.append([link for _index, link in ranked])
+    jobs = [(tier_index, rank, link)
+            for tier_index, candidates in enumerate(by_tier)
+            for rank, link in enumerate(candidates)]
+    if not jobs:
+        return list(tier_rows), False
+    results: dict = {}
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=8)
+    try:
+        futures = {pool.submit(verify, link, conn): (tier_index, rank)
+                   for tier_index, rank, link in jobs}
+        done, _pending = concurrent.futures.wait(
+            list(futures), timeout=float(timeout))
+        for future in done:
+            try:
+                results[futures[future]] = future.result()
+            except Exception:      # noqa: BLE001 — a verifier fault is transport
+                results[futures[future]] = {"verified": False,
+                                            "reason": "transport"}
+    finally:
+        # Stragglers keep resolving in their threads (their answers are
+        # banked by the resolver path); the response must not wait for them.
+        pool.shutdown(wait=False, cancel_futures=True)
+    no_answer = 0
+    for tier_index, rank, _link in jobs:
+        result = results.get((tier_index, rank))
+        if result is None:
+            no_answer += 1
+        elif not result.get("verified") \
+                and str(result.get("reason") or "") \
+                in serve_verify.NO_ANSWER_REASONS:
+            no_answer += 1
+    if no_answer / len(jobs) > serve_verify.POISON_NO_ANSWER_FRACTION:
+        return list(tier_rows), True
+    # The batch is real evidence: record every failure now (the guard ran).
+    if conn is not None:
+        for _key, result in sorted(results.items()):
+            evidence = (result or {}).get("evidence")
+            if evidence:
+                serve_verify.record_probe_failure(
+                    conn, int(evidence["source_id"]),
+                    str(evidence["reason"]),
+                    http_status=int(evidence.get("http_status") or 0),
+                    final_url=str(evidence.get("final_url") or ""))
+    kept = []
+    for tier_index, tier in enumerate(tier_rows):
+        verified = []
+        for rank, link in enumerate(by_tier[tier_index]):
+            result = results.get((tier_index, rank))
+            if result and result.get("verified"):
+                link["verified_at"] = result.get("verified_at") or time.time()
+                verified.append(link)
+        if not verified:
+            continue
+        tier["link"] = verified[0]
+        tier["backups"] = verified[1:1 + tiers.BACKUP_LIMIT]
+        kept.append(tier)
+    return kept, False
+
+
 def _option_groups(releases, rel_list, *, vip: bool = False,
-                   audio_languages=()) -> list:
+                   audio_languages=(), verify: bool = False,
+                   verify_timeout: float = 10.0,
+                   _verifier=None, _host_of=None) -> list:
     """One best and fastest copy per quality band, for the player and the card.
+
+    `verify` is the Player Fix v2 serve-time rule (diagnosis §6.2 as refined
+    by the research fold-in): a band is served only when a link in it is
+    verified playable. The check is cached-first — a fresh banked resolution
+    or a measured-active verdict inside the hot TTL serves immediately —
+    and a live probe runs, in parallel with a bounded wait, only when the
+    band has no cached verdict at all (never-checked). The first verified
+    candidate wins its band — ordered by measured host priority first
+    (best/most-active hosts first, weak hosts last; user-ordered host
+    ranking, seeded from a link check) — and a band with no verified
+    candidate is hidden entirely (no row, no Play, no Download). The
+    served link carries a `verified_at` stamp. Gated tiers are verified
+    the same way — a VIP press gets a working link too — and an unverified
+    gated tier is hidden rather than served dead. `verify` defaults off:
+    direct callers (tests, offline builders) keep the unverified ladder;
+    the HTTP detail routes pass True.
+
+    The verification never lets a detail call hang: all candidates across
+    all bands probe concurrently under one `verify_timeout` deadline, and
+    a poisoned batch (over half the candidates with no answer at all —
+    our network is down, not the internet) leaves the ladder untouched
+    and records nothing.
 
     The ledger holds up to six copies of the same print on six servers; a viewer
     wants one row per quality (the owner's "Auto default + visible quality
@@ -5133,6 +5358,19 @@ def _option_groups(releases, rel_list, *, vip: bool = False,
                 ladders.append(ladder)
         merged = tiers.merge(ladders)
         if merged["tiers"]:
+            if verify:
+                # Player Fix v2 serve-time rule: verify (cached-first,
+                # bounded live probe when never-checked) before the
+                # projection, so the detail response, the ladder and
+                # `auto` all agree on the same verified winner. A
+                # poisoned batch leaves the ladder untouched.
+                with get_db() as _verify_conn:
+                    merged["tiers"], _poisoned = _verify_option_tiers(
+                        merged["tiers"], timeout=verify_timeout,
+                        verifier=_verifier, conn=_verify_conn,
+                        host_of=_host_of)
+                if not merged["tiers"]:
+                    continue
             for tier in merged["tiers"]:
                 tier["gated"] = bool(
                     tier["band"] in GATED_QUALITY_BANDS and not vip)
@@ -5284,6 +5522,9 @@ def _resolve_and_bank(source_id: int) -> None:
 
     Never raises: a warm-up that fails leaves the cache as it was, and the
     Play press pays the live resolve exactly as it would have without one.
+    An endpoint-answered failure also writes its evidence (Player Fix v2
+    §6.3): the warm is a probe, and a probe that proves a link dead must
+    be visible to every path. Transport failures record nothing.
     """
     try:
         import resolved_cache
@@ -5291,6 +5532,16 @@ def _resolve_and_bank(source_id: int) -> None:
         if res.get("success") and res.get("url") and not res.get("stale"):
             with get_db() as conn:
                 resolved_cache.record_resolved_cache(conn, int(source_id), res)
+        elif isinstance(res, dict):
+            cause = res.get("fail_cause")
+            if isinstance(cause, int) or cause == "not_media":
+                import serve_verify
+                reason = ("http_%d" % cause) if isinstance(cause, int) \
+                    else "webview"
+                with get_db() as conn:
+                    serve_verify.record_probe_failure(
+                        conn, int(source_id), reason,
+                        http_status=cause if isinstance(cause, int) else 0)
     except Exception:      # noqa: BLE001 — see _preresolve_is_warm
         pass
 
@@ -5312,31 +5563,48 @@ def _split_audio_param(value) -> tuple:
 
 
 def _preresolve_for_detail(p_dict: dict) -> dict:
-    """Warm the auto tier's link in the background; report warm/warming.
+    """Warm every band's top candidate in parallel; report warm/warming.
 
     The detail screen opens long before the user presses Play: resolving
-    the top link now means the press answers from the resolved cache
-    (~0.02 s measured) instead of paying a 5–11 s live resolve while the
-    player spins (audit #1). One link only — the auto tier — so a detail
-    open costs at most one background resolve on a one-vCPU box.
+    the top link of EVERY band now means the press answers from the
+    resolved cache (~0.02 s measured) instead of paying a 5–11 s live
+    resolve while the player spins (audit #1). Warming only the auto
+    tier left every other quality cold — the quality card's first press
+    on any other band paid the full cold resolve — so every band's winner
+    warms, each in its own daemon thread, kicked off the moment the
+    detail request arrives (research fold-in §1: this warm IS the async
+    re-verification of the title's bands). The `band` key stays for the
+    auto tier, for callers that read it; `bands` names every band warmed.
     """
+    bands: list = []
+    warmed: list = []
+    warming: list = []
     for group in p_dict.get("option_groups") or []:
-        auto = (group or {}).get("auto") or {}
-        stream_id = auto.get("stream_id")
-        if not stream_id:
-            continue
-        try:
-            source_id = redact.parse_token(stream_id, signing_secret(),
-                                           signed_only=True)
-        except Exception:      # noqa: BLE001 — an unparseable handle is unavailable
-            return {"status": "unavailable"}
-        if not source_id:
-            return {"status": "unavailable"}
-        if _preresolve_is_warm(int(source_id)):
-            return {"status": "warm", "band": auto.get("band")}
-        _start_preresolve(int(source_id))
-        return {"status": "warming", "band": auto.get("band")}
-    return {"status": "unavailable"}
+        for tier in (group or {}).get("tiers") or []:
+            link = (tier or {}).get("link") or {}
+            stream_id = link.get("stream_id")
+            if not stream_id:
+                continue
+            try:
+                source_id = redact.parse_token(stream_id, signing_secret(),
+                                               signed_only=True)
+            except Exception:      # noqa: BLE001 — an unparseable handle is unavailable
+                continue
+            if not source_id:
+                continue
+            band = (tier or {}).get("band")
+            bands.append(band)
+            if _preresolve_is_warm(int(source_id)):
+                warmed.append(band)
+            else:
+                _start_preresolve(int(source_id))
+                warming.append(band)
+    if not bands:
+        return {"status": "unavailable"}
+    auto = ((p_dict.get("option_groups") or [{}])[0].get("auto") or {})
+    return {"status": "warm" if not warming else "warming",
+            "band": auto.get("band"), "bands": bands,
+            "warmed": warmed, "warming": warming}
 
 
 def api_v1_rules() -> dict:
@@ -6206,7 +6474,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[3].isdigit():
                 detail = api_v1_get_work_detail(
                     int(parts[3]), full=full, base_url=base_url,
-                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"))
+                    ladder=query_params.get("ladder", ["1"])[0] not in ("0", "false"),
+                    # Player Fix v2: serve only verified bands (cached
+                    # verdict first, bounded live probe when never-checked).
+                    verify=True)
                 if detail:
                     self.send_json({"success": True, "data": detail})
                 else:
@@ -6303,7 +6574,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     # cache. `?audio=` orders the ladder by preferred audio.
                     warm=query_params.get("warm", ["0"])[0] in ("1", "true"),
                     vip=request_is_vip(self.headers, query_params),
-                    audio=query_params.get("audio", [""])[0])
+                    audio=query_params.get("audio", [""])[0],
+                    # Player Fix v2: serve only verified bands (cached
+                    # verdict first, bounded live probe when never-checked).
+                    verify=True)
                 if detail:
                     self.send_json({"success": True, "data": detail})
                 else:

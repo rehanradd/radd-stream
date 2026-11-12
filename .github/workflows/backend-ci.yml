@@ -829,6 +829,16 @@ jobs:
       # VIP gate. Offline — temp SQLite files.
       - name: 🧪 test_search_fuzzy.py
         run: python3 -S Fast_Fetch/test_search_fuzzy.py
+
+      # Player Fix v2 serve-time verification (diagnosis §6.2/§6.3/§6.4 +
+      # research fold-in): cached-first verification, bounded live probe
+      # only when never-checked, warm-all-bands, the 2-hard/3-flaky
+      # strike rule, quarantine-then-delete, the host circuit breaker +
+      # measured host priority (seeded from link-check CSVs), and the
+      # stratified sweep (oldest-first, sibling promotion, poison guard).
+      # Offline — fake resolvers/probers, temp SQLite files.
+      - name: 🧪 test_serve_verify.py
+        run: python3 -S Fast_Fetch/test_serve_verify.py
       - name: 🧪 test_work_ref.py
         run: python3 -S Fast_Fetch/test_work_ref.py
 

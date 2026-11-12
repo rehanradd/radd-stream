@@ -272,9 +272,13 @@ VIEWS: dict[str, frozenset[str]] = {
     # probe-measured Content-Type of the winner copy (Session 71: the detail
     # screen's honest source row reads Instant Stream vs Direct File off it);
     # it names a format, never a hoster, so it is safe to publish.
+    # `verified_at` is the serve-time freshness stamp (Player Fix v2 §6.2.5):
+    # the epoch second the served link was last verified playable. The app
+    # treats a stamp older than the window as unverified and re-asks.
     "ladder_link": frozenset({
         "stream_id", "play_url", "kind", "playable", "status", "expires_at",
         "is_resumable", "is_temporary", "file_size_bytes", "label", "mime_type",
+        "verified_at",
     }),
     # GET /api/v1/stats — scale, no per-site breakdown.
     #

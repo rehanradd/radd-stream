@@ -587,13 +587,16 @@ class DetailWarmTests(Fixture):
     """Audit #1: `?warm=1` reports warm/warming without slowing detail."""
 
     def test_warm_reports_warming_and_starts_the_resolve(self):
+        # Player Fix v2: warm-all-bands — the seed title has two tiers
+        # (720p, 1080p), so one warm thread starts per band, not one.
         with (mock.patch.object(viewer, "_preresolve_is_warm",
                                 return_value=False),
               mock.patch.object(viewer, "_start_preresolve") as start):
             detail = viewer.api_v1_get_post_detail(self.seed_id, warm=True)
         self.assertEqual(detail["preresolve"]["status"], "warming")
         self.assertEqual(detail["preresolve"]["band"], "720p")
-        start.assert_called_once()
+        self.assertEqual(detail["preresolve"]["bands"], ["720p", "1080p"])
+        self.assertEqual(start.call_count, 2)
 
     def test_warm_reports_warm_when_the_cache_has_it(self):
         with (mock.patch.object(viewer, "_preresolve_is_warm",

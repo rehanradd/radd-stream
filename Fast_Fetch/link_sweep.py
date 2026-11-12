@@ -61,7 +61,6 @@ import argparse
 import json
 import math
 import os
-import random
 import sqlite3
 import sys
 import time
@@ -265,33 +264,50 @@ def allocate(by_host: dict, limit: int) -> dict:
 
 def draw_sample(conn: sqlite3.Connection, limit: int, *,
                 seed: int | None = None) -> tuple[list[dict], dict]:
-    """Draw the stratified sample: pass 1 counts the strata, pass 2 takes a
-    reservoir per host. Returns the sampled rows and the plan that produced
-    them (strata, allocation, population)."""
+    """Draw the stratified sample: pass 1 counts the strata, pass 2 takes
+    the OLDEST-evidenced links per host (never-evidenced first), deduped
+    on the normalised URL. Returns the sampled rows and the plan that
+    produced them (strata, allocation, population).
+
+    Stratified by host (proportional allocation) AND by age: the sample
+    walks the cold tail instead of re-drawing it at random, so a link
+    nobody has checked in months is checked before one checked last week.
+    The same file under several URLs is checked once (normalised dedupe).
+    `seed` is accepted for callers that pass one; selection is
+    deterministic by evidence age, so the same call draws the same sample.
+    A projection without a `last_evidence_at` column falls back to id order.
+    """
     import link_health
+    import serve_verify
 
     strata_info = strata(conn)
     allocation = allocate(strata_info["by_host"], limit)
-    rng = random.Random(seed)
-    reservoirs: dict[str, list[dict]] = {host: [] for host in allocation}
-    seen: dict[str, int] = {host: 0 for host in allocation}
-    for link_id, url, final_url, service in conn.execute(
-            "SELECT id, url, final_url, service FROM cat_links ORDER BY id"):
+    try:
+        rows = conn.execute(
+            "SELECT id, url, final_url, service FROM cat_links"
+            " ORDER BY COALESCE(last_evidence_at, 0) ASC, id ASC").fetchall()
+    except sqlite3.Error:
+        rows = conn.execute(
+            "SELECT id, url, final_url, service FROM cat_links"
+            " ORDER BY id").fetchall()
+    taken: dict[str, int] = {host: 0 for host in allocation}
+    seen_urls: set[str] = set()
+    sample: list[dict] = []
+    for link_id, url, final_url, service in rows:
         if not _probeable(url or "", final_url or ""):
             continue
         host = link_health._host_of(final_url or url or "")
-        if host not in reservoirs:
+        if host not in allocation or taken[host] >= allocation[host]:
             continue
-        seen[host] += 1
-        row = {"link_id": int(link_id), "url": url or "",
-               "final_url": final_url or "", "service": service or "",
-               "host": host}
-        reservoir = reservoirs[host]
-        if len(reservoir) < allocation[host]:
-            reservoir.append(row)
-        elif rng.random() < allocation[host] / seen[host]:
-            reservoir[rng.randrange(len(reservoir))] = row
-    sample = [row for rows in reservoirs.values() for row in rows]
+        target = serve_verify.normalise_url(final_url or url or "")
+        if target and target in seen_urls:
+            continue
+        if target:
+            seen_urls.add(target)
+        taken[host] += 1
+        sample.append({"link_id": int(link_id), "url": url or "",
+                       "final_url": final_url or "", "service": service or "",
+                       "host": host})
     sample.sort(key=lambda row: row["link_id"])
     plan = {"population": strata_info["population"],
             "total_links": strata_info["total_links"],
@@ -415,6 +431,64 @@ def _probe_items(rows: list[dict]) -> list[dict]:
     return items
 
 
+def _promote_siblings(catalog_conn: sqlite3.Connection,
+                      staging_conn: sqlite3.Connection,
+                      failed_ids, *, known_ids, now: float) -> list[dict]:
+    """A failing sample promotes its siblings to a full check.
+
+    Siblings are the same movie on the same host (same ``release_id``,
+    same URL host) — when one copy of a title on a host is dead, the
+    others are the next most likely to be. Bounded: at most
+    ``SIBLING_PROMOTION_CAP`` per failure and ``SIBLING_PROMOTION_RUN_CAP``
+    per call, only links not already sampled or evidenced. Promoted rows
+    are written into the staging sample so a resume re-probes them.
+    """
+    import link_health
+    import serve_verify
+    promoted: list[dict] = []
+    if not failed_ids:
+        return promoted
+    for link_id in failed_ids:
+        if len(promoted) >= serve_verify.SIBLING_PROMOTION_RUN_CAP:
+            break
+        row = catalog_conn.execute(
+            "SELECT release_id, url, final_url FROM cat_links WHERE id = ?",
+            (int(link_id),)).fetchone()
+        if row is None:
+            continue
+        release_id, url, final_url = row[0], row[1] or "", row[2] or ""
+        host = link_health._host_of(final_url or url or "")
+        if not host or release_id is None:
+            continue
+        taken = 0
+        for sib in catalog_conn.execute(
+                "SELECT id, url, final_url, service FROM cat_links"
+                " WHERE release_id = ? AND id != ? ORDER BY id",
+                (release_id, int(link_id))).fetchall():
+            if taken >= serve_verify.SIBLING_PROMOTION_CAP:
+                break
+            sib_id = int(sib[0])
+            if sib_id in known_ids:
+                continue
+            sib_host = link_health._host_of(sib[2] or sib[1] or "")
+            if sib_host != host:
+                continue
+            if not _probeable(sib[1] or "", sib[2] or ""):
+                continue
+            known_ids.add(sib_id)
+            promoted.append({"link_id": sib_id, "url": sib[1] or "",
+                             "final_url": sib[2] or "",
+                             "service": sib[3] or "", "host": host})
+            taken += 1
+    if promoted:
+        with staging_conn:
+            staging_conn.executemany(
+                "INSERT OR IGNORE INTO link_sweep_sample"
+                " (link_id, host, sampled_at) VALUES (?, ?, ?)",
+                [(row["link_id"], row["host"], now) for row in promoted])
+    return promoted
+
+
 def run_sample(catalog_conn: sqlite3.Connection,
                staging_conn: sqlite3.Connection, *, limit: int = DEFAULT_LIMIT,
                seed: int | None = None, workers: int = DEFAULT_WORKERS,
@@ -424,12 +498,17 @@ def run_sample(catalog_conn: sqlite3.Connection,
     `prober` is `fn(items) -> results in input order` (default:
     `link_health.probe_many`, workers=8); tests inject a fake. Returns the
     run summary (the same shape `status()` reads back). A run that stops on
-    a guard returns state `paused_memory` / `paused_load` with a note; a run
-    that finishes returns `complete`. Re-running against the same staging
-    file resumes the stored sample — links already evidenced are not
-    re-probed.
+    a guard returns state `paused_memory` / `paused_load` /
+    `paused_network` with a note; a run that finishes returns `complete`.
+    Re-running against the same staging file resumes the stored sample —
+    links already evidenced are not re-probed. A failing sample promotes
+    its same-movie/same-host siblings to a full check, and a batch in
+    which over half the probes get no answer at all pauses the run with
+    nothing recorded (poison-cache guard: our network is down, not the
+    internet).
     """
     import link_health
+    import serve_verify
 
     ensure_staging(staging_conn)
     now = time.time()
@@ -465,9 +544,10 @@ def run_sample(catalog_conn: sqlite3.Connection,
     evidenced = {int(row[0]) for row in staging_conn.execute(
         "SELECT link_id FROM link_sweep_evidence")}
     pending = [row for row in sample if row["link_id"] not in evidenced]
+    seen_ids = {row["link_id"] for row in sample} | set(evidenced)
     counts = {"links_done": 0, "alive": 0, "dead": 0, "expired": 0,
               "blocked": 0, "no_verdict": 0, "host_parked": 0,
-              "rows_written": 0}
+              "rows_written": 0, "siblings_promoted": 0}
     if existing:
         for key in counts:
             counts[key] = int(existing.get(key) or 0)
@@ -502,6 +582,18 @@ def run_sample(catalog_conn: sqlite3.Connection,
         batch = [row for row in batch if row["host"] not in parked]
         counts["host_parked"] += len(parked_now)
         results = probe(_probe_items(batch)) if batch else []
+        # Poison-cache guard: over half the batch with no answer at all
+        # means our network is down, not the internet — record nothing
+        # for this batch and pause the run; the un-evidenced links are
+        # re-probed on resume.
+        if results and serve_verify.batch_is_poisoned(results):
+            no_answer = sum(1 for res in results
+                            if serve_verify.is_no_answer(res))
+            state = "paused_network"
+            notes = (f"{no_answer} of {len(results)} probes in this batch"
+                     " got no answer at all; recording nothing"
+                     " (poison-cache guard) — resume the run later")
+            break
         evidence_rows = []
         for row, result in zip(batch, results):
             verdict = _verdict_of(result)
@@ -535,6 +627,7 @@ def run_sample(catalog_conn: sqlite3.Connection,
             pending = kept
         counts["host_parked"] += newly_parked
         counts["rows_written"] += len(evidence_rows)
+        seen_ids |= {row["link_id"] for row in batch}
         with staging_conn:
             staging_conn.executemany(
                 "INSERT OR REPLACE INTO link_sweep_evidence"
@@ -545,6 +638,16 @@ def run_sample(catalog_conn: sqlite3.Connection,
             _upsert_run(staging_conn, started_at=started_at, updated_at=time.time(),
                         sample_limit=plan.get("limit", int(limit)), notes=notes,
                         **counts)
+        # A failing sample promotes its siblings (same movie/host) to a
+        # full check — they join the pending queue, bounded per failure
+        # and per run by the promoter.
+        failed_ids = [row["link_id"] for row, result in zip(batch, results)
+                      if _verdict_of(result) == "dead"]
+        promoted = _promote_siblings(
+            catalog_conn, staging_conn, failed_ids, known_ids=seen_ids,
+            now=time.time())
+        counts["siblings_promoted"] += len(promoted)
+        pending.extend(promoted)
     with staging_conn:
         _upsert_run(staging_conn, started_at=started_at, updated_at=time.time(),
                     sample_limit=plan.get("limit", int(limit)), notes=notes,
@@ -553,6 +656,7 @@ def run_sample(catalog_conn: sqlite3.Connection,
     summary["state"] = state
     summary["notes"] = notes
     summary["plan"] = plan
+    summary["siblings_promoted"] = int(counts["siblings_promoted"])
     return summary
 
 
@@ -567,9 +671,13 @@ def merge(catalog_conn: sqlite3.Connection,
     The operator's explicit action (the only writer in this module). Evidence
     is handed over in link_id order, in batches; a replay is a no-op because
     `apply_evidence` dedupes on (link_id, probed_at), so merging twice
-    changes nothing the second time.
+    changes nothing the second time. After the fold, the dead-link cleanup
+    runs its quarantine pass (never a delete here — deletion is a separate,
+    explicit operator call) and the stamp carries the cleanup counters:
+    newly marked dead, quarantined, deleted.
     """
     import catalog_v2
+    import serve_verify
 
     moment = time.time() if now is None else float(now)
     ensure_staging(staging_conn)
@@ -580,6 +688,7 @@ def merge(catalog_conn: sqlite3.Connection,
     run = status(staging_conn)
     merged = 0
     updated_total = 0
+    newly_marked_dead = 0
     for start in range(0, len(rows), max(1, int(batch_size))):
         chunk = rows[start:start + max(1, int(batch_size))]
         results = [{
@@ -599,6 +708,11 @@ def merge(catalog_conn: sqlite3.Connection,
         outcome = catalog_v2.apply_evidence(catalog_conn, results)
         merged += len(chunk)
         updated_total += int(outcome.get("links_updated") or 0)
+        newly_marked_dead += int(
+            (outcome.get("state_changes") or {}).get("dead") or 0)
+    # Quarantine pass (never a delete here): links whose journals earned
+    # the strike rule are excluded from every serve path from now on.
+    cleanup = serve_verify.quarantine_and_delete_dead_links(catalog_conn)
     measured = (run["alive"] + run["dead"] + run["expired"])
     stamp = {
         "started_at": run.get("started_at"),
@@ -612,6 +726,9 @@ def merge(catalog_conn: sqlite3.Connection,
         "margin_95": run["margin_95"],
         "merged_links": merged,
         "links_updated": updated_total,
+        "newly_marked_dead": newly_marked_dead,
+        "quarantined": int(cleanup.get("newly_quarantined") or 0),
+        "deleted": int(cleanup.get("deleted") or 0),
         "applied_at": moment,
     }
     catalog_conn.execute(
@@ -619,7 +736,11 @@ def merge(catalog_conn: sqlite3.Connection,
         ("link_sweep_last_run", json.dumps(stamp, sort_keys=True)))
     catalog_conn.commit()
     return {"evidence_rows": len(rows), "merged_links": merged,
-            "links_updated": updated_total, "stamp": stamp}
+            "links_updated": updated_total,
+            "newly_marked_dead": newly_marked_dead,
+            "quarantined": int(cleanup.get("newly_quarantined") or 0),
+            "deleted": int(cleanup.get("deleted") or 0),
+            "stamp": stamp}
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────────

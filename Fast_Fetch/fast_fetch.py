@@ -6797,6 +6797,38 @@ def _verdict_from_unwrap(verdict: dict) -> dict:
             "renditions": [], "failure": None}
 
 
+def _record_resolve_failure_on(conn, source_id: int, failure_class: str,
+                               *, now: float | None = None) -> None:
+    """The negative-cache write itself, on the caller's connection.
+
+    Split out of ``_record_resolve_failure`` so a caller that already
+    holds uncommitted writes on this database (serve-time verification:
+    the journal and the resolved-cache circuit are written on the same
+    connection first) can record the failure WITHOUT opening a second
+    connection to the same file — that second connection would block on
+    the first connection's write lock until ``busy_timeout`` (30 s) and
+    then fail silently, which is exactly what happened to the double-403
+    evidence in Player Fix v2 testing. Same row, same values, same
+    in-process host note; the caller owns the commit.
+    """
+    if failure_class not in RESOLVE_FAILURE_CLASSES:
+        return
+    conn.execute(
+        "UPDATE download_sources "
+        "SET last_failed_at = ?, failure_class = ?, "
+        "failure_resolver_v = ? WHERE id = ?",
+        (time.time() if now is None else float(now), failure_class,
+         RESOLVER_VERSION, source_id))
+    # The in-process health table is fed from here too: the row's
+    # service is a PK lookup, so this costs one cheap read on the
+    # failure path only, never on a success.
+    _row = conn.execute(
+        "SELECT service FROM download_sources WHERE id = ?",
+        (source_id,)).fetchone()
+    if _row and _row[0]:
+        _note_host_failure(_row[0])
+
+
 def _record_resolve_failure(source_id: int, failure_class: str) -> None:
     """Best-effort durable record that one resolve attempt failed.
 
@@ -6810,19 +6842,7 @@ def _record_resolve_failure(source_id: int, failure_class: str) -> None:
         return
     try:
         with get_db() as _conn:
-            _conn.execute(
-                "UPDATE download_sources "
-                "SET last_failed_at = ?, failure_class = ?, "
-                "failure_resolver_v = ? WHERE id = ?",
-                (time.time(), failure_class, RESOLVER_VERSION, source_id))
-            # The in-process health table is fed from here too: the row's
-            # service is a PK lookup, so this costs one cheap read on the
-            # failure path only, never on a success.
-            _row = _conn.execute(
-                "SELECT service FROM download_sources WHERE id = ?",
-                (source_id,)).fetchone()
-            if _row and _row[0]:
-                _note_host_failure(_row[0])
+            _record_resolve_failure_on(_conn, source_id, failure_class)
     except Exception:
         pass
 

@@ -1990,6 +1990,57 @@ def _release_has_unfailed_candidate(conn, release_id) -> bool:
     return False
 
 
+def _release_has_verified_candidate(conn, release_id) -> bool:
+    """Player Fix v2: does this print hold a playable copy with a FRESH
+    banked resolution (resolved within ``VERIFIED_FRESHNESS_S``)?
+
+    The fast, no-network half of the serve-time rule: a print the detail
+    warm already banked is known-good, so `/play` prefers it over a
+    print whose candidates are merely unfailed-but-never-checked. A
+    print with no fresh banked copy is NOT failed — it is unknown — so
+    this is a preference, never a refusal: the walk below falls back to
+    the unfailed-candidate rule when nothing in the work is verified.
+    Bounded and fast like `_release_has_unfailed_candidate`: indexed
+    reads + one cache lookup per link, no resolve, no probe — `/play`
+    keeps its 2 s budget, and the live verification already happened at
+    detail time (warm) or at serve time (detail ladder).
+    """
+    import resolved_cache
+    import serve_verify
+    now = time.time()
+    try:
+        rows = conn.execute(
+            """
+            SELECT l.kind, l.playability, l.state, l.final_url, l.url,
+                   l.ledger_link_id
+            FROM cat_links l
+            WHERE l.release_id = ?
+            """, (int(release_id),)).fetchall()
+    except Exception:      # noqa: BLE001 — an unreadable ledger means "unknown"
+        return False
+    for row in rows:
+        if row["ledger_link_id"] is None:
+            continue
+        if catalog_api._link_group(row) > catalog_api._GROUP_RESOLVE:
+            continue
+        if str(row["state"]) in tiers.UNPLAYABLE_STATES:
+            continue
+        try:
+            hit = resolved_cache.lookup_cache(
+                conn, int(row["ledger_link_id"]), want="watch")
+        except Exception:      # noqa: BLE001 — a cache fault is "unknown"
+            continue
+        if not hit:
+            continue
+        try:
+            resolved_at = float(hit.get("resolved_at"))
+        except (TypeError, ValueError):
+            continue
+        if 0 <= now - resolved_at <= serve_verify.VERIFIED_FRESHNESS_S:
+            return True
+    return False
+
+
 def _bearer_token(headers) -> str:
     raw = str((headers or {}).get("Authorization", "") or "")
     parts = raw.split()
@@ -2120,8 +2171,16 @@ def _play_first_playable(conn, release_ids, *, episode_id, include_adult,
     asking for the work gets the free sibling that plays, not the premium
     print they cannot. The walk's `first` may still be that gated best
     print, and `route_play` refuses it at the tail (no handles minted).
+
+    Player Fix v2: the walk now prefers a VERIFIED print — one holding a
+    copy with a fresh banked resolution (`_release_has_verified_candidate`,
+    the detail warm's evidence) — over the first merely-unfailed one.
+    When nothing in the work is verified the answer is exactly today's
+    (first unfailed, non-gated bundle), so a cold title never 409s for
+    want of a warm-up.
     """
     first = None
+    first_acceptable = None
     for release_id in release_ids:
         bundle = catalog_api.play_bundle(
             conn, release_id=int(release_id), episode_id=episode_id,
@@ -2132,8 +2191,11 @@ def _play_first_playable(conn, release_ids, *, episode_id, include_adult,
                 and _release_has_unfailed_candidate(conn, int(release_id))
                 and not _bundle_is_gated(conn, bundle, is_vip=is_vip,
                                          operator=operator)):
-            return bundle
-    return first
+            if first_acceptable is None:
+                first_acceptable = bundle
+            if _release_has_verified_candidate(conn, int(release_id)):
+                return bundle
+    return first_acceptable if first_acceptable is not None else first
 
 
 def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool,
@@ -2274,6 +2336,12 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
                           or not _release_has_unfailed_candidate(
                               conn, int(named_cat_id)))
             if needs_walk:
+                # Player Fix v2: prefer a VERIFIED sibling when one exists
+                # (a copy with a fresh banked resolution); otherwise the
+                # first acceptable sibling, exactly as before — a cold
+                # title never loses its named print for want of a warm-up.
+                acceptable = None
+                verified = None
                 for sibling_id in _same_coverage_sibling_prints(
                         conn, int(named_cat_id), operator=operator):
                     sibling_bundle = catalog_api.play_bundle(
@@ -2286,8 +2354,15 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
                             and not _bundle_is_gated(
                                 conn, sibling_bundle, is_vip=is_vip,
                                 operator=operator)):
-                        bundle = sibling_bundle
-                        break
+                        if acceptable is None:
+                            acceptable = sibling_bundle
+                        if _release_has_verified_candidate(conn, sibling_id):
+                            verified = sibling_bundle
+                            break
+                if verified is not None:
+                    bundle = verified
+                elif acceptable is not None:
+                    bundle = acceptable
     ok, code, _message = _from_layer2(bundle)
     if not ok:
         problem(handler, code=code or "not_found", rid=rid, instance=path,

@@ -59,6 +59,12 @@ KIND_WEIGHT = {
 #: Measured verdicts that name a copy nothing can play. A dead link must never
 #: win a quality band or be called playable, however good its other evidence is.
 DEAD_STATES = ("dead", "broken", "gone")
+#: Quarantine (serve_verify, Player Fix v2): a link whose journal earned the
+#: strike rule is excluded from every serve path, not merely scored 0.
+#: It is deliberately NOT in DEAD_STATES — the five-word unplayable
+#: vocabulary is pinned elsewhere — but `score`/`playable` treat it as dead
+#: and `for_release` drops it from the candidate pool entirely.
+QUARANTINED_STATES = ("quarantined",)
 #: A signed link whose window elapsed 403s exactly like a dead one, but its URL
 #: can be re-resolved — so it loses any bonus and never plays, yet is not zeroed.
 EXPIRED_STATES = ("expired", "unreachable")
@@ -101,7 +107,8 @@ def candidate_order_sql(alias: str = "") -> str:
     CASE {prefix}playback_type
         WHEN 'direct' THEN 1 WHEN 'url' THEN 2
         WHEN 'download' THEN 3 WHEN 'iframe' THEN 4 ELSE 5 END ASC,
-    CASE {prefix}status WHEN 'active' THEN 0 WHEN 'dead' THEN 9 ELSE 5 END ASC,
+    CASE {prefix}status WHEN 'active' THEN 0 WHEN 'dead' THEN 9
+    WHEN 'quarantined' THEN 9 ELSE 5 END ASC,
     CASE {prefix}service""" + "".join(
     f"\n        WHEN '{name}' THEN {index}"
     for index, name in enumerate(SERVER_PREFERENCE)) + f"""
@@ -234,6 +241,10 @@ def score(link, band: str = UNSPECIFIED) -> int:
     state = str(row.get("status") or row.get("state") or "").lower()
     if state in ("active", "live", "ok"):
         value += 40
+    elif state in QUARANTINED_STATES:
+        # Quarantine is exclusion, not a demotion: a quarantined copy is
+        # not a candidate at all, whatever its other evidence says.
+        return 0
     elif state in DEAD_STATES:
         # Audit critical 10: a dead copy is not a candidate. One −60 inside a
         # stack of bonuses (kind 100 + resumable + HTTP + speed) could still
@@ -283,7 +294,7 @@ def playable(link, band: str = UNSPECIFIED) -> bool:
     endpoint outranks a label written at ingest (audit critical 10)."""
     row = link if isinstance(link, dict) else dict(link)
     state = str(row.get("status") or row.get("state") or "").lower()
-    if state in UNPLAYABLE_STATES:
+    if state in UNPLAYABLE_STATES or state in QUARANTINED_STATES:
         return False
     kind = str(row.get("kind") or row.get("playback_type") or "").lower()
     if kind in ("iframe", "embed", "external"):
@@ -307,7 +318,15 @@ def for_release(release, links) -> dict:
     band = band_of(row.get("quality"), row.get("codec"), row.get("size"),
                    row.get("size_bytes"), row.get("resolution"),
                    row.get("quality_label"))
-    candidates = list(links)
+    # Quarantine is exclusion: a quarantined copy never reaches the
+    # winner/backup pool at all — it is not merely outscored. A print
+    # whose every copy is quarantined has no tiers, not a dead winner.
+    def _state_of(item) -> str:
+        item = item if isinstance(item, dict) else dict(item)
+        return str(item.get("status") or item.get("state") or "").lower()
+
+    candidates = [link for link in links
+                  if _state_of(link) not in QUARANTINED_STATES]
     if not candidates:
         return {"tiers": [], "auto": None}
     scored = sorted(

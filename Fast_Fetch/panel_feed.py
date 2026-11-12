@@ -522,7 +522,7 @@ def read_force_update(panel_path=None):
     return out
 
 
-#: The 11 tuning knobs the panel stores and the backend now applies, with
+#: The 13 tuning knobs the panel stores and the backend now applies, with
 #: the panel's own safe bounds and seed defaults (store.py TUNING_DEFAULTS,
 #: services.py TUNING_BOUNDS — the panel refuses a save outside these
 #: bounds, so a stored value is already inside them; the clamp here is
@@ -534,7 +534,17 @@ TUNING_KNOBS = {
     "resolver_concurrency": (2, 1, 4),
     "candidate_cap": (10, 3, 20),
     "cache_ttl_h": (6, 1, 24),
-    "warmup_count": (50, 0, 200),
+    # Player Fix v2: 200, not 50 — the prefetch selector already picks the
+    # top 200 titles, and the old cap throttled the sweep to 50 links, so
+    # most of the top 200 never got warmed and their first viewer paid the
+    # full cold resolve. One link per top title per 6 h sweep.
+    "warmup_count": (200, 0, 200),
+    # Player Fix v2 §6.3 / research strike rule: how many consecutive
+    # FLAKY failures (timeout/429/5xx) and how many separate days of
+    # failure quarantine a link. HARD failures (404/410/DNS) quarantine
+    # at 2 by the research rule, not by a knob.
+    "quarantine_min_failures": (3, 1, 10),
+    "quarantine_min_days": (2, 1, 30),
     "warmup_interval_h": (24, 6, 168),
     "rate_limit_play_per_min": (30, 10, 120),
     "import_cap": (25, 10, 1000),
@@ -546,7 +556,7 @@ TUNING_KNOBS = {
 
 
 def read_tuning_knobs(panel_path=None):
-    """The operator's 11 tuning knobs, clamped to the panel's own bounds.
+    """The operator's 13 tuning knobs, clamped to the panel's own bounds.
 
     Reads ``tuning_settings`` (id = 1), read-only, the same tolerant
     pattern as :func:`read_theme`: a missing database, table, row or
@@ -558,8 +568,9 @@ def read_tuning_knobs(panel_path=None):
     warmup_count / warmup_interval_h drive the prefetch pool's sweep,
     rate_limit_play_per_min is the play bucket, import_cap /
     import_concurrency bound the sync, prefetch_queue /
-    prefetch_concurrency bound the pool, and domain_check_interval_min
-    is the domain re-verify interval. Never raises.
+    prefetch_concurrency bound the pool, domain_check_interval_min
+    is the domain re-verify interval, and quarantine_min_failures /
+    quarantine_min_days are the dead-link strike thresholds. Never raises.
     """
     out = {name: default for name, (default, _lo, _hi) in TUNING_KNOBS.items()}
     conn = _open_panel(panel_path)
