@@ -2063,12 +2063,18 @@ def _bundle_is_gated(conn, bundle: dict, *, is_vip: bool, operator: bool) -> boo
     """True when this bundle's print sits in a gated band for this caller.
 
     Session 123: the mint refuses what the press would refuse. The band is
-    the release's own (`tiers.band_of` over the release's quality/codec/size/
-    title columns, never a link field) — the exact rule the viewer's
-    press-time gate applies per source id, so the two enforcement points
-    cannot disagree about a print. The operator and a VIP caller are never
-    gated; a bundle with no release id, or one whose release row is gone,
-    fails open (the press-time gate still stands behind it).
+    the release's own (`tiers.band_of` over the release's resolution/
+    quality/codec/title columns, never a link field) — the exact rule the
+    viewer's press-time gate applies per source id, so the two enforcement
+    points cannot disagree about a print. The operator and a VIP caller are
+    never gated; a bundle with no release id, or one whose release row is
+    gone, fails open (the press-time gate still stands behind it).
+
+    Salaar (2026-11-12): the bundle's release id is ALWAYS a cat id
+    (`play_bundle` translates a legacy id at entry), so this must read
+    `cat_releases`. It used to read legacy `releases` with that cat id —
+    a wrong row (or none, fail-open) — so a gated 4K print minted handles
+    for a free caller and every one pressed 402.
     """
     if operator or is_vip:
         return False
@@ -2079,14 +2085,18 @@ def _bundle_is_gated(conn, bundle: dict, *, is_vip: bool, operator: bool) -> boo
         return False
     try:
         row = conn.execute(
-            "SELECT quality, codec, size, release_title FROM releases "
+            "SELECT resolution, quality_label, codec, label FROM cat_releases "
             "WHERE id = ?", (release_id,)).fetchone()
     except Exception:      # noqa: BLE001 — an unreadable ledger means free tier
         return False
     if row is None:
         return False
-    band = tiers.band_of(row["quality"], row["codec"], row["size"],
-                         row["release_title"])
+    # No size_bytes: band_of matches substrings, and a byte count can
+    # contain "1080"/"720" spuriously ("2160" in 2160000000). The resolution
+    # alone names the band; label/codec are the same words the press gate
+    # reads on the legacy side.
+    band = tiers.band_of(row["resolution"], row["quality_label"],
+                         row["codec"], row["label"])
     return band in GATED_QUALITY_BANDS
 
 
@@ -2172,11 +2182,15 @@ def route_play(handler, conn, body: dict, *, rid: str, path: str, operator: bool
     # The caller's VIP capability, read once: the gate below is the same
     # question at three points, and it must not change mid-route.
     is_vip = _request_is_vip(handler.headers, query or {}, secret=secret)
-    # Session 108: a release_id in the body is a legacy id (the app's
-    # universe) and is translated; one derived from an episode/work
-    # lookup below is already a cat id and must NOT be translated —
-    # translating it would redirect to a different print.
-    legacy_release_id = release_id is not None
+    # Salaar (2026-11-12): a release_id in the body is a legacy id ONLY when
+    # the caller says so. A v2 detail hands the app cat ids (its prints carry
+    # `release_id` from `cat_releases`), and translating one as legacy
+    # presses whatever other title the map points at — live: cat 1318138
+    # (Salaar 4K) mapped to 1353016 (The Strangers Chapter 2), whose winner
+    # then 404s, and cat 1318132 (Salaar 720p) to 1406771 (download_only).
+    # A v1 detail still sends legacy ids, so the default stays True.
+    legacy_release_id = release_id is not None and \
+        body.get("legacy_release_id", True) is not False
     named = release_id is not None or episode_id is not None or work_id is not None
     # Session 109: the candidate prints for a derived target, best first.
     # The first entry is exactly the print the old code picked alone, so

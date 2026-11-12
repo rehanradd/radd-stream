@@ -1046,6 +1046,11 @@ class DetailViewModel @Inject constructor(
                     catalogRepository.playV2(
                         best.releaseId,
                         prefer = DataSaver.playPrefer(dataSaver, onWifi),
+                        // Salaar (2026-11-12): a v2 detail's best print is a
+                        // cat id — warming the wrong title's bundle would
+                        // cache it for Play to reuse, so the universe rides
+                        // along here exactly as it does at Play-press time.
+                        legacyReleaseId = workId < 0,
                     )
                 }
             }.getOrNull() ?: return@launch
@@ -1226,12 +1231,35 @@ class DetailViewModel @Inject constructor(
                     catalogRepository.playV2(
                         print.releaseId,
                         prefer = DataSaver.playPrefer(dataSaver, onWifi),
+                        // Salaar (2026-11-12): the id's universe is the
+                        // detail's — a v2 detail's print id is a cat id, and
+                        // sending it as legacy presses another title.
+                        legacyReleaseId = workId < 0,
                     )
                 }
             }.getOrNull()
             val playedV2 = v2 != null && v2.bundle.renditions.isNotEmpty() &&
                 playV2Bundle(v2, print, external)
             if (!playedV2) {
+                // Salaar (2026-11-12): a premium print the server would not
+                // bundle (the mint refuses it for a free caller) must step
+                // down to the best free print instead of pressing this
+                // print's own link — that link 402s at press time, and the
+                // player then burns its whole watchdog budget on copies that
+                // cannot play. Only for a caller without premium access: a
+                // VIP's empty bundle is a transient or dead print, and the
+                // fallback link is the right second chance for them.
+                if (!premiumAccess &&
+                    VipQualityGate.isPremiumResolution(print.resolution, freeQualityCap)
+                ) {
+                    val lower = stepDownPrint(
+                        _uiState.value.layout, print, premiumAccess, freeQualityCap,
+                    )
+                    if (lower != null) {
+                        playPrint(lower, external)
+                        return@launch
+                    }
+                }
                 // Gap A2 follow-up: the fallback used to launch with no
                 // runner-ups, so a stall on this print could only retry the
                 // same address. The print's own sibling copies ride along

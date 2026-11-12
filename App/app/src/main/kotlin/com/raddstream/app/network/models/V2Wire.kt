@@ -368,6 +368,13 @@ data class WireEntitlement(
  * POST /api/v2/play (§8.1): one of release_id / episode_id / work_id. `prefer` orders
  * the ladder (`quality` | `speed` | `data_saver`); null means the server's default.
  * `device` is a caller-chosen label, truncated to 64 chars server-side.
+ *
+ * Salaar (2026-11-12): `legacyReleaseId` names the id's universe. A v1 detail
+ * hands out legacy `releases.id` (true, the server default — null sends nothing,
+ * so an older server reads it as true); a v2 detail hands out cat ids and must
+ * send false, or the server translates the cat id through the legacy map to a
+ * different title (live: Salaar 4K cat 1318138 became 1353016, The Strangers
+ * Chapter 2). The two universes share numbers, so only the caller can say.
  */
 data class WirePlayRequest(
     @SerializedName("release_id")
@@ -378,6 +385,8 @@ data class WirePlayRequest(
     val workId: Int? = null,
     val prefer: String? = null,
     val device: String? = null,
+    @SerializedName("legacy_release_id")
+    val legacyReleaseId: Boolean? = null,
 )
 
 /**

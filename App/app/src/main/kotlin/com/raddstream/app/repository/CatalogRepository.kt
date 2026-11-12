@@ -327,7 +327,7 @@ class CatalogRepository @Inject constructor(
      * that used to work must never turn into an error for a call that is only an
      * upgrade. A ceiling on the wait is the caller's job, not this one's.
      */
-    suspend fun playV2(releaseId: Int, prefer: String? = null): V2PlayResult? {
+    suspend fun playV2(releaseId: Int, prefer: String? = null, legacyReleaseId: Boolean = true): V2PlayResult? {
         // Session 123: the call carries the viewer's sync key when signed in,
         // so the server's quality-gate mint refusal can exempt a VIP caller.
         // A guest sends no header at all. The key is read here, not passed
@@ -337,7 +337,15 @@ class CatalogRepository @Inject constructor(
         }.getOrNull()
         val response = try {
             apiProvider.current().play(
-                WirePlayRequest(releaseId = releaseId, prefer = prefer ?: "quality"),
+                WirePlayRequest(
+                    releaseId = releaseId,
+                    prefer = prefer ?: "quality",
+                    // Salaar (2026-11-12): a v2 detail's print id is a cat id,
+                    // and the server must not translate it through the legacy
+                    // map. The caller names the universe; the default stays
+                    // legacy, for the v1 detail that hands those out.
+                    legacyReleaseId = legacyReleaseId,
+                ),
                 authorization = authorization,
             )
         } catch (_: HttpException) {

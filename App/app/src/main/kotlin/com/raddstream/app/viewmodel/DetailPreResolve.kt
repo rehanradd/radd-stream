@@ -58,6 +58,38 @@ internal fun isPreresolveFresh(
 }
 
 /**
+ * Salaar (2026-11-12) — step down from a premium print the server would not
+ * bundle. The mint refuses a gated print for a free caller, and the print's
+ * own link 402s at press time, so pressing it anyway burns the player's
+ * whole watchdog budget on copies that cannot play. The step-down is the
+ * best print the caller may actually play (highest `rankKey` among the
+ * prints the quality cap allows, never the failed print itself), preferring
+ * one with a playable copy — a free print with nothing playable is still a
+ * better answer than a gated one, but only when nothing better exists.
+ * Null when the caller already has premium access (their empty bundle is a
+ * transient or dead print, not a gate) or when no allowed print remains.
+ */
+internal fun stepDownPrint(
+    layout: ReleaseLayout?,
+    failedPrint: RankedPrint,
+    premiumAccess: Boolean,
+    freeQualityCap: String,
+): RankedPrint? {
+    if (premiumAccess) return null
+    val all = layout?.let {
+        it.workPrints +
+            it.seasons.flatMap { season -> season.episodes.flatMap { e -> e.prints } } +
+            it.seasons.flatMap { season -> season.packedPrints }
+    }.orEmpty()
+    val allowed = all.filter {
+        it.releaseId != failedPrint.releaseId &&
+            !VipQualityGate.isPremiumResolution(it.resolution, freeQualityCap)
+    }
+    return allowed.filter { it.playableHere }.maxByOrNull { it.rankKey }
+        ?: allowed.maxByOrNull { it.rankKey }
+}
+
+/**
  * Gap A2 follow-up — the scope warm: the handle the quality card's Auto rung
  * would press for one season/episode scope, or null when the scope has
  * nothing playable here. The detail-open warm covers only the title's best

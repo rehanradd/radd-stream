@@ -905,6 +905,23 @@ class V2PlayTranslationTests(V2WireFixture):
         self.assertEqual(reply.status, 200, reply.json)
         self.assertEqual(reply.json["release_id"], self.public_release_id)
 
+    def test_release_id_with_legacy_false_uses_the_cat_id(self):
+        # Salaar (2026-11-12): a v2 detail hands the app cat ids, and a cat
+        # id that also exists as a legacy id was translated to another title
+        # (live: cat 1318138, Salaar 4K, mapped to 1353016, The Strangers
+        # Chapter 2, whose winner then 404s). `legacy_release_id: false`
+        # names the cat print itself, map row or not.
+        other_release = self._one(
+            "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
+            " WHERE w.title = 'Quiet Valley' ORDER BY r.id LIMIT 1")
+        self._write_map_row(self.public_release_id, other_release)
+        reply = self.post("/api/v2/play",
+                          {"release_id": self.public_release_id,
+                           "legacy_release_id": False})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertEqual(reply.json["release_id"], self.public_release_id)
+        self.assertEqual(reply.json["target"]["work_id"], self.public_work_id)
+
     def test_releases_route_serves_the_cat_print_not_the_mapped_target(self):
         other_release = self._one(
             "SELECT r.id FROM cat_releases r JOIN cat_works w ON w.id = r.work_id"
@@ -1013,6 +1030,27 @@ class V2PlayQualityGateTests(V2WireFixture):
         self.assertEqual(reply.json["tiers"], [])
         self.assertNotIn("stream_id", reply.text,
                          "a refused mint must not leak a handle anywhere")
+
+    def test_gate_reads_the_cat_print_not_a_legacy_row(self):
+        # Salaar (2026-11-12): the mint gate read legacy `releases` with the
+        # bundle's cat id, so a gated print minted handles for a free caller
+        # whenever that number happened to be a 720p legacy row (or absent).
+        # Plant the decoy: a legacy row carrying the gated cat id that says
+        # 720p. The mint must still refuse — the cat print is 1080p.
+        self.enable_gate()
+        best, _sibling = self._twin_prints("Gated Twins")
+        post_id = self._one("SELECT id FROM posts LIMIT 1")
+        self.conn.execute(
+            "INSERT OR REPLACE INTO releases"
+            " (id, post_id, release_title, quality, codec, size)"
+            " VALUES (?, ?, 'Gated Twins (2024) 720p WEBRip', '720p', '', '')",
+            (best, post_id))
+        self.conn.commit()
+        reply = self.post("/api/v2/play", {"release_id": best})
+        self.assertEqual(reply.status, 200, reply.json)
+        self.assertFalse(reply.json["playable"])
+        self.assertEqual(reply.json["reason"], "premium_quality_requires_vip")
+        self.assertEqual(reply.json["stream_candidates"], [])
 
     def test_a_signed_pass_exempts_the_gate(self):
         self.enable_gate()

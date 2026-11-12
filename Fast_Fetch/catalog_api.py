@@ -2251,8 +2251,10 @@ def play_bundle(conn, *, release_id, episode_id=None, include_adult=False,
     # id — translating it would press whatever legacy print happens to
     # hold that number (live 2026-11-08: work 116859, The Chalk Line,
     # resolves to cat release 1430243, which the rev-4 map redirects to
-    # 1381940, a different title). The default stays True: the only live
-    # v2-play caller, the app, sends legacy release ids.
+    # 1381940, a different title). The default stays True: a v1 detail
+    # sends legacy release ids. A v2 detail sends cat ids and marks them
+    # (`legacy_release_id=false` in the body, Salaar 2026-11-12: cat
+    # 1318138 translated as legacy became 1353016, another title).
     if legacy_release_id:
         release_id = translate_legacy_release_id(conn, release_id)
     detail = release_detail(conn, release_id=release_id, include_adult=include_adult)

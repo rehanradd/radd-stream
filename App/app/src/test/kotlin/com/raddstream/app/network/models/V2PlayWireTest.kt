@@ -182,6 +182,20 @@ class V2PlayWireTest {
     }
 
     @Test
+    fun `a v2 detail marks its cat id so the server does not translate it`() {
+        // Salaar (2026-11-12): a v2 detail's print id is a cat id, and the
+        // server translates an unmarked id through the legacy map to another
+        // title. False marks it; true (the v1 detail) is explicit; unset
+        // sends nothing and the server defaults to legacy.
+        val cat = gson.toJson(WirePlayRequest(releaseId = 555, prefer = "quality", legacyReleaseId = false))
+        assertTrue(cat.contains("\"legacy_release_id\":false"))
+        val legacy = gson.toJson(WirePlayRequest(releaseId = 555, prefer = "quality", legacyReleaseId = true))
+        assertTrue(legacy.contains("\"legacy_release_id\":true"))
+        val unset = gson.toJson(WirePlayRequest(releaseId = 555, prefer = "quality"))
+        assertFalse(unset.contains("legacy_release_id"))
+    }
+
+    @Test
     fun `the coverage keeps the catalog episode id for the offset post`() {
         val response = gson.fromJson(responseJson, WirePlayResponse::class.java)
         val coverage = response.coverage!!.toPlayerCoverage()

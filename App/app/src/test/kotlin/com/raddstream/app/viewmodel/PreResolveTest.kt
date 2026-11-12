@@ -233,4 +233,49 @@ class PreResolveTest {
         assertEquals(6_000L, PLAY_V2_TIMEOUT_MS)
         assertTrue(PLAY_V2_TIMEOUT_MS < PRERESOLVE_TIMEOUT_MS)
     }
+
+    // ── Salaar (2026-11-12): step down from a gated print ───────────────────
+
+    @Test
+    fun `step-down picks the best allowed print after a gated one fails`() {
+        val layout = movieLayout()
+        val failed = bestPrintOf(layout)!!
+
+        assertEquals(22, failed.releaseId)
+        assertEquals(11, stepDownPrint(layout, failed, premiumAccess = false, freeQualityCap = "720p")?.releaseId)
+    }
+
+    @Test
+    fun `step-down is null when no allowed print remains`() {
+        val layout = ReleaseLayoutBuilder.build(
+            "movie",
+            listOf(ReleaseDetail(id = 22, quality = "1080p")),
+        )
+        val failed = bestPrintOf(layout)!!
+
+        assertNull(stepDownPrint(layout, failed, premiumAccess = false, freeQualityCap = "720p"))
+    }
+
+    @Test
+    fun `step-down never runs for a premium caller`() {
+        val layout = movieLayout()
+        val failed = bestPrintOf(layout)!!
+
+        assertNull(stepDownPrint(layout, failed, premiumAccess = true, freeQualityCap = "720p"))
+    }
+
+    @Test
+    fun `step-down under a 480p cap demotes 720p too`() {
+        val layout = ReleaseLayoutBuilder.build(
+            "movie",
+            listOf(
+                ReleaseDetail(id = 31, quality = "720p"),
+                ReleaseDetail(id = 11, quality = "480p"),
+            ),
+        )
+        val failed = bestPrintOf(layout)!!
+
+        assertEquals(31, failed.releaseId)
+        assertEquals(11, stepDownPrint(layout, failed, premiumAccess = false, freeQualityCap = "480p")?.releaseId)
+    }
 }
