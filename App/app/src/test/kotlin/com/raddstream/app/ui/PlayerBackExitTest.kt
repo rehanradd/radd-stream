@@ -105,12 +105,72 @@ class PlayerBackExitTest {
         assertTrue(
             "GiveUpCard must lay its actions in a full-width Column, not a Row — " +
                 "five actions in one horizontal row overflow a phone dialog",
-            giveUpCardBody.contains("Column(Modifier.fillMaxWidth())"),
+            giveUpCardBody.contains("Column(") && giveUpCardBody.contains("fillMaxWidth()"),
         )
         assertFalse(
             "GiveUpCard must not lay actions out in a Row — that is the layout " +
                 "that wrapped 'Open with another player' onto four lines",
             giveUpCardBody.contains("Row {"),
+        )
+    }
+
+    /**
+     * Samsung RTL retest (Issue 7): the player forces landscape, so the
+     * dialog is short — six stacked 48dp actions can push "Back to
+     * details" and "Keep waiting" off the bottom edge, where a tap hits
+     * the scrim and does nothing. The stack must scroll inside a cap, so
+     * every action stays reachable on a short screen.
+     */
+    @Test
+    fun `give-up card actions scroll on a short screen`() {
+        assertTrue(
+            "GiveUpCard actions must scroll (verticalScroll) — on a landscape phone " +
+                "the stacked buttons otherwise run off the bottom edge",
+            giveUpCardBody.contains("verticalScroll(rememberScrollState())"),
+        )
+        assertTrue(
+            "GiveUpCard actions must be capped (heightIn max) so the scroll has " +
+                "a bound on a short screen",
+            giveUpCardBody.contains("heightIn(max = GiveUpActionsMaxHeight)"),
+        )
+        assertTrue(
+            "GiveUpActionsMaxHeight must be defined — the cap is the number " +
+                "the landscape math was done against",
+            source.contains("private val GiveUpActionsMaxHeight = "),
+        )
+    }
+
+    /**
+     * Samsung RTL retest (Issue 7): tapping "Back to details" left the
+     * card on screen — the tap only popped, so anything that swallowed
+     * the pop (or a Detail that re-pushes the player on return) left the
+     * same dialog up as if the tap never happened. The tap must clear
+     * the card's own state first, then pop, so it is visibly answered
+     * at once whatever the pop does.
+     */
+    @Test
+    fun `back to details clears the give-up state before popping`() {
+        assertTrue(
+            "Back to details must dismiss the give-up state before popping — " +
+                "a pop-only tap leaves the card up whenever the pop is swallowed",
+            source.contains("vm.dismissGiveUp(); vm.dismissDeadlineGiveUp(); onBackClick()"),
+        )
+    }
+
+    @Test
+    fun `both give-up cards use the clearing back-to-details`() {
+        // The handoff card and the 30 s deadline card are two call sites
+        // for the same GiveUpCard: both must take the lambda that clears
+        // state first, never the raw pop.
+        val count = "onBackToDetails = backToDetails".toRegex().findAll(source).count()
+        assertEquals(
+            "Both GiveUpCard call sites (handoff + deadline) must use onBackToDetails = backToDetails",
+            2,
+            count,
+        )
+        assertFalse(
+            "No GiveUpCard call site may pass the raw pop as its back-to-details",
+            source.contains("onBackToDetails = onBackClick"),
         )
     }
 
