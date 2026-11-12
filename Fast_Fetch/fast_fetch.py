@@ -5514,6 +5514,7 @@ def save_scraped_data(
     *,
     enrich_metadata: bool = True,
     ensure_db: bool = True,
+    queue_loc: str | None = None,
 ) -> int:
     """Enrich outside the DB lock, then atomically serialize identity lookup and save."""
     if not isinstance(data, dict):
@@ -5546,7 +5547,7 @@ def save_scraped_data(
     )
     _normalize_scraped_data(data)
     with _DB_WRITE_LOCK:
-        return _save_scraped_data(data, ensure_db=ensure_db)
+        return _save_scraped_data(data, ensure_db=ensure_db, queue_loc=queue_loc)
 
 
 def _normalize_scraped_data(data: dict) -> None:
@@ -5614,7 +5615,8 @@ def _enrich_scraped_metadata(data: dict) -> None:
         data["imdb_id"] = metadata["imdb_id"]
 
 
-def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
+def _save_scraped_data(data: dict, *, ensure_db: bool = True,
+                        queue_loc: str | None = None) -> int:
     """
     Atomically save media metadata, each site's page URL, release options, and sources.
     Match order: external IDs, previously indexed page URL, then an unambiguous
@@ -5622,6 +5624,14 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
     explicitly instead of silently corrupting cross-site records.
     """
     url, clean_title, title, source_site, content_type, valid_releases = _validate_scraped_data(data)
+
+    # The sitemap row that queued this page is the row to mark scraped, not
+    # necessarily the URL the page was fetched from: a domain rotation makes
+    # the fetched URL live on the new host while the queue row still carries
+    # the old host, so marking by fetched URL leaves the queue row pending
+    # forever (MoviesDrive, 2026-11-12). Callers that know the queue loc pass
+    # it as queue_loc; everyone else keeps the old behaviour (flag_loc == url).
+    flag_loc = queue_loc or url
 
     # One spelling for season/episode from here on: '1' and 'S01' become 'S01',
     # '1' and 'E01' become 'E01', the pack label 'Batch' becomes NULL. Every
@@ -5852,10 +5862,29 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
         if existing and valid_releases:
             # Refresh only the releases this page owns; other pages of the same site
             # contribute the rest of the title and must survive untouched.
-            conn.execute(
-                "DELETE FROM releases WHERE post_id = ? AND source_site = ? AND origin_url IS ?",
-                (post_id, source_site, origin_url),
-            )
+            # A domain rotation changes only the host: the same page re-saved from
+            # the new domain carries the same path but a different origin_url, so
+            # an exact-URL delete would miss the old rows and duplicate every
+            # release (MoviesDrive new1->new2 left 60 duplicated
+            # (post_id, release_title) pairs). Match on path as well as URL:
+            # same path = same page on a rotated host; a different path is a
+            # different page whose releases must survive.
+            origin_path = urllib.parse.urlparse(origin_url).path.rstrip("/") or "/"
+            stale = conn.execute(
+                "SELECT id, origin_url FROM releases WHERE post_id = ? AND source_site = ?",
+                (post_id, source_site),
+            ).fetchall()
+            stale_ids = [
+                row[0]
+                for row in stale
+                if (row[1] or "") == origin_url
+                or urllib.parse.urlparse(row[1] or "").path.rstrip("/") == origin_path
+            ]
+            if stale_ids:
+                conn.execute(
+                    f"DELETE FROM releases WHERE id IN ({','.join('?' * len(stale_ids))})",
+                    stale_ids,
+                )
 
         for rel in valid_releases:
             rel_cur = conn.execute(
@@ -5913,16 +5942,16 @@ def _save_scraped_data(data: dict, *, ensure_db: bool = True) -> int:
         # the retry budget spends attempts on it, `last_cause` records why, and
         # `select_crawl_candidates` keeps it visible until the budget runs out.
         if valid_releases:
-            conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ?", (url,))
+            conn.execute("UPDATE sitemap_cache SET scraped = 1 WHERE loc = ?", (flag_loc,))
         else:
             prior = conn.execute(
-                "SELECT attempts FROM sitemap_cache WHERE loc = ?", (url,)).fetchone()
+                "SELECT attempts FROM sitemap_cache WHERE loc = ?", (flag_loc,)).fetchone()
             parked, attempts = crawl_attempt_state(
                 "parse_no_releases", prior_attempts=(prior[0] if prior else 0) or 0)
             conn.execute(
                 "UPDATE sitemap_cache SET scraped = ?, attempts = ?, last_attempt = ?,"
                 " last_cause = ? WHERE loc = ?",
-                (parked, attempts, time.time(), "parse_no_releases", url),
+                (parked, attempts, time.time(), "parse_no_releases", flag_loc),
             )
 
     return post_id

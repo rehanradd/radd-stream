@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 import_moviesdrive.py — Dedicated staging importer and scraper for MoviesDrive
-(https://new2.moviesdrive.cyou), WordPress download catalog (Bollywood,
+(https://new3.moviesdrive.cyou), WordPress download catalog (Bollywood,
 Hollywood Hindi-dubbed, South, web series; 480p–2160p/4K, ESub).
 
 MEASURED LIVE FROM THE ORACLE VM, 2026-11-09 (Session 118):
@@ -18,9 +18,14 @@ MEASURED LIVE FROM THE ORACLE VM, 2026-11-09 (Session 118):
   * Mirrors seen in discovery: moviesdrives.cfd/.bid, moviedrive.org,
     new4.moviesdrive.beer — the registry tracks them; the importer reads the
     live base from the registry like the other 19 sites. Domain rotated
-    new1 -> new2 on 2026-11-10 (new1 302s to new2 and DROPS the query
-    string, so a stale base breaks wp-json paging — the registry, not the
-    fallback, must carry the live base).
+    new1 -> new2 on 2026-11-10, then new2 -> new3 on 2026-11-12 (verified
+    2026-11-13: new2 302s to new3 and DROPS the query string, so a stale
+    base breaks wp-json paging — the registry, not the fallback, must carry
+    the live base). A redirect that drops the query makes wp-json answer its
+    default latest-posts list; the slug lookup below VERIFIES the returned
+    post's slug before any save, and retries once against the live host the
+    returned post links — taking found[0] unchecked once saved the site's
+    newest post (Jailer 2) for 104 tasks in a row.
 
 Shape: one post per WP post (title/year via fast_fetch.parse_post_metadata
 on the WP title), one release per mdrive archive link (quality/size/codec
@@ -62,9 +67,9 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import fast_fetch
-from domain_resolver import get_active_base_url, resolve_if_dead
+from domain_resolver import get_active_base_url, resolve_if_dead, update_site_registry
 
-DEFAULT_BASE_URL = "https://new2.moviesdrive.cyou"
+DEFAULT_BASE_URL = "https://new3.moviesdrive.cyou"
 SITE_NAME = "moviesdrive"
 DEFAULT_DB_PATH = (
     Path("/home/ubuntu/radd-stream-data/moviesdrive.db")
@@ -106,6 +111,10 @@ class MoviesDriveClient:
         self.ssl_ctx = get_ssl_context()
         self._next_request_at = 0.0
         self._lock = threading.Lock()
+        # Final URL after redirects, from the last request (urllib follows
+        # 302s silently): the diagnostic that proves a stale base, since a
+        # rotation redirect drops the query string.
+        self.last_final_url: str | None = None
 
     def _wait(self):
         with self._lock:
@@ -126,8 +135,13 @@ class MoviesDriveClient:
             self._wait()
             try:
                 with urllib.request.urlopen(req, timeout=timeout, context=self.ssl_ctx) as resp:
+                    self.last_final_url = resp.geturl()
                     return resp.status, dict(resp.headers), resp.read().decode("utf-8", errors="replace")
             except urllib.error.HTTPError as e:
+                try:
+                    self.last_final_url = e.geturl()
+                except Exception:
+                    pass
                 if attempt == self.retries - 1:
                     return e.code, dict(e.headers), ""
                 time.sleep(1.0)
@@ -140,6 +154,96 @@ class MoviesDriveClient:
     def get_text(self, url: str, referer: str | None = None, timeout: int = 20) -> tuple[int, str, str]:
         status, _, text = self._get(url, "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", timeout)
         return status, url, text
+
+
+def _host_of_url(url: str | None) -> str:
+    """Lowercased host of a URL, or '' when it has none."""
+    if not url:
+        return ""
+    try:
+        return urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return ""
+
+
+def lookup_post_by_slug(client: MoviesDriveClient, slug: str) -> tuple[dict | None, str | None, str | None]:
+    """Fetch one WP post by slug and verify the answer really is that slug.
+
+    Returns (post, error, returned_link). Exactly one of post/error is set.
+    returned_link is the link of the post wp-json answered with, when any —
+    on a slug mismatch it names the live host, which is the evidence a
+    domain rotation (not a missing post) caused the mismatch.
+
+    A redirect that drops the query string makes wp-json answer its default
+    latest-posts list instead of the requested slug; taking found[0] unchecked
+    then saves the site's newest post for every task (2026-11-12: 104 tasks
+    all saved Jailer 2). Never trust found[0] here.
+    """
+    status, _, body = client._get(
+        f"{client.base_url}/wp-json/wp/v2/posts?slug={urllib.parse.quote(slug)}",
+        "application/json, */*;q=0.8",
+    )
+    if status != 200 or not body:
+        return None, f"wp-json slug lookup failed (HTTP {status})", None
+    try:
+        found = json.loads(body)
+    except json.JSONDecodeError:
+        return None, "wp-json slug lookup returned unparsable JSON", None
+    if not isinstance(found, list) or not found:
+        return None, "post not found in wp-json", None
+    post = found[0]
+    got_slug = (post.get("slug") or "")
+    if got_slug != slug:
+        return None, (
+            f"slug mismatch: asked {slug}, wp-json returned "
+            f"{got_slug or post.get('link') or 'an unslugged post'}"
+        ), (post.get("link") or "")
+    return post, None, (post.get("link") or "")
+
+
+def fetch_post_for_pending_url(
+    client: MoviesDriveClient,
+    slug: str,
+    *,
+    client_factory=None,
+    registry_updater=None,
+) -> tuple[dict | None, str | None]:
+    """Slug lookup with one bounded retry when the base has rotated.
+
+    Returns (post, error). On a slug mismatch, the post wp-json answered
+    with links the live host, so the lookup is retried once against that
+    host; a retry that also mismatches fails loudly. A successful retry
+    updates the registry (best-effort) so the next run starts on the live
+    base instead of paying a failed lookup per task.
+    """
+    post, error, returned_link = lookup_post_by_slug(client, slug)
+    if post is not None:
+        return post, None
+    if error is None or not error.startswith("slug mismatch"):
+        return None, error
+    hint_host = _host_of_url(returned_link)
+    base_host = _host_of_url(client.base_url)
+    if not hint_host or hint_host == base_host:
+        return None, error
+    factory = client_factory or MoviesDriveClient
+    retry_client = factory(f"https://{hint_host}", request_interval=client.request_interval)
+    post2, error2, _ = lookup_post_by_slug(retry_client, slug)
+    if post2 is None:
+        return None, f"{error}; retry on {hint_host} also failed: {error2}"
+    updater = registry_updater or update_site_registry
+    try:
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        updater(SITE_NAME, {
+            "active_base_url": f"https://{hint_host}",
+            "last_verified": now,
+            "verified_by": "wp-json",
+            "status": "active",
+            "last_checked": now,
+            "known_mirrors": [f"https://{hint_host}"],
+        })
+    except Exception:
+        pass
+    return post2, None
 
     def wp_posts_page(self, page: int = 1, per_page: int = WP_PER_PAGE) -> tuple[list, int]:
         """One wp-json posts page: (posts, total_pages from X-WP-TotalPages)."""
@@ -337,21 +441,77 @@ def sync_posts_to_db(client: MoviesDriveClient, db_path: Path) -> int:
     return total
 
 
-def save_post_record(data: dict, db_path: Path) -> int:
-    """Atomically saves a post and marks its URL scraped."""
+def save_post_record(data: dict, db_path: Path, queue_loc: str | None = None) -> int:
+    """Atomically saves a post and marks its queue row scraped.
+
+    queue_loc is the sitemap_cache loc that queued this page — the row to
+    mark. It is NOT necessarily data["url"]: a domain rotation makes the
+    fetched URL live on the new host while the queue row still carries the
+    old host, so marking by fetched URL leaves the queue row pending forever
+    (MoviesDrive, 2026-11-12). Defaults to data["url"] when the caller does
+    not know the queue loc.
+    """
     fast_fetch.DB_PATH = db_path
     post_id = fast_fetch.save_scraped_data(
         data,
         enrich_metadata=False,
         ensure_db=False,
+        queue_loc=queue_loc,
     )
     with fast_fetch._DB_WRITE_LOCK:
         with fast_fetch.get_db() as conn:
             conn.execute(
                 "UPDATE sitemap_cache SET scraped = 1 WHERE loc = ? AND site = 'moviesdrive'",
-                (data["url"],),
+                (queue_loc or data["url"],),
             )
     return post_id
+
+
+def dedupe_duplicate_releases(db_path: Path) -> dict:
+    """Delete older-domain duplicate releases left by past rotations.
+
+    Prior rotations (new1 -> new2) left 60 (post_id, release_title) pairs
+    carrying 2 distinct origin_urls across 15 posts: the refresh DELETE then
+    keyed on the exact origin_url, so a re-save from the new domain INSERTed
+    a second copy instead of replacing the first. For each such group, keep
+    the newest row (highest id) and delete the rest, with their sources.
+    Only runs when the operator passes --dedupe-releases; scraping never
+    mutates history on its own.
+    """
+    fast_fetch.DB_PATH = db_path
+    fast_fetch.init_db()
+    stats = {"groups": 0, "releases_deleted": 0, "sources_deleted": 0}
+    with fast_fetch._DB_WRITE_LOCK:
+        with fast_fetch.get_db() as conn:
+            groups = conn.execute(
+                """
+                SELECT post_id, release_title, COUNT(*) AS n,
+                       COUNT(DISTINCT origin_url) AS hosts, MAX(id) AS keep_id
+                FROM releases
+                WHERE source_site = 'moviesdrive'
+                GROUP BY post_id, release_title
+                HAVING n > 1 AND hosts > 1
+                """
+            ).fetchall()
+            for post_id, release_title, _n, _hosts, keep_id in groups:
+                doomed = conn.execute(
+                    "SELECT id FROM releases WHERE post_id = ? AND release_title = ? AND id != ?",
+                    (post_id, release_title, keep_id),
+                ).fetchall()
+                doomed_ids = [r[0] for r in doomed]
+                if not doomed_ids:
+                    continue
+                stats["groups"] += 1
+                placeholders = ",".join("?" * len(doomed_ids))
+                stats["sources_deleted"] += conn.execute(
+                    f"DELETE FROM download_sources WHERE release_id IN ({placeholders})",
+                    doomed_ids,
+                ).rowcount
+                stats["releases_deleted"] += conn.execute(
+                    f"DELETE FROM releases WHERE id IN ({placeholders})",
+                    doomed_ids,
+                ).rowcount
+    return stats
 
 
 def run_moviesdrive_scraper(
@@ -395,6 +555,10 @@ def run_moviesdrive_scraper(
 
     counters = {"completed": 0, "releases": 0, "sources": 0, "failed": 0,
                 "start_time": time.time()}
+    # Distinct posts actually written. The old counters counted
+    # len(data["releases"]) per task, which looked healthy (54 completed /
+    # 540 releases) while 104 tasks had all overwritten one row.
+    distinct_post_ids: set[int] = set()
     thread_local = threading.local()
 
     def get_thread_client() -> MoviesDriveClient:
@@ -409,20 +573,9 @@ def run_moviesdrive_scraper(
         # The WP post is re-read by slug from wp-json (one post per call);
         # the slug is the last path segment of the pending URL.
         slug = url.rstrip("/").split("/")[-1]
-        post = None
-        status, _, body = c._get(
-            f"{c.base_url}/wp-json/wp/v2/posts?slug={urllib.parse.quote(slug)}",
-            "application/json, */*;q=0.8",
-        )
-        if status == 200 and body:
-            try:
-                found = json.loads(body)
-                if isinstance(found, list) and found:
-                    post = found[0]
-            except json.JSONDecodeError:
-                post = None
-        if not post:
-            return {"failed": True, "error": "post not found in wp-json", "url": url}
+        post, error = fetch_post_for_pending_url(c, slug)
+        if post is None:
+            return {"failed": True, "error": error or "post not found in wp-json", "url": url}
 
         content_html = ((post.get("content") or {}).get("rendered") or "")
         archive_links = extract_archive_links(content_html)
@@ -441,9 +594,10 @@ def run_moviesdrive_scraper(
                     conn.execute("UPDATE sitemap_cache SET scraped = -1 WHERE loc = ?", (url,))
             return {"skipped": True, "reason": "no_releases"}
 
-        save_post_record(data, db_path)
+        post_id = save_post_record(data, db_path, queue_loc=url)
         return {
             "completed": True,
+            "post_id": post_id,
             "title": data["clean_title"],
             "releases": len(data["releases"]),
             "sources": sum(len(r["sources"]) for r in data["releases"]),
@@ -463,6 +617,8 @@ def run_moviesdrive_scraper(
                 counters["completed"] += 1
                 counters["releases"] += res.get("releases", 0)
                 counters["sources"] += res.get("sources", 0)
+                if res.get("post_id"):
+                    distinct_post_ids.add(res["post_id"])
             elif res.get("failed"):
                 counters["failed"] += 1
 
@@ -471,6 +627,7 @@ def run_moviesdrive_scraper(
                 speed = counters["completed"] / max(1, elapsed)
                 print(
                     f"[{counters['completed']}/{total_tasks}] "
+                    f"posts={len(distinct_post_ids)} "
                     f"releases={counters['releases']} sources={counters['sources']} "
                     f"failed={counters['failed']} speed={speed:.2f} posts/sec",
                     flush=True,
@@ -479,6 +636,7 @@ def run_moviesdrive_scraper(
                     with open(STATUS_FILE, "w", encoding="utf-8") as sf:
                         json.dump({
                             "completed": counters["completed"],
+                            "distinct_posts": len(distinct_post_ids),
                             "total": total_tasks,
                             "releases": counters["releases"],
                             "sources": counters["sources"],
@@ -488,6 +646,7 @@ def run_moviesdrive_scraper(
                 except Exception:
                     pass
 
+    counters["distinct_posts"] = len(distinct_post_ids)
     print(f"\n[✓] MoviesDrive scraping finished: {counters}", flush=True)
 
 
@@ -526,6 +685,8 @@ def parse_args():
     parser.add_argument("--base-url", default=None, help="Base origin URL (default: registry live domain)")
     parser.add_argument("--db-path", default=str(DEFAULT_DB_PATH), help="Target SQLite staging database")
     parser.add_argument("--sync-posts", action="store_true", help="Sync the wp-json post list to the database")
+    parser.add_argument("--dedupe-releases", action="store_true",
+                        help="Delete older-domain duplicate releases left by past rotations, then exit")
     parser.add_argument("--limit", type=int, default=None, help="Limit number of posts to scrape")
     parser.add_argument("--workers", type=int, default=3, help="Worker threads (default: 3)")
     parser.add_argument("--delay", type=float, default=0.5, help="Delay between requests per worker (s)")
@@ -539,6 +700,11 @@ def main():
 
     if args.status:
         get_status_summary(db_path)
+        return
+
+    if args.dedupe_releases:
+        stats = dedupe_duplicate_releases(db_path)
+        print(f"[✓] MoviesDrive release dedupe: {stats}", flush=True)
         return
 
     # Session 106: an explicit --base-url wins; otherwise the registry's

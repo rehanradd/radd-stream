@@ -658,10 +658,11 @@
       "notes": "Public no-key JSON API: /api/v1/search?q=<letter>&page=N (18/page, has_next) enumerates; /api/v1/movie/<slug> gives detail incl. watch + per-quality links[] on player/embed.jiofiles.pics (NEW host, not cracked — stored as-is). /movie/<slug> HTML is 404; /api/v1/movies and /api/v1/trending are 404."
     },
     "moviesdrive": {
-      "active_base_url": "https://new2.moviesdrive.cyou",
-      "last_verified": "2026-11-09T19:35:00Z",
+      "active_base_url": "https://new3.moviesdrive.cyou",
+      "last_verified": "2026-11-12T19:10:54Z",
       "verified_by": "wp-json",
       "known_mirrors": [
+        "https://new3.moviesdrive.cyou",
         "https://new2.moviesdrive.cyou",
         "https://new1.moviesdrive.cyou",
         "https://moviesdrives.cfd",
@@ -680,8 +681,8 @@
       ],
       "api_type": "wp_rest_api",
       "status": "active",
-      "rotation_history": [{"domain": "https://new1.moviesdrive.cyou", "seen_until": "2026-11-10"}, {"domain": "https://new2.moviesdrive.cyou", "seen_from": "2026-11-10"}],
-      "last_checked": "2026-11-09T19:35:00Z",
+      "rotation_history": [{"domain": "https://new1.moviesdrive.cyou", "seen_until": "2026-11-10"}, {"domain": "https://new2.moviesdrive.cyou", "seen_from": "2026-11-10", "seen_until": "2026-11-12"}, {"domain": "https://new3.moviesdrive.cyou", "seen_from": "2026-11-12"}],
+      "last_checked": "2026-11-12T19:10:54Z",
       "api_endpoint": "/wp-json/wp/v2/posts",
       "notes": "WP download catalog; posts link mdrive.lol/archive/<id>/ per quality, archive pages link hubcloud.ist/drive/... and gdflix.vip/file/... (known file-host families)."
     },
