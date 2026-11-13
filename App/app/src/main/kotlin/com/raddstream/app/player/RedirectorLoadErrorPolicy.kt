@@ -39,7 +39,12 @@ internal fun redirectorRetryDelayMs(responseCode: Int?): Long? =
  * (see [isGateRefusalError]): the [HttpDataSource.InvalidResponseCodeException]
  * itself, or its message, "Response code: 404".
  */
-@OptIn(UnstableApi::class)
+// NOTE: the class carries @UnstableApi directly, not @OptIn — in Media3
+// 1.3.1 UnstableApi is not a @RequiresOptIn marker, so @OptIn is ignored
+// (kotlinc warning) and lint still flags implementing the unstable
+// LoadErrorHandlingPolicy supertype. Marking the class propagates the
+// instability to its users instead of hiding it.
+@UnstableApi
 class RedirectorLoadErrorPolicy : LoadErrorHandlingPolicy {
 
     private val fallback = DefaultLoadErrorHandlingPolicy()
