@@ -358,6 +358,14 @@ VIDBOLT_CONTENT_RE = re.compile(
     re.I)
 VIBUXER_HOST_RE = re.compile(r"(?:^|\.)vibuxer\.com$", re.I)
 VIBUXER_CONTENT_RE = re.compile(r"^/(?:e|embed)/([A-Za-z0-9_-]+)/?$", re.I)
+# Streamwish's loader (hglink.to/<id>) and the vibuxer page it lands on
+# (vibuxer.com/<id>, a bare id at the root — NOT the /e/<id> embed shape
+# is_vibuxer_embed recognises). HAR 2026-11-13: hglink.to/g70gj3eith1c is an
+# 819-byte JS loader (/main.js navigates the browser); the id is preserved
+# onto vibuxer.com/<id>, which serves the JWPlayer page.
+HGLINK_HOST_RE = re.compile(r"(?:^|\.)hglink\.to$", re.I)
+HGLINK_ID_RE = re.compile(r"^/([A-Za-z0-9_-]+)/?$", re.I)
+STREAMWISH_VIBUXER_PATH_RE = re.compile(r"^/([A-Za-z0-9_-]+)/?$", re.I)
 VIDRIFT_HOST_RE = re.compile(r"(?:^|\.)vidrift\.net$", re.I)
 VIDRIFT_CONTENT_RE = re.compile(
     r"^/(?:embed/)?(?:movie|tv)/([A-Za-z0-9_-]+)(?:/([A-Za-z0-9_-]+)/([A-Za-z0-9_-]+))?/?$",
@@ -492,9 +500,17 @@ STREAMTAPE_LINK_RE = re.compile(
 # `hls4` is a bare path that is rebuilt against the embed host (streamflix
 # v1.7.117: domainless hls4 links are always rebuilt). The media probe must
 # carry Referer: the embed URL — the host 403s without it.
+# Streamwish via vibuxer (HAR 2026-11-13, hglink.to/g70gj3eith1c) publishes
+# a third source, `hls3`, an absolute master.txt, and the player's own setup
+# prefers `links.hls4 || links.hls3 || links.hls2` — that order is what
+# unwrap_streamwish follows. `qualityLabels` carries the band
+# ({"1361":"720p"} on the captured page).
 PACKER_HLS2_RE = re.compile(r'"hls2"\s*:\s*"([^"]+)"')
+PACKER_HLS3_RE = re.compile(r'"hls3"\s*:\s*"([^"]+)"')
 PACKER_HLS4_RE = re.compile(r'"hls4"\s*:\s*"([^"]+)"')
 PACKER_FILE_RE = re.compile(r'"file"\s*:\s*"([^"]+)"')
+PACKER_QUALITY_LABEL_RE = re.compile(
+    r"""qualityLabels['"]?\s*:\s*\{\s*"[^"]+"\s*:\s*"([^"]+)\"""")
 
 # AnimaHD's own player page. It is not an iframe and it is not a JS puzzle: the
 # page's script is `const targetStreamUrl = "<literal>"; …
@@ -919,6 +935,33 @@ def is_vidbolt_embed(url: str) -> bool:
 def is_vibuxer_embed(url: str) -> bool:
     clean = (url or "").replace("\t", "").strip()
     return _matches(clean, VIBUXER_HOST_RE, VIBUXER_CONTENT_RE)
+
+
+def is_hglink_loader(url: str) -> bool:
+    """hglink.to/<id> — the streamwish loader page (819-byte JS redirect)."""
+    clean = (url or "").replace("\t", "").strip()
+    return _matches(clean, HGLINK_HOST_RE, HGLINK_ID_RE)
+
+
+def streamwish_vibuxer_url(url: str) -> str:
+    """
+    The vibuxer.com page a streamwish URL resolves to, or "" when the URL
+    is neither the hglink.to loader nor a bare-id vibuxer.com page.
+
+    The loader preserves the id: hglink.to/<id> -> vibuxer.com/<id>.
+    A vibuxer /e/<id> or /embed/<id> URL is unwrap_vibuxer's shape, not
+    this chain's, so it is refused here rather than silently re-routed.
+    """
+    clean = (url or "").replace("\t", "").strip()
+    if is_hglink_loader(clean):
+        parts = urllib.parse.urlsplit(clean)
+        ident = HGLINK_ID_RE.match(parts.path or "").group(1)
+        return f"https://vibuxer.com/{ident}"
+    if _matches(clean, VIBUXER_HOST_RE, STREAMWISH_VIBUXER_PATH_RE):
+        parts = urllib.parse.urlsplit(clean)
+        ident = STREAMWISH_VIBUXER_PATH_RE.match(parts.path or "").group(1)
+        return f"https://vibuxer.com/{ident}"
+    return ""
 
 
 def vidrift_parse_url(url: str) -> dict | None:
@@ -2525,6 +2568,132 @@ def unwrap_packer_hls(embed_url: str, service: str, fetch=None,
     return result
 
 
+def unwrap_streamwish(url: str, fetch=None, verify: bool = True,
+                      referer: str | None = None) -> dict:
+    """
+    Streamwish URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Chain (HAR-proven 2026-11-13 on hglink.to/g70gj3eith1c, "Rescue Dawn"):
+
+        GET https://hglink.to/<id>                     200, 819-byte JS loader
+            (no HTTP redirect — /main.js navigates the browser onward)
+        GET https://vibuxer.com/<id>                   200, ~22 KB, packed script
+            find_packed_config unpacks a JWPlayer setup:
+            var links={"hls4":"/stream/<tok>/…/master.m3u8",
+                       "hls2":"https://<cdn-centaurus>/hls2/…/master.m3u8"
+                              "?s=<epoch>&e=129600&…",
+                       "hls3":"https://<personalvisibility.cyou>/…/hls3/…/master.txt"};
+            jwplayer("vplayer").setup({sources:
+                [{file:links.hls4||links.hls3||links.hls2, type:"hls"}]})
+        Probe each candidate in the player's own order (hls4 -> hls3 -> hls2)
+        with a Referer-carrying Range probe that accepts an HLS master.
+
+    The media hosts answer 403/stall from Oracle egress (cdn-centaurus and
+    personalvisibility.cyou), so a verify failure is "unknown", never "dead":
+    the prefetch must not discard a link that may play fine for a user on
+    another IP. A loader or vibuxer page that 404s is dead — the page is the
+    gateway, the media is not. The hls2 signature carries s (issue epoch)
+    + e (lifetime, 129600 = 36 h), read by duration_expiry_from_url.
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_STREAMWISH, clean_url)
+    _withheld_referrer(result, referer)
+    vibuxer_url = streamwish_vibuxer_url(clean_url)
+    if not vibuxer_url:
+        result["status"] = "unknown"
+        result["notes"].append("not a streamwish loader or vibuxer URL")
+        return result
+    # The loader is a JS page, not an HTTP redirect: confirm it is live,
+    # then resolve the same id on vibuxer.com.
+    if is_hglink_loader(clean_url):
+        status, _body, _headers, _final = fetch(clean_url)
+        if status != 200:
+            result["status"] = ("dead" if status in (404, 410)
+                                else "blocked" if status in (401, 403, 429)
+                                else "unknown")
+            result["notes"].append(f"hglink loader HTTP {status}")
+            return result
+    page_headers = {"Referer": clean_url} if is_hglink_loader(clean_url) else None
+    status, body, _headers, _final = fetch(vibuxer_url, headers=page_headers)
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"vibuxer page HTTP {status}")
+        return result
+    config = find_packed_config(_page_text(body))
+    if not config:
+        result["status"] = "unknown"
+        result["notes"].append("vibuxer page carries no recognisable packed config")
+        return result
+    candidates: list[dict] = []
+    match = PACKER_HLS4_RE.search(config)
+    if match:
+        raw = match.group(1)
+        candidates.append({
+            "url": (raw if raw.startswith("http") else
+                    urllib.parse.urljoin(vibuxer_url, raw)),
+            "mime": "application/vnd.apple.mpegurl", "label": "hls4"})
+    match = PACKER_HLS3_RE.search(config)
+    if match:
+        candidates.append({
+            "url": match.group(1),
+            "mime": "application/vnd.apple.mpegurl", "label": "hls3"})
+    match = PACKER_HLS2_RE.search(config)
+    if match:
+        candidates.append({
+            "url": match.group(1),
+            "mime": "application/vnd.apple.mpegurl", "label": "hls2"})
+    if not candidates:
+        result["status"] = "unknown"
+        result["notes"].append(
+            "unpacked config carries no hls4 / hls3 / hls2 URL")
+        return result
+    result["bridge_url"] = vibuxer_url
+    result["sources"] = [{"url": cand["url"], "mime": cand["mime"],
+                          "label": cand["label"]} for cand in candidates]
+    result["final_url"] = candidates[0]["url"]
+    quality = PACKER_QUALITY_LABEL_RE.search(config)
+    result["quality"] = quality.group(1) if quality else "HLS"
+    signed = next((cand for cand in candidates if cand["label"] == "hls2"),
+                  candidates[0])
+    _expires_at, result["expires_in"] = duration_expiry_from_url(signed["url"])
+    if result["expires_in"] is None:
+        _expires_at, result["expires_in"] = expiry_from_url(result["final_url"])
+    result["signed_params"] = sorted(signature_params(signed["url"]))
+    if not verify:
+        result["notes"].append("unpacked only; the byte endpoint was not probed")
+        return result
+    first_probe = None
+    for cand in candidates:
+        probe = _probe_playlist_or_file(cand["url"], fetch, vibuxer_url)
+        if first_probe is None:
+            first_probe = probe
+        if probe["status"] == "active":
+            result["final_url"] = cand["url"]
+            result["http_status"] = probe["http_status"]
+            result["content_type"] = probe["content_type"]
+            result["size_bytes"] = probe["size_bytes"]
+            result["status"] = "active"
+            if probe["reason"]:
+                result["notes"].append(f"{cand['label']}: {probe['reason']}")
+            return result
+        result["notes"].append(
+            f"{cand['label']}: {probe['reason'] or probe['status']}")
+    if first_probe is not None:
+        result["http_status"] = first_probe["http_status"]
+        result["content_type"] = first_probe["content_type"]
+        result["size_bytes"] = first_probe["size_bytes"]
+    # The media hosts refuse this egress (403/stall), so no probe outcome
+    # here proves the file is gone — the link stays unknown, never dead.
+    result["status"] = "unknown"
+    result["notes"].append(
+        "no candidate verified; the media hosts refuse this egress, "
+        "so the failure is unproven, not a dead link")
+    return result
+
+
 # VOE (voe.sx + mirrors such as shannoncoldalready.com): the embed page
 # carries an obfuscated payload (a base64-ish code) plus an external loader
 # script holding the LUTs; the decode is pure stdlib (re + base64 + json).
@@ -3590,6 +3759,8 @@ def main(argv: list[str] | None = None) -> int:
     url = args[0]
     if is_pkembed_embed(url):
         unwrap = unwrap_pkembed
+    elif is_hglink_loader(url) or streamwish_vibuxer_url(url):
+        unwrap = unwrap_streamwish
     elif is_vibuxer_embed(url):
         unwrap = unwrap_vibuxer
     elif is_vidbolt_embed(url):

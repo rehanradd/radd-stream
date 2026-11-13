@@ -1206,6 +1206,192 @@ class TestVibuxerUnpack(unittest.TestCase):
         self.assertIn("publishes no m3u8", json.dumps(verdict["notes"]))
 
 
+# --- Streamwish fixtures ----------------------------------------------------
+# The captured vibuxer.com page (HAR 2026-11-13, hglink.to/g70gj3eith1c,
+# "Rescue Dawn"): a P.A.C.K.E.R. block that unpacks to a JWPlayer setup with
+# hls4 (a relative path, rebuilt against vibuxer.com), hls3 (an absolute
+# master.txt) and hls2 (an absolute signed master.m3u8, s=<now>&e=129600).
+# The packer tokens are 1 -> "var", 2 -> "links" (the same truncated wrapper
+# the TestVibuxerUnpack fixtures use). SW_NOW is taken at import time so the
+# hls2 signature is fresh; the expiry assertion uses a generous delta.
+SW_NOW = int(time.time())
+SW_PACKED_PAYLOAD = (
+    '1.2={"hls4":"/stream/1hsAmr3JFtRqTbKoPag8QA/kjhhiuahiuhgihdf/'
+    '1794585247/72545528/master.m3u8",'
+    f'"hls2":"https://cdn.example.com/hls2/01/14509/g70gj3eith1c_n/'
+    f'master.m3u8?s={SW_NOW}&e=129600&f=72545528&srv=0wnh534rdgf989",'
+    '"hls3":"https://pv.example.cyou/0wnh534rdgf989/hls3/01/14509/'
+    'g70gj3eith1c_n/master.txt"};'
+    'jwplayer("vplayer").setup({sources:[{file:2.hls4||2.hls3||2.hls2,'
+    'type:"hls"}],qualityLabels:{"1361":"720p"}});'
+)
+SW_PACKED_PAGE = (
+    "<html><head><title>Rescue Dawn (2006) BluRay - 720p</title></head><body>"
+    "<div id=\"vplayer\"></div><script>"
+    "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+    "}('"
+    + SW_PACKED_PAYLOAD
+    + "',10,3,'|var|links'.split('|'),0,{}))"
+    "</script></body></html>"
+)
+SW_HLS = b"#EXTM3U\n#EXT-X-STREAM-INF\nv.m3u8"
+
+
+class TestUnwrapStreamwish(unittest.TestCase):
+    def test_recognition(self):
+        self.assertTrue(hr.is_hglink_loader("https://hglink.to/g70gj3eith1c"))
+        self.assertTrue(hr.is_hglink_loader("https://hglink.to/g70gj3eith1c/"))
+        self.assertFalse(hr.is_hglink_loader("https://hglink.to/"))
+        self.assertFalse(hr.is_hglink_loader("https://evilhglink.to/g70gj3eith1c"))
+        self.assertEqual(
+            hr.streamwish_vibuxer_url("https://hglink.to/g70gj3eith1c"),
+            "https://vibuxer.com/g70gj3eith1c")
+        self.assertEqual(
+            hr.streamwish_vibuxer_url("https://vibuxer.com/g70gj3eith1c"),
+            "https://vibuxer.com/g70gj3eith1c")
+        # The /e/<id> embed shape stays unwrap_vibuxer's, not this chain's.
+        self.assertEqual(
+            hr.streamwish_vibuxer_url("https://vibuxer.com/e/i4p45adamelv"), "")
+        self.assertEqual(hr.streamwish_vibuxer_url("https://vibuxer.com/"), "")
+
+    def test_full_chain_active_prefers_hls4(self):
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html><body>loading</body></html>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (200, SW_PACKED_PAGE,
+                                         {"content-type": "text/html"}),
+            "master.m3u8": (200, SW_HLS,
+                            {"content-type": "application/vnd.apple.mpegurl"}),
+            "master.txt": (200, SW_HLS,
+                           {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_streamwish("https://hglink.to/g70gj3eith1c",
+                                       fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "streamwish")
+        self.assertEqual(
+            verdict["final_url"],
+            "https://vibuxer.com/stream/1hsAmr3JFtRqTbKoPag8QA/kjhhiuahiuhgihdf/"
+            "1794585247/72545528/master.m3u8")
+        self.assertEqual(verdict["quality"], "720p")
+        self.assertEqual([s["label"] for s in verdict["sources"]],
+                         ["hls4", "hls3", "hls2"])
+        self.assertAlmostEqual(verdict["expires_in"], 129600, delta=300)
+        self.assertIn("s", verdict["signed_params"])
+        self.assertIn("e", verdict["signed_params"])
+
+    def test_bare_vibuxer_url_skips_the_loader(self):
+        fetch = scripted_fetch({
+            "vibuxer.com/g70gj3eith1c": (200, SW_PACKED_PAGE,
+                                         {"content-type": "text/html"}),
+            "master.m3u8": (200, SW_HLS,
+                            {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_streamwish("https://vibuxer.com/g70gj3eith1c",
+                                       fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertFalse(any("hglink.to" in url for url, _h, _m in fetch.calls))
+        self.assertEqual(verdict["bridge_url"], "https://vibuxer.com/g70gj3eith1c")
+
+    def test_fallback_to_hls3_when_hls4_is_refused(self):
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html/>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (200, SW_PACKED_PAGE,
+                                         {"content-type": "text/html"}),
+            "vibuxer.com/stream/": (403, b"forbidden",
+                                     {"content-type": "text/html"}),
+            "master.txt": (200, SW_HLS,
+                           {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_streamwish("https://hglink.to/g70gj3eith1c",
+                                       fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(
+            verdict["final_url"],
+            "https://pv.example.cyou/0wnh534rdgf989/hls3/01/14509/"
+            "g70gj3eith1c_n/master.txt")
+
+    def test_media_refused_is_unknown_not_dead(self):
+        # The media hosts refuse this egress (403/stall), so no probe outcome
+        # here proves the file is gone — the link stays unknown, never dead.
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html/>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (200, SW_PACKED_PAGE,
+                                         {"content-type": "text/html"}),
+            "master.m3u8": (403, b"forbidden",
+                            {"content-type": "text/html"}),
+            "master.txt": (403, b"forbidden",
+                           {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_streamwish("https://hglink.to/g70gj3eith1c",
+                                       fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertEqual(len(verdict["sources"]), 3)
+        self.assertIn("unproven", json.dumps(verdict["notes"]))
+
+    def test_loader_404_is_dead(self):
+        fetch = scripted_fetch({
+            "hglink.to/deadid123": (404, b"not found",
+                                    {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_streamwish("https://hglink.to/deadid123",
+                                       fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+
+    def test_vibuxer_404_is_dead(self):
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html/>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (404, b"not found",
+                                         {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_streamwish("https://hglink.to/g70gj3eith1c",
+                                       fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+
+    def test_no_packed_config_is_unknown(self):
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html/>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (
+                200, b"<html><body>no video here</body></html>",
+                {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_streamwish("https://hglink.to/g70gj3eith1c",
+                                       fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+
+    def test_unverified_skips_the_byte_probe(self):
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html/>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (200, SW_PACKED_PAGE,
+                                         {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_streamwish("https://hglink.to/g70gj3eith1c",
+                                       fetch=fetch, verify=False)
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(len(verdict["sources"]), 3)
+        self.assertFalse(any("master" in url for url, _h, _m in fetch.calls))
+
+    def test_main_routes_hglink(self):
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html/>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (200, SW_PACKED_PAGE,
+                                         {"content-type": "text/html"}),
+            "master.m3u8": (200, SW_HLS,
+                            {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://hglink.to/g70gj3eith1c"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "streamwish")
+        self.assertEqual(printed["status"], "active")
+
+
 class TestVidriftUnpack(unittest.TestCase):
     def test_movie_resolve_active(self):
         page_html = """
