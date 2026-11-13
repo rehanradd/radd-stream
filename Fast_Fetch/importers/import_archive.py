@@ -858,11 +858,14 @@ def export_staging(db_path: Path | str = DEFAULT_DB_PATH, posts=(),
             columns = [c for c in POST_COLUMNS if c in values]
             updates = ", ".join(
                 f"{c} = excluded.{c}" for c in columns
-                if c not in ("canonical_key", "scraped_at"))
+                if c not in ("canonical_key", "scraped_at", "is_18_plus", "is_animated"))
             conn.execute(
                 f"INSERT INTO posts ({', '.join(columns)})"
                 f" VALUES ({', '.join('?' for _ in columns)})"
-                f" ON CONFLICT(canonical_key) DO UPDATE SET {updates}",
+                f" ON CONFLICT(canonical_key) DO UPDATE SET "
+                "is_18_plus = MAX(posts.is_18_plus, excluded.is_18_plus), "
+                "is_animated = MAX(posts.is_animated, excluded.is_animated), "
+                f"{updates}",
                 [values[c] for c in columns])
             conn.execute(
                 "DELETE FROM sources WHERE release_id IN ("
