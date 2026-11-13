@@ -33,6 +33,7 @@ internal val playerMatroskaExtractorFlags: Int =
  * is the same object the player and the test both drive — [PlaybackService]
  * hands it to its media source factory at player build time.
  */
+@OptIn(UnstableApi::class)
 fun buildPlayerExtractorsFactory(): DefaultExtractorsFactory =
     DefaultExtractorsFactory()
         .setMatroskaExtractorFlags(playerMatroskaExtractorFlags)
