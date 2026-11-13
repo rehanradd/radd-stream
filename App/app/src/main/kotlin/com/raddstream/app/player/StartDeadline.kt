@@ -46,22 +46,28 @@ object StartDeadline {
     const val GIVE_UP_AFTER_MS = 30_000L
 
     /**
-     * The service-side stall watchdog (2026-11-12 rework): eight seconds with
-     * no first frame and the player fails the attempt over to the next
-     * candidate on its own — the same moment the screen starts offering
-     * Retry / Try another print. A load that errors fails over at once
-     * through the player-error path; a load that never errors and never
-     * renders — a hung resolve, a stalled CDN, a playlist that never
-     * arrives — used to sit on the "Warming the link" notice until the
-     * thirty-second card, and nothing ever advanced it. Eight seconds is
-     * the audit #1 budget: the warm resolve answers in ~0.02 s and a cold
-     * one in 5–11 s, so a first frame that has not arrived by eight
-     * seconds is a dead attempt, not a slow one — and the retry-same
-     * budget still gives the same rung one more chance before the rank
-     * moves. Must stay below [GIVE_UP_AFTER_MS]: the watchdog is the
-     * automatic failover, the thirty-second card is the last resort.
+     * The service-side stall watchdog (2026-11-12 rework, raised 2026-11-13):
+     * twenty seconds with no first frame and the player fails the attempt
+     * over to the next candidate on its own — the same moment the screen
+     * starts offering Retry / Try another print. A load that errors fails
+     * over at once through the player-error path; a load that never errors
+     * and never renders — a hung resolve, a stalled CDN, a playlist that
+     * never arrives — used to sit on the "Warming the link" notice until
+     * the thirty-second card, and nothing ever advanced it.
+     *
+     * Twenty, not eight: the eight-second budget rested on "a cold resolve
+     * is 5–11 s, so no frame by 8 s is dead" — and the live diagnostics
+     * (2026-11-13) proved it wrong. Salaar's best free print resolves in
+     * 5.7–10.4 s cold, with one stall near 180 s, so the old watchdog
+     * failed over a load that would have played, then failed the retry the
+     * same way, and the viewer got "Nothing playable here right now" for a
+     * link that plays. Twenty seconds is the resolve ceiling the plan
+     * already names, so a legitimate slow resolve survives it and a truly
+     * hung one still fails over well before the thirty-second card. Must
+     * stay below [GIVE_UP_AFTER_MS]: the watchdog is the automatic
+     * failover, the thirty-second card is the last resort.
      */
-    const val START_WATCHDOG_MS = 8_000L
+    const val START_WATCHDOG_MS = 20_000L
 
     fun stage(elapsedMs: Long, firstFrame: Boolean): StartDeadlineStage = when {
         firstFrame -> StartDeadlineStage.SILENT
@@ -85,6 +91,21 @@ object StartDeadline {
      */
     fun hasFirstFrame(playbackState: Int): Boolean =
         playbackState == Player.STATE_READY
+
+    /**
+     * The start notice's elapsed line — whole seconds, shown only once the wait has
+     * passed ten seconds, so a normal 2–3 s start never grows a counter. "Trying HD
+     * 720p · 12s" with a rung, "12s" without one; null below the threshold, and the
+     * card hides the line then. Counts from the request (Play press), not from the
+     * URL — the resolve wait is the wait, and the stage clock starts only once
+     * Media3 holds a URL.
+     */
+    fun formatWaitElapsed(rungLabel: String?, elapsedMs: Long): String? {
+        val seconds = elapsedMs / 1_000L
+        if (seconds < 10L) return null
+        return if (rungLabel.isNullOrBlank()) "${seconds}s"
+        else "Trying $rungLabel · ${seconds}s"
+    }
 
     /**
      * The print sheet's proof of the budget — "1.4 s", one decimal, never negative. The

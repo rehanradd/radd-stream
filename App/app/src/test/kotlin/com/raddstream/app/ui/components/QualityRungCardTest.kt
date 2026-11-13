@@ -3,6 +3,7 @@ package com.raddstream.app.ui.components
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import com.raddstream.app.ui.theme.RaddStreamTheme
@@ -117,5 +118,53 @@ class QualityRungCardTest {
             .assertCountEquals(1)
         compose.onAllNodes(hasContentDescription("480p: Hindi + English audio · ≈ 700 MB/hour"))
             .assertCountEquals(1)
+    }
+
+    @Test
+    fun autoPillSurvivesTheGateNullingTheServerPointer() {
+        // D-1: Salaar, free user — the gate keeps 720p and nulls autoBand, but
+        // Auto is still the default and Play presses 720p, so the card must
+        // still mark the 720p row Auto. Before the fix the pill rendered
+        // nowhere, because nothing matched the null pointer.
+        val gated = LadderForScope(
+            options = listOf(option("720p", "HD - X264"), option("480p", "480p")),
+            autoBand = null,
+            downloadOnlyBands = emptyList(),
+        )
+        compose.setContent {
+            RaddStreamTheme {
+                QualityRungCard(
+                    ladder = gated,
+                    selectedBand = LadderForScope.AUTO,
+                    onPlayRung = {},
+                    onKeepRung = {},
+                    tierLabel = { "Standard" },
+                )
+            }
+        }
+        compose.onAllNodesWithText("Auto").assertCountEquals(1)
+    }
+
+    @Test
+    fun autoPillStaysOnTheServerPointerWhenNothingIsGated() {
+        // Ungated: the pill sits on the server's auto rung, as before — the
+        // effective band is the server pointer when the gate kept everything.
+        val scope = LadderForScope(
+            options = listOf(option("720p", "HD - X264"), option("1080p", "Full HD · X264")),
+            autoBand = "1080p",
+            downloadOnlyBands = emptyList(),
+        )
+        compose.setContent {
+            RaddStreamTheme {
+                QualityRungCard(
+                    ladder = scope,
+                    selectedBand = LadderForScope.AUTO,
+                    onPlayRung = {},
+                    onKeepRung = {},
+                    tierLabel = { "Standard" },
+                )
+            }
+        }
+        compose.onAllNodesWithText("Auto").assertCountEquals(1)
     }
 }

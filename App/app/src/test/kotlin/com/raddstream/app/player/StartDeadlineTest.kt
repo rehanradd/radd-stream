@@ -125,9 +125,13 @@ class StartDeadlineTest {
 
     @Test
     fun `the stall watchdog fires before the thirty second give-up`() {
-        // 2026-11-12 rework, audit #1: a load that never errors and never
-        // renders fails over on its own at eight seconds — the automatic
-        // failover — while the thirty-second card stays the last resort.
+        // 2026-11-12 rework, raised 2026-11-13: a load that never errors and
+        // never renders fails over on its own at twenty seconds — the
+        // automatic failover — while the thirty-second card stays the last
+        // resort. Twenty is the resolve ceiling the live diagnostics
+        // measured (Salaar's free print resolves in 5.7–10.4 s cold), so a
+        // slow resolve survives it and a truly hung one still fails over.
+        assertEquals(20_000L, StartDeadline.START_WATCHDOG_MS)
         assertTrue(StartDeadline.START_WATCHDOG_MS < StartDeadline.GIVE_UP_AFTER_MS)
         assertEquals(StartDeadlineStage.ACTIONS, StartDeadline.stage(StartDeadline.START_WATCHDOG_MS, firstFrame = false))
     }
@@ -137,5 +141,20 @@ class StartDeadlineTest {
         assertEquals("1.4 s", StartDeadline.formatSeconds(1_400))
         assertEquals("0.0 s", StartDeadline.formatSeconds(0))
         assertEquals("30.0 s", StartDeadline.formatSeconds(30_000))
+    }
+
+    @Test
+    fun `the notice elapsed line appears only past ten seconds`() {
+        // P-3: a normal 2–3 s start never grows a counter; the line counts
+        // from the request, so a 12 s wait reads "Trying HD 720p · 12s".
+        assertNull(StartDeadline.formatWaitElapsed("HD 720p", 0))
+        assertNull(StartDeadline.formatWaitElapsed("HD 720p", 9_999))
+        assertNull(StartDeadline.formatWaitElapsed("HD 720p", -500))
+        assertEquals("Trying HD 720p · 10s", StartDeadline.formatWaitElapsed("HD 720p", 10_000))
+        assertEquals("Trying HD 720p · 12s", StartDeadline.formatWaitElapsed("HD 720p", 12_499))
+        assertEquals("Trying HD 720p · 12s", StartDeadline.formatWaitElapsed("HD 720p", 12_999))
+        assertEquals("Trying HD 720p · 20s", StartDeadline.formatWaitElapsed("HD 720p", 20_000))
+        assertEquals("12s", StartDeadline.formatWaitElapsed(null, 12_000))
+        assertEquals("12s", StartDeadline.formatWaitElapsed("  ", 12_000))
     }
 }

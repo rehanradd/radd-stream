@@ -79,18 +79,26 @@ fun QualityRungCard(
             color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-            text = "Auto plays the best picture this connection can hold.",
+            text = "Auto plays the best picture your plan can hold.",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        // D-1: the effective auto band, not the server pointer. The gate nulls
+        // `autoBand` when it gates the server's auto rung out (Salaar, free
+        // user: the server points at 2160p, the gate keeps 720p) — and with a
+        // null pointer neither the Auto pill nor the Auto selection matched
+        // anything, so the active choice was invisible while Auto was the
+        // default. `autoOption` already falls back to the first playable rung,
+        // so its band is the answer for both the pill and the selection.
+        val effectiveAutoBand = ladder.effectiveAutoBand
         ordered.forEach { option ->
             val isPick = !pickGiven && carriesPreferredAudio(option, preferredAudio)
             if (isPick) pickGiven = true
             RungRow(
                 option = option,
-                isAuto = option.band == ladder.autoBand,
+                isAuto = option.band == effectiveAutoBand,
                 selected = selectedBand == option.band ||
-                    (selectedBand == LadderForScope.AUTO && option.band == ladder.autoBand),
+                    (selectedBand == LadderForScope.AUTO && option.band == effectiveAutoBand),
                 tier = tierLabel(option),
                 isPick = isPick,
                 onPlay = { onPlayRung(option) },

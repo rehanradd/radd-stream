@@ -280,10 +280,16 @@ data class PlayerUiState(
     val failoverLog: List<FailoverRecord> = emptyList(),
     val settledBanner: String? = null,
     val giveUp: Pair<String, HandoffWhy>? = null,
-    // start deadline (§5 P5): milliseconds since the current load was requested, published
-    // by the ticker; the last measured route-open → first-frame time, for the print sheet;
-    // and the latched 30 s give-up, cleared by a retry, a dismiss, or a first frame.
+    // start deadline (§5 P5): milliseconds since the start clock armed (Media3 holds a URL),
+    // published by the ticker — the deadline stage reads this one; the last measured
+    // route-open → first-frame time, for the print sheet; and the latched 30 s give-up,
+    // cleared by a retry, a dismiss, or a first frame.
     val startElapsedMs: Long = 0,
+    // P-3: milliseconds since the current load was requested (Play press), published by
+    // the ticker on every tick — the start notice's elapsed line counts from here, so the
+    // resolve wait is counted too. Distinct from [startElapsedMs], which starts only once
+    // Media3 holds a URL and would read 0 through the whole resolve.
+    val startRequestElapsedMs: Long = 0,
     val lastFirstFrameMs: Long? = null,
     val deadlineGiveUp: Boolean = false,
     // resume prompt ("Playback interrupted! Resume from …?" MX dialog)

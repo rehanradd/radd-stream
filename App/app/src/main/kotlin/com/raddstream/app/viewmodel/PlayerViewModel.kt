@@ -146,12 +146,29 @@ class PlayerViewModel @Inject constructor(
     private var tickerJob: Job? = null
 
     /**
-     * Monotonic instant the current load was requested (`elapsedRealtime`, so a sleeping
-     * phone does not gift the deadline free seconds). Stamped in [loadNow] — the one funnel
-     * every play path goes through — and in [retryCurrentCandidates], the one path that
-     * bypasses it. Null once a first frame has rendered, so no stale attempt can fire.
+     * Monotonic instant the current load's start clock armed
+     * (`elapsedRealtime`, so a sleeping phone does not gift the deadline
+     * free seconds). Salaar (2026-11-13): this is NOT stamped at Play press
+     * — it arms in the ticker, on the first tick where the player is no
+     * longer IDLE, i.e. the moment Media3 holds a URL and is loading an
+     * address. The seconds between the tap and the load are not the load's:
+     * a slow server resolve (measured 5.7–10.4 s cold) must not spend the
+     * give-up budget before the player has anything to play. Null once a
+     * first frame has rendered, so no stale attempt can fire.
      */
     private var startAttemptAtMs: Long? = null
+
+    /**
+     * Monotonic instant the current load was requested, for the one case
+     * the start clock never arms: a load that never reaches Media3 at all.
+     * The ticker backdates [startAttemptAtMs] to this instant once thirty
+     * seconds have passed without the player leaving IDLE, so the give-up
+     * still fires on the normal path instead of waiting forever.
+     */
+    private var loadRequestedAtMs: Long? = null
+
+    /** True while the start clock is still waiting for Media3 to hold a URL. */
+    private var startClockPending: Boolean = false
 
     /**
      * Link-report bookkeeping (Session 123): the handle a `played` report was
@@ -648,6 +665,15 @@ class PlayerViewModel @Inject constructor(
                             positionMs = c.currentPosition,
                             bufferedMs = bufferedOf(c),
                             durationMs = if (c.duration > 0) c.duration else it.durationMs,
+                            // P-3: the notice card's elapsed line counts from
+                            // the request (Play press), so the resolve wait is
+                            // counted too — published on every tick, whatever
+                            // the start clock (which arms only once Media3
+                            // holds a URL) says. Zero until a load is
+                            // requested, and zero again after a first frame.
+                            startRequestElapsedMs = loadRequestedAtMs?.let { requestedAt ->
+                                (SystemClock.elapsedRealtime() - requestedAt).coerceAtLeast(0)
+                            } ?: 0,
                         )
                     }
                     // A-B repeat (§5 P14): the ticker already visits every 200 ms, so
@@ -672,15 +698,52 @@ class PlayerViewModel @Inject constructor(
                     // still black, and the old `isPlaying || duration > 0` test disarmed
                     // the deadline on that alone — the Pushpa 2 retest buffered forever
                     // with no error and no give-up card.
+                    // Salaar (2026-11-13): the start clock arms here, when
+                    // Media3 has a URL — not at Play press. The first
+                    // connected tick where the player is no longer IDLE is
+                    // the first moment it is loading an address; before
+                    // that the service is still starting and the redirector
+                    // has not been handed a media item, so the seconds
+                    // between the tap and the load are not the load's. A
+                    // slow server resolve (measured 5.7–10.4 s cold,
+                    // ceiling ~20 s) must not spend the give-up budget
+                    // before the player has anything to play. If the load
+                    // never reaches Media3 at all, the clock backdates to
+                    // the request once thirty seconds have passed, so the
+                    // give-up still fires on the normal path instead of
+                    // waiting forever.
+                    if (startClockPending) {
+                        if (c.playbackState != Player.STATE_IDLE) {
+                            startAttemptAtMs = SystemClock.elapsedRealtime()
+                            startClockPending = false
+                        } else {
+                            // A mutable property cannot be smart-cast, so
+                            // the request instant is read once, locally.
+                            val requestedAt = loadRequestedAtMs
+                            if (requestedAt != null &&
+                                SystemClock.elapsedRealtime() - requestedAt >=
+                                StartDeadline.GIVE_UP_AFTER_MS
+                            ) {
+                                startAttemptAtMs = requestedAt
+                                startClockPending = false
+                            }
+                        }
+                    }
                     val attemptAt = startAttemptAtMs
                     if (attemptAt != null) {
                         val elapsed = SystemClock.elapsedRealtime() - attemptAt
                         val firstFrame = StartDeadline.hasFirstFrame(c.playbackState)
                         if (firstFrame) {
                             startAttemptAtMs = null
+                            // P-3: the request instant is spent — a stale one
+                            // would keep the notice's elapsed line growing
+                            // after playback starts, and the backdate fallback
+                            // only reads it while the clock is still pending.
+                            loadRequestedAtMs = null
                             _ui.update {
                                 it.copy(
                                     startElapsedMs = 0,
+                                    startRequestElapsedMs = 0,
                                     lastFirstFrameMs = if (wasStarting) elapsed else it.lastFirstFrameMs,
                                     deadlineGiveUp = false,
                                 )
@@ -1193,7 +1256,13 @@ class PlayerViewModel @Inject constructor(
 
     private fun loadNow(title: String, resumeKey: String, resumePosition: Long, override: Long?) {
         store.requestLoad(title = title, resumePositionMs = resumePosition, startOverrideMs = override)
-        startAttemptAtMs = SystemClock.elapsedRealtime()
+        // Salaar (2026-11-13): the start clock arms in the ticker when
+        // Media3 holds a URL, not here — the tap is not the load. Record
+        // the request time only, so a load that never reaches Media3 still
+        // gives up at thirty seconds (see the ticker's fallback).
+        loadRequestedAtMs = SystemClock.elapsedRealtime()
+        startAttemptAtMs = null
+        startClockPending = true
         playedReportHandle = null // a new attempt may play a handle that already failed
         // PL-3: ask the probe at the moment of the load — offline at start shows the
         // offline card with Retry at once, not the 30-second deadline card. A retry
@@ -1206,6 +1275,9 @@ class PlayerViewModel @Inject constructor(
                 giveUp = null,
                 pendingTitle = title,
                 startElapsedMs = 0,
+                // P-3: same reset as the stage clock — the notice's elapsed
+                // line counts from the new request, not the last attempt.
+                startRequestElapsedMs = 0,
                 deadlineGiveUp = false,
                 isOffline = offlineNow,
             )
@@ -1466,9 +1538,15 @@ class PlayerViewModel @Inject constructor(
     fun retryCurrentCandidates() {
         val title = _ui.value.activeRendition?.displayLabel() ?: Brand.name
         store.clearGaveUp()
-        startAttemptAtMs = SystemClock.elapsedRealtime()
+        // Salaar (2026-11-13): same clock rule as [loadNow] — the retry's
+        // clock arms when Media3 holds the retried URL, not at the tap.
+        loadRequestedAtMs = SystemClock.elapsedRealtime()
+        startAttemptAtMs = null
+        startClockPending = true
         playedReportHandle = null // a new attempt may play a handle that already failed
-        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
+        // P-3: same reset as the stage clock — the notice's elapsed line
+        // counts from the new request, not the attempt being retried.
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0, startRequestElapsedMs = 0) }
         store.requestLoad(title = title, resumePositionMs = _ui.value.positionMs)
     }
 
@@ -1503,9 +1581,15 @@ class PlayerViewModel @Inject constructor(
      * but a viewer who is still willing to wait should not be nagged every tick.
      */
     fun dismissDeadlineGiveUp() {
-        startAttemptAtMs = SystemClock.elapsedRealtime()
+        // Salaar (2026-11-13): same clock rule as [loadNow] — the fresh
+        // thirty seconds arm when Media3 holds a URL, not at the dismiss.
+        loadRequestedAtMs = SystemClock.elapsedRealtime()
+        startAttemptAtMs = null
+        startClockPending = true
         playedReportHandle = null // a new attempt may play a handle that already failed
-        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
+        // P-3: same reset as the stage clock — the notice's elapsed line
+        // counts from the new request, not the attempt being dismissed.
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0, startRequestElapsedMs = 0) }
     }
 
     /** Manual "next episode" button — same event path as auto-advance at media end. */

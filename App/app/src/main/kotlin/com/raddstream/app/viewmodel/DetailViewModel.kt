@@ -711,7 +711,9 @@ class DetailViewModel @Inject constructor(
      * retries the link it still needs.
      */
     private fun warmScopeLink(ladder: LadderForScope) {
-        val handle = scopeWarmHandle(ladder) ?: return
+        // Salaar (2026-11-13): the warm resolves Auto for this viewer — a
+        // free viewer warms the best free rung, never a gated one.
+        val handle = scopeWarmHandle(ladder, premiumAccess, freeQualityCap) ?: return
         if (handle == lastScopeWarmHandle) return
         scopeWarmJob?.cancel()
         scopeWarmJob = viewModelScope.launch {
@@ -1039,11 +1041,12 @@ class DetailViewModel @Inject constructor(
         preresolvedReleaseId = null
         preresolvedResult = null
         preresolvedAtMs = null
-        val best = bestPrintOf(_uiState.value.layout) ?: return
-        // Salaar (2026-11-12): a locked best print is never what Play will
-        // press — warm the print Play will actually start on (the step-down),
-        // not the gated one. Warming a rung the viewer may not play would
-        // spend the server's answer on nothing.
+        val best = bestPlayablePrintOf(_uiState.value.layout, premiumAccess, freeQualityCap) ?: return
+        // Salaar (2026-11-13): the warm is chosen VIP-aware — the best print
+        // the caller may actually play (Salaar: 720p for a free viewer, never
+        // the 2160p print the server refuses to bundle). The step-down below
+        // stays as defence in depth: the warm print is already free, so it
+        // passes through unchanged.
         val warm = playStartPrint(_uiState.value.layout, best, premiumAccess, freeQualityCap) ?: return
         preresolveJob = viewModelScope.launch {
             val result = runCatching {
@@ -1307,7 +1310,11 @@ class DetailViewModel @Inject constructor(
      * `playPrint` says so instead of navigating anywhere.
      */
     fun playBest() {
-        val best = bestPrintOf(_uiState.value.layout)
+        // Salaar (2026-11-13): Auto is the best print the caller may play —
+        // a free viewer gets the best free print (720p on Salaar), never the
+        // 2160p tier the server refuses to bundle. `playPrint` still steps
+        // down as defence in depth.
+        val best = bestPlayablePrintOf(_uiState.value.layout, premiumAccess, freeQualityCap)
         if (best == null) {
             _uiState.update { it.copy(actionMessage = "Nothing playable on this title yet.") }
             return
@@ -1398,7 +1405,7 @@ class DetailViewModel @Inject constructor(
         }
         // Gap A2 follow-up: this is the fallback path (the server bundle failed
         // or timed out), and it used to launch a bare single-rendition bundle —
-        // the 8 s watchdog could only retry the same slow address and then give
+        // the 20 s watchdog could only retry the same slow address and then give
         // up, while sibling copies of the print sat unused. Stage the
         // caller-supplied runner-ups so a stall hops within the rung instead.
         // Only staged when non-empty: the v2-bundle caller already staged its
