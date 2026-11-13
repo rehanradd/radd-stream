@@ -1779,6 +1779,104 @@ class V2CachingTests(V2WireFixture):
                                   ).status, 200,
                          "a stale validator was accepted after the catalog moved")
 
+    def test_scrub_public_is_the_three_walks_in_one(self):
+        """The fused scrub is byte-identical to the three walks it replaces."""
+        nested = {
+            "title": "Dune Protocol",
+            "is_18_plus": 1,
+            "adult": True,
+            "poster_urls": ["https://img.example/x.jpg"],
+            "probe_error": "hubcloud refused the range request",
+            "detail": {"error": "hubcloud timed out", "code": 7},
+            "prints": [
+                {"label": "1080p", "is_18_plus": 0, "note": "all good"},
+                {"label": "720p", "backdrop_url": "https://img.example/y.jpg"},
+            ],
+            "tags": ("a", "b"),
+            "count": 3,
+        }
+        old = api_v2.clean_diagnostic_text(
+            api_v2.deny_raw_urls(api_v2.deny_flag_keys(nested)))
+        self.assertEqual(api_v2.scrub_public(nested), old)
+        cleaned = api_v2.scrub_public(nested)
+        self.assertNotIn("is_18_plus", cleaned)
+        self.assertNotIn("adult", cleaned)
+        self.assertNotIn("poster_urls", cleaned)
+        self.assertNotIn("hubcloud", cleaned["probe_error"])
+        self.assertEqual(cleaned["tags"], ["a", "b"])
+        self.assertEqual(cleaned["count"], 3)
+
+    def test_detail_memo_serves_repeat_hits_without_rebuilding(self):
+        """A repeat detail hit at the same revision never rebuilds (§16.2)."""
+        path = f"/api/v2/works/{self.public_work_id}"
+        original = catalog_api.work_detail
+        with unittest.mock.patch.object(
+                catalog_api, "work_detail", wraps=original) as counted:
+            first = self.get(path)
+            second = self.get(path)
+        self.assertEqual(first.status, 200)
+        self.assertEqual(second.body, first.body)
+        self.assertEqual(second.header("etag"), first.header("etag"))
+        self.assertEqual(counted.call_count, 1,
+                         "the second hit rebuilt the work instead of memoizing it")
+        mine = [(key, value) for key, value in api_v2._DETAIL_BODY_CACHE.items()
+                if key[0] == str(self.db_path) and key[1] == path]
+        self.assertEqual(len(mine), 1)
+        self.assertEqual(mine[0][1][0], first.body)
+        self.assertEqual(mine[0][1][1], first.header("etag"))
+
+    def test_detail_memo_entry_older_than_an_hour_is_a_miss(self):
+        """Entries die by age: a `stream_id` is minted with a 24 h expiry, so a
+        body older than an hour is never served — it rebuilds instead."""
+        path = f"/api/v2/works/{self.public_work_id}"
+        first = self.get(path)
+        self.assertEqual(first.status, 200)
+        mine = [key for key in api_v2._DETAIL_BODY_CACHE
+                if key[0] == str(self.db_path) and key[1] == path]
+        self.assertEqual(len(mine), 1)
+        body, etag, _ = api_v2._DETAIL_BODY_CACHE[mine[0]]
+        api_v2._DETAIL_BODY_CACHE[mine[0]] = (
+            body, etag,
+            time.monotonic() - api_v2._DETAIL_BODY_CACHE_TTL_SECONDS - 1)
+        original = catalog_api.work_detail
+        with unittest.mock.patch.object(
+                catalog_api, "work_detail", wraps=original) as counted:
+            second = self.get(path)
+        self.assertEqual(second.status, 200)
+        self.assertEqual(counted.call_count, 1,
+                         "the stale entry was served instead of rebuilding")
+        _, _, stored_at = api_v2._DETAIL_BODY_CACHE[mine[0]]
+        self.assertLess(time.monotonic() - stored_at,
+                        api_v2._DETAIL_BODY_CACHE_TTL_SECONDS,
+                        "the rebuild did not refresh the entry")
+
+    def test_detail_memo_misses_after_revision_and_skips_operator(self):
+        """A revision move invalidates the memo; an operator answer never enters it."""
+        path = f"/api/v2/works/{self.public_work_id}"
+        first = self.get(path)
+        self.assertEqual(first.status, 200)
+        before = {key for key in api_v2._DETAIL_BODY_CACHE
+                  if key[0] == str(self.db_path)}
+        op = self.get(path, operator=True)
+        self.assertEqual(op.status, 200)
+        self.assertIn("provenance", op.json)
+        self.assertEqual({key for key in api_v2._DETAIL_BODY_CACHE
+                          if key[0] == str(self.db_path)}, before,
+                         "an operator answer entered the public memo")
+        self.add_post("katmoviehd", "https://new.katmoviehd.top/amber-station-2024/",
+                      clean_title="Amber Station", year=2024, releases=[
+                          {"release_title": "Amber Station (2024) 1080p WEB-DL",
+                           "sources": [cdn("AMBER-CDN")]}])
+        self.project(rev=2)
+        after = self.get(path)
+        self.assertNotEqual(after.header("etag"), first.header("etag"))
+        self.assertEqual(self.get(path, headers={
+            "If-None-Match": first.header("etag")}).status, 200,
+            "a stale validator was accepted after the catalog moved")
+        again = self.get(path, headers={"If-None-Match": after.header("etag")})
+        self.assertEqual(again.status, 304)
+        self.assertEqual(again.header("etag"), after.header("etag"))
+
     def test_catalog_rev_seeks_the_source_rev_index(self):
         """Appetize FAILED 2: `catalog_rev` is `MAX(source_rev)` and runs on
         every v2 GET — 0.25-0.37 s of full scan over `cat_works` without an
