@@ -7042,7 +7042,7 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     # Imported where it is used, like `config` in `_tls_context`: `tiers` owns the
     # ledger words that name a copy nothing can play and ranks with them, so the
     # resolver reads the same tuple instead of retyping two of its five words.
-    from tiers import UNPLAYABLE_STATES, candidate_order_sql
+    from tiers import UNPLAYABLE_STATES, candidate_order_sql, priority_band_key
     ledger_status = str(src["status"] or "").strip().lower()
     if ledger_status in UNPLAYABLE_STATES:
         # Every word the ledger uses to say this copy does not play, not just the
@@ -7340,15 +7340,32 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                         fresh_url = direct_u
                         fresh_temp = is_temp
                 if not fresh_url:
-                    unwrapped = unwrap_hubcloud_drive(hub)
-                    for item in unwrapped:
-                        if item.get("service") == service:
-                            fresh_url = item.get("final_url")
-                            fresh_temp = item.get("is_temporary", fresh_temp)
-                            break
-                    if not fresh_url and unwrapped:
-                        fresh_url = unwrapped[0].get("final_url")
-                        fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
+                    # Phase C item 1 (unwrap_hubcloud, main 41d12361):
+                    # the new unwrapper tries the server buttons in serve
+                    # order (FSLv2, FSL, Download File, PixelServer, ...)
+                    # and Range-probes the winner, so a verify failure is
+                    # "unknown", never "dead". When the importers module
+                    # itself is unavailable (hr is None) the old inline
+                    # drive unwrapper is the fallback — it is kept for
+                    # the import-time scrapers that still call it.
+                    if hr is not None:
+                        verdict = hr.unwrap_hubcloud(hub, verify=True)
+                        direct_u = embed_from_verdict(verdict)
+                        if direct_u:
+                            fresh_url = direct_u
+                            fresh_temp = 1 if verdict.get("is_temporary") else 0
+                            embed_verdict = verdict
+                            _gate_from_verdict = True
+                    else:
+                        unwrapped = unwrap_hubcloud_drive(hub)
+                        for item in unwrapped:
+                            if item.get("service") == service:
+                                fresh_url = item.get("final_url")
+                                fresh_temp = item.get("is_temporary", fresh_temp)
+                                break
+                        if not fresh_url and unwrapped:
+                            fresh_url = unwrapped[0].get("final_url")
+                            fresh_temp = unwrapped[0].get("is_temporary", fresh_temp)
             elif (service == "hubcdn" or "hubcdn.io/cloud" in source_u.lower()
                   or "hubcdn.io/cloud" in cached_u.lower()):
                 _unwrap_branch_taken = True
@@ -7534,6 +7551,29 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                 _unwrap_branch_taken = True
                 verdict = hr.unwrap_streamtape(hoster_input("streamtape"),
                                                verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
+            elif hr and (hr.is_hglink_loader(source_u)
+                         or hr.streamwish_vibuxer_url(source_u)
+                         or hr.is_hglink_loader(cached_u)
+                         or hr.streamwish_vibuxer_url(cached_u)):
+                # Phase C item 2 (unwrap_streamwish, main 0a2d6b4b): the
+                # hglink.to loader and bare-id vibuxer.com pages go through
+                # the new streamwish unwrapper (loader -> vibuxer packed
+                # JWPlayer -> hls4/hls3/hls2), NOT the packer below. A
+                # verify failure is "unknown", never "dead"; a loader or
+                # vibuxer page 404 IS dead (the unwrapper says so). The
+                # packer below keeps the embed shapes (watch-online,
+                # embedwish, vidmoly, streamwish /e/).
+                _unwrap_branch_taken = True
+                _sw_url = (source_u if (hr.is_hglink_loader(source_u)
+                                        or hr.streamwish_vibuxer_url(source_u))
+                           else cached_u)
+                verdict = hr.unwrap_streamwish(_sw_url, verify=True)
                 direct_u = embed_from_verdict(verdict)
                 if direct_u:
                     fresh_url = direct_u
@@ -7843,6 +7883,27 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                     fresh_temp = 1
                     embed_verdict = verdict
                     _gate_from_verdict = True
+            elif hr and (service == hr.SERVICE_VIDOUT
+                         or "vidout.pages.dev" in source_u.lower()
+                         or "vidout.pages.dev" in cached_u.lower()):
+                # Phase C item 3 (unwrap_vidout, main 9cf61b3f): the vidout
+                # page (vidout.pages.dev/<movie|tv>/<imdb>) resolves
+                # through wecollege -> the GitHub API -> a rotating HLS
+                # CDN master. The unwrapper's Referer-carrying probe of
+                # the master + first segment IS the gate evidence (the
+                # master CDN 404s a bare GET). A verify failure is
+                # "unknown", never "dead" — the GitHub API only covers
+                # ~1,000 movies, so an unlisted title is unproven, not dead.
+                _unwrap_branch_taken = True
+                _vo_url = (source_u if "vidout.pages.dev" in source_u.lower()
+                           else cached_u)
+                verdict = hr.unwrap_vidout(_vo_url, verify=True)
+                direct_u = embed_from_verdict(verdict)
+                if direct_u:
+                    fresh_url = direct_u
+                    fresh_temp = 1
+                    embed_verdict = verdict
+                    _gate_from_verdict = True
         except urllib.error.HTTPError as exc:
             # The endpoint ANSWERED, with a status we can name — this is evidence
             # about their link, and the circuit may strike on it.
@@ -8101,14 +8162,20 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
     if _failover and not fresh_url:
         try:
             with get_db() as _conn:
-                _same_release = [r[0] for r in _conn.execute(
-                    "SELECT id FROM download_sources "
-                    "WHERE release_id = ? AND id != ? ORDER BY "
-                    + candidate_order_sql() + " LIMIT 10",
-                    (src["release_id"], src["id"])).fetchall()]
                 _post_row = _conn.execute(
                     "SELECT post_id, quality FROM releases WHERE id = ?",
                     (src["release_id"],)).fetchone()
+                # §5 per-band order (Phase C item 4): the failover ladder
+                # tries the release's own band first, in the measured
+                # serve order, so a dead winner falls to the next measured
+                # host instead of to the global preference.
+                _failover_band = (priority_band_key(_post_row[1])
+                                  if _post_row is not None else None)
+                _same_release = [r[0] for r in _conn.execute(
+                    "SELECT id FROM download_sources "
+                    "WHERE release_id = ? AND id != ? ORDER BY "
+                    + candidate_order_sql(band=_failover_band) + " LIMIT 10",
+                    (src["release_id"], src["id"])).fetchall()]
                 _cross_release = []
                 if _post_row is not None:
                     _cross_release = [r[0] for r in _conn.execute(
@@ -8116,7 +8183,8 @@ def resolve_live_source(source_id: int, *, v2: bool = False,
                         "JOIN releases r ON r.id = s.release_id "
                         "WHERE r.post_id = ? AND r.id != ? "
                         "ORDER BY CASE WHEN r.quality = ? THEN 0 ELSE 1 END, "
-                        + candidate_order_sql("s") + " LIMIT 10",
+                        + candidate_order_sql("s", band=_failover_band)
+                        + " LIMIT 10",
                         (_post_row[0], src["release_id"],
                          _post_row[1])).fetchall()]
             # Failover is bounded: the primary copy already had its full

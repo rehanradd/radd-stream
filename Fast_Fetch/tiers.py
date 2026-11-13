@@ -91,18 +91,57 @@ SERVER_PREFERENCE = (
     "gdrive", "hubcloud", "mixdrop", "vidmoly", "streamtape", "doodstream",
 )
 
+#: Per-band service priority (Phase C item 4) — the §5 table from the
+#: grand-scale synthesis (grand-scale-synthesis-20261113.md), measured
+#: 2026-11-13 on 14,089 links (2,000 titles, 797 hosts) plus the unwrap
+#: yield test. Each band maps to (serve order, silent backups). "[U]" in
+#: the synthesis means the host is only playable through its unwrapper;
+#: the order below is the order to TRY, and the dispatcher routes each
+#: service to its unwrapper. Only hosts with a measured alive% > 0
+#: (direct) or a verified unwrap yield appear — a band with no measured
+#: host has an empty serve list, and nothing is invented. Keys are
+#: priority_band_key() output; "sd" is the canonical-band fallback for
+#: 360p/240p (band_of collapses both to "sd"). The sooplive backup is the
+#: DB service name "vod-normal-global-cdn-z02.sooplive.com" (the
+#: synthesis shorthand is "sooplive"); "sooplive" is kept as an alias.
+BAND_SERVICE_PRIORITY = {
+    "1080p": (("fsl_r2", "vidbolt"), ("hubcloud",)),
+    "720p": (("5centscdn", "mp4moviez", "fsl_r2"), ("hubcloud", "vidbolt")),
+    "480p": (("archive_org", "mp4moviez", "fsl_r2"), ("themoviebox", "hubcloud")),
+    "360p": (("mp4moviez",), ("themoviebox",)),
+    "240p": (("mp4moviez",), ()),
+    "sd": (("mp4moviez",), ("themoviebox",)),
+    "auto": (("aryzap-vod",), ()),
+    "unspecified": (("dramadog", "cloudstorage.naver.com", "hlscdn.vip"),
+                    ("megacartoons", "vod-normal-global-cdn-z02.sooplive.com",
+                     "sooplive")),
+    "hd": (("pkembed", "mxdrop"), ()),
+    "hevc": (("hubcdn",), ("fsl_r2",)),
+    "2160p": ((), ("hubcloud",)),
+}
+
 #: SQL fragment for the ORDER BY that fetches a release's candidate links. Kept
 #: here so v1 and v2 rank identically and there is one list to review.
-def candidate_order_sql(alias: str = "") -> str:
+def candidate_order_sql(alias: str = "", band: str | None = None) -> str:
     """ORDER BY fragment for a release's candidate links, direct-first.
 
     ``alias`` qualifies every column (``"s"`` for a JOIN query, where
     ``id`` and ``created_at`` exist on both sides); empty for a
     single-table query. The resolver's failover reads the same ranking,
     so a dead bridge copy is never tried before a live direct copy in
-    the same release.
+    the same release. ``band`` is a §5 priority-band key (see
+    priority_band_key): when given, that band's measured serve + backup
+    order leads and the global SERVER_PREFERENCE orders everything
+    else; without it the global preference is the whole order, exactly
+    as before.
     """
     prefix = f"{alias}." if alias else ""
+    if band is not None:
+        serve, backups = BAND_SERVICE_PRIORITY.get(band, ((), ()))
+        ordered = list(serve) + list(backups)
+        ordered += [name for name in SERVER_PREFERENCE if name not in ordered]
+    else:
+        ordered = list(SERVER_PREFERENCE)
     return f"""
     CASE {prefix}playback_type
         WHEN 'direct' THEN 1 WHEN 'url' THEN 2
@@ -111,8 +150,8 @@ def candidate_order_sql(alias: str = "") -> str:
     WHEN 'quarantined' THEN 9 ELSE 5 END ASC,
     CASE {prefix}service""" + "".join(
     f"\n        WHEN '{name}' THEN {index}"
-    for index, name in enumerate(SERVER_PREFERENCE)) + f"""
-    ELSE {len(SERVER_PREFERENCE)} END ASC,
+    for index, name in enumerate(ordered)) + f"""
+    ELSE {len(ordered)} END ASC,
     {prefix}is_temporary ASC,
     {prefix}is_resumable DESC,
     COALESCE({prefix}last_checked_at, {prefix}created_at) DESC,
@@ -148,6 +187,50 @@ def band_of(*texts) -> str:
     if "hd" in blob or "hdtv" in blob:
         return "720p"
     return UNSPECIFIED
+
+
+def priority_band_key(*texts) -> str:
+    """Which §5 priority band a release's quality text maps to.
+
+    Like band_of, but it keeps the distinctions the measured priority
+    table needs: the "auto" HLS band, the bare-"HD" band, the hevc
+    variants, and 360p vs 240p (both collapse to "sd" in band_of).
+    Falls back to band_of for everything else.
+    """
+    blob = " ".join(str(t).lower() for t in texts if t).strip()
+    if "hevc" in blob or "h265" in blob or "x265" in blob:
+        return "hevc"
+    if blob == "auto":
+        return "auto"
+    if blob in ("hd", "hdtv"):
+        return "hd"
+    if "360" in blob:
+        return "360p"
+    if "240" in blob:
+        return "240p"
+    return band_of(*texts)
+
+
+def band_service_bonus(service: str, band: str) -> int:
+    """The §5 priority bonus for a service in a band: serve order first.
+
+    Serve position 0 earns +25, then +20, +15 (one notch per position);
+    a silent backup earns +10, then +5, then 0. An unlisted service earns
+    0 — it is still a candidate, just not a measured one. The bonus is
+    sized so it orders copies of the SAME kind (direct 100 vs url 70 is
+    a 30 gap, and +25 never closes it): the measured host order decides
+    within a kind, never across one.
+    """
+    entry = BAND_SERVICE_PRIORITY.get(band)
+    if not entry:
+        return 0
+    serve, backups = entry
+    name = (service or "").strip().lower()
+    if name in serve:
+        return 25 - 5 * serve.index(name)
+    if name in backups:
+        return max(10 - 5 * backups.index(name), 0)
+    return 0
 
 
 def band_rank(band: str) -> int:
@@ -228,13 +311,16 @@ def score_range(link) -> list:
     return list(SCALE_RANGES[scale_of(link)])
 
 
-def score(link, band: str = UNSPECIFIED) -> int:
+def score(link, band: str = UNSPECIFIED, priority_key: str | None = None) -> int:
     """One integer per candidate: higher wins. Deterministic, no network.
 
     Accepts either a ledger row or an already-projected public link, because v1
     ranks raw rows and v2 ranks its own views; it reads only keys that are legal
     in a public body plus ``service``/``source_name`` when they are present,
-    which are used as a sort key and never returned."""
+    which are used as a sort key and never returned. ``priority_key`` is the §5
+    band (priority_band_key); without it the canonical band is used, which is
+    exact for 1080p/720p/480p/2160p/unspecified and falls back to the "sd"
+    entry for 360p/240p."""
     row = link if isinstance(link, dict) else dict(link)
     kind = str(row.get("kind") or row.get("playback_type") or "").lower()
     value = KIND_WEIGHT.get(kind, 40)
@@ -273,6 +359,12 @@ def score(link, band: str = UNSPECIFIED) -> int:
         value -= min(int(latency), 5000) // 100
     if row.get("is_temporary") or row.get("ephemeral"):
         value -= 10
+    # §5 measured priority (Phase C item 4): a service with a measured
+    # alive rate (or a verified unwrap) in this band earns a bonus that
+    # orders copies of the same kind. The bonus never closes the kind
+    # gap, so a measured host order decides within a kind, never across
+    # one; an unlisted service earns 0 and is still a candidate.
+    value += band_service_bonus(row.get("service"), priority_key or band)
     age = _seconds_since(row.get("last_checked_at") or row.get("last_evidence_at"))
     if age is not None:
         value += 10 if age < 14 * 86400 else (5 if age < 90 * 86400 else 0)
@@ -318,6 +410,12 @@ def for_release(release, links) -> dict:
     band = band_of(row.get("quality"), row.get("codec"), row.get("size"),
                    row.get("size_bytes"), row.get("resolution"),
                    row.get("quality_label"))
+    # §5 priority key (Phase C item 4): the raw quality text keeps the
+    # distinctions the measured table needs (auto, bare HD, hevc,
+    # 360p vs 240p) that band_of collapses.
+    pkey = priority_band_key(row.get("quality"), row.get("codec"),
+                             row.get("size"), row.get("size_bytes"),
+                             row.get("resolution"), row.get("quality_label"))
     # Quarantine is exclusion: a quarantined copy never reaches the
     # winner/backup pool at all — it is not merely outscored. A print
     # whose every copy is quarantined has no tiers, not a dead winner.
@@ -330,7 +428,7 @@ def for_release(release, links) -> dict:
     if not candidates:
         return {"tiers": [], "auto": None}
     scored = sorted(
-        ((score(link, band), index, link) for index, link in enumerate(candidates)),
+        ((score(link, band, pkey), index, link) for index, link in enumerate(candidates)),
         key=lambda item: (-item[0], item[1]))
     winner = scored[0]
     play_winner = next((item for item in scored if playable(item[2], band)), None)

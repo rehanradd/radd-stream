@@ -4016,6 +4016,125 @@ def unwrap_hubcloud(url: str, fetch=None, verify: bool = True,
     return result
 
 
+# ---------------------------------------------------------------------------
+# Central dispatcher (Phase C item 4)
+#
+# The single source of truth for "which unwrapper handles this service or
+# URL". Before item 4 the routing lived as an elif chain in main() and as a
+# second, longer elif chain in fast_fetch.resolve_live_source, and the two
+# could drift: streamwish called the old packer, hubcloud used the old
+# inline drive unwrapper, and vidout had no serve branch at all. The tables
+# below are the authority; main() and the serve path both route through
+# them. Every unwrapper is called as fn(url, verify=verify).
+# ---------------------------------------------------------------------------
+
+
+def _is_streamwish_loader(url: str) -> bool:
+    """hglink.to loader or a bare-id vibuxer.com page — the streamwish chain."""
+    return is_hglink_loader(url) or bool(streamwish_vibuxer_url(url))
+
+
+def _is_hubcloud_page(url: str) -> bool:
+    """A hubcloud drive page or its gamerxyt bridge intermediate."""
+    return is_hubcloud_drive(url) or is_hubcloud_bridge(url)
+
+
+#: URL-shape routing, in the exact precedence of the old main() elif chain.
+#: The last entry is the catch-all: any URL that matches no shape is fed to
+#: the mxdrop packer, which returns "unknown" when it cannot unpack it.
+SERVICE_RESOLVERS = (
+    (SERVICE_PKEMBED, is_pkembed_embed, unwrap_pkembed),
+    (SERVICE_STREAMWISH, _is_streamwish_loader, unwrap_streamwish),
+    (SERVICE_VIBUXER, is_vibuxer_embed, unwrap_vibuxer),
+    (SERVICE_VIDBOLT, is_vidbolt_embed, unwrap_vidbolt),
+    (SERVICE_VIDRIFT, is_vidrift_embed, unwrap_vidrift),
+    (SERVICE_VIDOUT, is_vidout_page, unwrap_vidout),
+    (SERVICE_IQSMART, is_iqsmart_embed, unwrap_iqsmart),
+    (SERVICE_FILMU, is_filmu_embed, unwrap_filmu),
+    (SERVICE_CINEVERSE, is_cineverse_embed, unwrap_cineverse),
+    (SERVICE_GDRIVE, is_gdrive_link, unwrap_gdrive),
+    (SERVICE_ANIMAHD, is_animahd_player, unwrap_animahd),
+    (SERVICE_CASTLE, is_castle_page, unwrap_castle),
+    (SERVICE_HUBCLOUD, _is_hubcloud_page, unwrap_hubcloud),
+    (SERVICE_MXDROP, lambda url: True, unwrap_mxdrop),
+)
+
+
+#: Service name -> unwrapper, for callers that know the row's service but
+#: not its URL shape. The packer services (stream, vidmoly) share
+#: unwrap_packer_hls with the service bound. hubcdn is NOT here: its
+#: unwrapper lives in fast_fetch (unwrap_hubcdn), not in this module.
+RESOLVER_BY_SERVICE = {
+    SERVICE_MXDROP: unwrap_mxdrop,
+    SERVICE_PKEMBED: unwrap_pkembed,
+    SERVICE_GDRIVE: unwrap_gdrive,
+    SERVICE_ANIMAHD: unwrap_animahd,
+    SERVICE_GOFILE: unwrap_gofile,
+    SERVICE_STREAMTAPE: unwrap_streamtape,
+    SERVICE_STREAM: lambda url, verify=True: unwrap_packer_hls(
+        url, SERVICE_STREAM, verify=verify),
+    SERVICE_STREAMWISH: unwrap_streamwish,
+    SERVICE_VOE: unwrap_voe,
+    SERVICE_VIDHIDE: unwrap_vidhide,
+    SERVICE_VIDMOLY: lambda url, verify=True: unwrap_packer_hls(
+        url, SERVICE_VIDMOLY, verify=verify),
+    SERVICE_UPLOADFLIX: unwrap_uploadflix,
+    SERVICE_1XPLAYER: unwrap_1xplayer,
+    SERVICE_MOVIEBOX: unwrap_moviebox,
+    SERVICE_CASTLE: unwrap_castle,
+    SERVICE_HUBCLOUD: unwrap_hubcloud,
+    SERVICE_VIDBOLT: unwrap_vidbolt,
+    SERVICE_VIBUXER: unwrap_vibuxer,
+    SERVICE_VIDRIFT: unwrap_vidrift,
+    SERVICE_IQSMART: unwrap_iqsmart,
+    SERVICE_FILMU: unwrap_filmu,
+    SERVICE_CINEVERSE: unwrap_cineverse,
+    SERVICE_VIDOUT: unwrap_vidout,
+}
+
+
+def resolver_for_service(service: str):
+    """The unwrapper for a service name, or None when it has none."""
+    return RESOLVER_BY_SERVICE.get((service or "").strip().lower())
+
+
+def resolve_service(service: str, url: str, verify: bool = True) -> dict:
+    """Route one (service, URL) pair to its unwrapper.
+
+    Returns the unwrapper's verdict. A service with no unwrapper returns
+    {"status": "unknown", "reason": "no_unwrapper"} — never "dead": an
+    unrouted link is unproven, not a dead link.
+    """
+    fn = resolver_for_service(service)
+    if fn is None:
+        return {"status": "unknown", "reason": "no_unwrapper",
+                "service": service, "url": url}
+    return fn(url, verify=verify)
+
+
+def resolve_url(url: str, verify: bool = True) -> dict:
+    """Route one URL to its unwrapper by shape (the central dispatcher).
+
+    The first matching shape wins; the catch-all is the mxdrop packer.
+    Returns the unwrapper's verdict. A verify failure is the unwrapper's
+    own verdict ("unknown" for a transport or unproven failure) — it is
+    never rewritten to "dead" here.
+    """
+    for service, predicate, fn in SERVICE_RESOLVERS:
+        if predicate(url):
+            try:
+                verdict = fn(url, verify=verify)
+            except Exception as exc:  # an unwrapper that raises is a transport failure
+                return {"status": "unknown", "reason": "unwrapper_error",
+                        "error": str(exc), "service": service, "url": url}
+            if isinstance(verdict, dict):
+                verdict.setdefault("service", service)
+                return verdict
+            return {"status": "unknown", "reason": "bad_verdict",
+                    "service": service, "url": url}
+    return {"status": "unknown", "reason": "no_unwrapper", "url": url}
+
+
 def main(argv: list[str] | None = None) -> int:
     """One URL in, one JSON verdict out — a manual check of the chain."""
     args = argv if argv is not None else sys.argv[1:]
@@ -4023,36 +4142,7 @@ def main(argv: list[str] | None = None) -> int:
         print(__doc__.strip().splitlines()[0])
         print("usage: host_resolvers.py <embed-url> [--no-verify]")
         return 2
-    url = args[0]
-    if is_pkembed_embed(url):
-        unwrap = unwrap_pkembed
-    elif is_hglink_loader(url) or streamwish_vibuxer_url(url):
-        unwrap = unwrap_streamwish
-    elif is_vibuxer_embed(url):
-        unwrap = unwrap_vibuxer
-    elif is_vidbolt_embed(url):
-        unwrap = unwrap_vidbolt
-    elif is_vidrift_embed(url):
-        unwrap = unwrap_vidrift
-    elif is_vidout_page(url):
-        unwrap = unwrap_vidout
-    elif is_iqsmart_embed(url):
-        unwrap = unwrap_iqsmart
-    elif is_filmu_embed(url):
-        unwrap = unwrap_filmu
-    elif is_cineverse_embed(url):
-        unwrap = unwrap_cineverse
-    elif is_gdrive_link(url):
-        unwrap = unwrap_gdrive
-    elif is_animahd_player(url):
-        unwrap = unwrap_animahd
-    elif is_castle_page(url):
-        unwrap = unwrap_castle
-    elif is_hubcloud_drive(url) or is_hubcloud_bridge(url):
-        unwrap = unwrap_hubcloud
-    else:
-        unwrap = unwrap_mxdrop
-    verdict = unwrap(url, verify="--no-verify" not in args)
+    verdict = resolve_url(args[0], verify="--no-verify" not in args)
     print(json.dumps(verdict, indent=2, ensure_ascii=False))
     return 0 if verdict["status"] in ("active", "unverified") else 1
 

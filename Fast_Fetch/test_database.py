@@ -2028,20 +2028,29 @@ class DatabaseSaveTests(unittest.TestCase):
             source = conn.execute("SELECT id FROM download_sources LIMIT 1").fetchone()
             conn.execute("UPDATE download_sources SET status = 'expired' WHERE id = ?", (source["id"],))
 
-        mock_unwrapped = [{
-            "source_name": "HubCloud R2",
-            "service": "fsl_r2",
-            "resource_id": "test12345",
-            "source_url": "https://hubcloud.ist/drive/test12345",
+        # Phase C item 4: the hubcloud branch now resolves through the new
+        # unwrap_hubcloud (main 41d12361), not the old inline
+        # unwrap_hubcloud_drive — so the refresh is stubbed at the
+        # dispatcher (a fake resolver carrying the fresh verdict), and the
+        # old drive unwrapper is no longer consulted here.
+        fresh = {
+            "status": "active",
             "final_url": "https://fresh.r2.cloudflarestorage.com/new_token",
-            "is_temporary": 1,
-        }]
-        with patch.object(fast_fetch, "unwrap_hubcloud_drive", return_value=mock_unwrapped):
+            "is_temporary": True, "expires_in": 18000.0,
+            "content_type": "video/x-matroska",
+            "http_status": 206, "size_bytes": 1705388883,
+        }
+        resolvers = self._FakeResolvers(verdict=fresh)
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers):
             res = fast_fetch.resolve_live_source(source["id"])
 
         self.assertTrue(res["success"])
         self.assertEqual(res["url"], "https://fresh.r2.cloudflarestorage.com/new_token")
         self.assertTrue(res["refreshed"])
+        self.assertEqual(resolvers.calls, [("hubcloud",
+                                            "https://hubcloud.ist/drive/test12345",
+                                            True)])
 
     def test_direct_media_and_bridge_urls_are_classified_honestly(self):
         direct = (
@@ -2234,6 +2243,8 @@ class DatabaseSaveTests(unittest.TestCase):
         SERVICE_IQSMART = "iqsmart"
         SERVICE_FILMU = "filmu"
         SERVICE_CINEVERSE = "cineverse"
+        SERVICE_HUBCLOUD = "hubcloud"
+        SERVICE_VIDOUT = "vidout"
 
         def __init__(self, verdict=None):
             self.verdict = verdict
@@ -2259,6 +2270,24 @@ class DatabaseSaveTests(unittest.TestCase):
             # exist (a missing attribute aborts the whole dispatch).
             return False
 
+        def is_hglink_loader(self, url):
+            # Phase C item 4: the chain reads this before the packer
+            # branch. The fake recognises the hglink.to loader shape, so
+            # a streamwish-loader row reaches the new streamwish branch
+            # and an embed row does not.
+            return url.startswith("https://hglink.to/")
+
+        def streamwish_vibuxer_url(self, url):
+            # Phase C item 4: the loader preserves the id, and a bare-id
+            # vibuxer.com page is the same chain; /e/ and /embed/ are
+            # unwrap_vibuxer's shape and are refused here.
+            if url.startswith("https://hglink.to/"):
+                return "https://vibuxer.com/" + url.rsplit("/", 1)[-1]
+            if (url.startswith("https://vibuxer.com/")
+                    and "/e/" not in url and "/embed/" not in url):
+                return url
+            return ""
+
         def unwrap_mxdrop(self, embed_url, fetch=None, verify=True, referer=None):
             self.calls.append(("mxdrop", embed_url, verify))
             return self.verdict or {
@@ -2273,6 +2302,33 @@ class DatabaseSaveTests(unittest.TestCase):
                 "is_temporary": True, "expires_in": 43200.0,
                 "sources": [{"quality": "480p", "url": "x_l.mp4"},
                             {"quality": "360p", "url": "x_n.mp4"}]}
+
+        def unwrap_streamwish(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("streamwish", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/streamwish/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200}
+
+        def unwrap_vidout(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("vidout", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://cdn.example/vidout/master.m3u8",
+                "is_temporary": True, "expires_in": 129600.0,
+                "content_type": "application/vnd.apple.mpegurl",
+                "http_status": 200}
+
+        def unwrap_hubcloud(self, url, fetch=None, verify=True, referer=None):
+            self.calls.append(("hubcloud", url, verify))
+            return self.verdict or {
+                "status": "active",
+                "final_url": "https://fresh.r2.cloudflarestorage.com/new_token",
+                "is_temporary": True, "expires_in": 18000.0,
+                "content_type": "video/x-matroska",
+                "http_status": 206, "size_bytes": 1705388883}
 
         def unwrap_gofile(self, url, fetch=None, verify=True):
             self.calls.append(("gofile", url, verify))
@@ -3526,6 +3582,77 @@ seg-00002.ts
         packer_calls = [c for c in resolvers.calls if c[0] == "packer_hls"]
         self.assertEqual(len(packer_calls), 1, resolvers.calls)
         self.assertEqual(packer_calls[0][2], "vidmoly")
+
+    def test_resolve_live_source_routes_a_hubcloud_row_to_the_new_hubcloud_unwrapper(self):
+        """Phase C item 4: a hubcloud drive row reaches unwrap_hubcloud
+        (not the old inline drive list), and the unwrapper's own Range
+        probe IS the gate evidence — the Stage-2 probe is stubbed to fail
+        and success anyway proves the skip."""
+        stored = self._embed_source(
+            "moviesmela", "hubcloud",
+            "https://hubcloud.ist/drive/test12345")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"],
+                         "https://fresh.r2.cloudflarestorage.com/new_token")
+        self.assertEqual(resolvers.calls, [("hubcloud",
+                                            "https://hubcloud.ist/drive/test12345",
+                                            True)])
+
+    def test_resolve_live_source_routes_an_hglink_row_to_the_new_streamwish_unwrapper(self):
+        """Phase C item 4: an hglink.to loader row reaches unwrap_streamwish,
+        NOT the packer below it — the packer only keeps the embed shapes
+        (watch-online, embedwish, vidmoly, streamwish /e/)."""
+        stored = self._embed_source(
+            "moviesmela", "streamwish",
+            "https://hglink.to/g70gj3eith1c")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/streamwish/master.m3u8")
+        self.assertEqual(resolvers.calls, [("streamwish",
+                                            "https://hglink.to/g70gj3eith1c",
+                                            True)])
+
+    def test_resolve_live_source_routes_a_vidout_row_to_the_new_vidout_unwrapper(self):
+        """Phase C item 4: a vidout page row reaches unwrap_vidout — the
+        service had no serve branch at all before item 3, so it used to
+        answer no_unwrapper."""
+        stored = self._embed_source(
+            "moviesmela", "vidout",
+            "https://vidout.pages.dev/movie/tt12683756")
+        resolvers = self._FakeResolvers()
+        failing = {"ok": False, "kind": None, "mime": None, "size": None,
+                   "resumable": False, "renditions": [],
+                   "failure": "probe_error"}
+        with patch.object(fast_fetch, "_embed_resolvers",
+                          return_value=resolvers), \
+             patch.object(fast_fetch, "_stage2_probe",
+                          return_value=failing):
+            res = fast_fetch.resolve_live_source(stored["id"])
+
+        self.assertTrue(res["success"], res)
+        self.assertEqual(res["url"], "https://cdn.example/vidout/master.m3u8")
+        self.assertEqual(resolvers.calls, [("vidout",
+                                            "https://vidout.pages.dev/movie/tt12683756",
+                                            True)])
 
     def test_resolve_live_source_routes_a_vidbolt_pro_row_to_the_vidbolt_unwrapper(self):
         """Session 112 (D2.5): vidbolt.pro is not a Stage-1 host

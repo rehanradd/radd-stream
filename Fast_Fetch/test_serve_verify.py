@@ -577,6 +577,47 @@ class ProbeCsvRankingTests(unittest.TestCase):
         self.assertEqual(
             serve_verify.host_rank_score(conn, "hubcloud.pw"), 0.5)
 
+    def test_grand_scale_720p_order_is_measured_not_asserted(self):
+        # Phase C item 4 (§5): the 720p serve order — 5centscdn, mp4moviez,
+        # fsl_r2, then hubcloud as a backup — must come out of the measured
+        # alive rates, not out of a hardcoded list. This rebuilds the
+        # grand-scale 720p rates in miniature (5centscdn 96/110 = 87%,
+        # mp4moviez 49/59 = 83%, fsl_r2 12/28 = 43%, hubcloud page-alive
+        # only, mobilejsr 410/514 dead) and asserts the ranking reproduces
+        # the order. The per-band table in tiers.BAND_SERVICE_PRIORITY is
+        # the same order, pinned by test_tiers.BandServicePriorityTests.
+        rows = []
+        sources = ["source_id,source_url"]
+        sid = 100
+        plan = (("5centscdn", 9, 1, "dead"), ("mp4moviez", 8, 2, "dead"),
+                ("fsl_r2", 4, 6, "dead"), ("hubcloud", 0, 10, "page_alive"),
+                ("mobilejsr", 0, 10, "dead"))
+        for host, alive, other, verdict in plan:
+            total = alive + other
+            for i in range(total):
+                sid += 1
+                sources.append(f"{sid},https://{host}/x{sid}")
+                v = "alive" if i < alive else verdict
+                code = "200" if v == "alive" else ("404" if v == "dead" else "200")
+                ctype = "video/mkv" if v == "alive" else "text/html"
+                rows.append(f"{sid},{host},720p,https://{host}/x{sid},{code},"
+                            f"{ctype},{v},100,")
+        checks = Path(self.tmp.name) / "checks720.csv"
+        checks.write_text(
+            "source_id,host_or_site,quality_band,url_probed,http_code,"
+            "content_type,verdict,elapsed_ms,error\n" + "\n".join(rows) + "\n",
+            encoding="utf-8")
+        srcs = Path(self.tmp.name) / "sources720.csv"
+        srcs.write_text("\n".join(sources) + "\n", encoding="utf-8")
+        ranking = serve_verify.ranking_from_probe_csvs(checks, srcs)
+        hosts = [row["host"] for row in ranking]
+        self.assertEqual(hosts[:3], ["5centscdn", "mp4moviez", "fsl_r2"])
+        self.assertEqual(hosts[-1], "mobilejsr")
+        # hubcloud is page-alive only: unmeasured, so it is omitted, not ranked.
+        self.assertNotIn("hubcloud", hosts)
+        by_host = {row["host"]: row for row in ranking}
+        self.assertEqual(by_host["mobilejsr"]["successes"], 0)
+
 
 class StrikeQuarantineTests(unittest.TestCase):
     def setUp(self):

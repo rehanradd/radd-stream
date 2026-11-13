@@ -127,16 +127,19 @@ _EMBED_SERVICES = {
 # name (Sessions 103/104b). Two of them never classify as embed — vidhide and
 # uploadflix are not in `_EMBED_SERVICES`, so their URLs fall through to
 # `cloud_page`/`resolve_required` by shape — and their membership here only
-# changes the v1 iframe mapping (`viewer.link_view`). Deliberately absent: vidout (its playlist host
-# vidmmo.com does not resolve on VM DNS — item 7, unprovable from here),
+# changes the v1 iframe mapping (`viewer.link_view`). Deliberately absent:
 # vidoza/doodstream/filemoon (host down / TCP reset / stdlib-blocked crypto),
 # and every other embed service, which has no server-side unwrapper — those
 # stay `webview`, honestly unplayable in the app player. `mobilejsr` is a
 # download family (`_DOWNLOAD_ONLY_SERVICES`), not an embed, and stays out.
+# vidout IS present: it resolves through the Phase C item 3 chain (wecollege
+# -> GitHub API -> rotating HLS CDN, unwrap_vidout, main 9cf61b3f), NOT
+# through the old vidmmo.com page scrape — the m3u8 there is a
+# same-for-every-title stub on a DNS-dead host.
 _SERVER_RESOLVABLE_SERVICES = frozenset({
     "cineverse", "vidrift", "vidbolt", "filmu", "iqsmart",
     "streamtape", "stream", "streamwish", "mixdrop", "voe", "vidhide",
-    "1xplayer", "uploadflix",
+    "1xplayer", "uploadflix", "vidout",
 })
 _BRIDGE_SERVICES = {
     "shortink", "shortlink", "linkvertise", "ezylink", "vlink", "shrinkme", "urlshort",

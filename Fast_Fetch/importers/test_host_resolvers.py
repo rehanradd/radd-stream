@@ -2560,6 +2560,134 @@ class TestMain(unittest.TestCase):
         self.assertEqual(stop.exception.code, 1)
 
 
+# Phase C item 4: the central dispatcher (SERVICE_RESOLVERS +
+# RESOLVER_BY_SERVICE). The routing table is the authority main() and the
+# serve path both route through; these tests pin it, so a new unwrapper
+# that is added to the table but never wired (or wired but never tabled)
+# fails here instead of silently serving nothing.
+class TestDispatcher(unittest.TestCase):
+    def test_resolver_for_service_covers_every_unwrapper(self):
+        expected = {
+            "mxdrop": hr.unwrap_mxdrop,
+            "pkembed": hr.unwrap_pkembed,
+            "gdrive": hr.unwrap_gdrive,
+            "animahd-player": hr.unwrap_animahd,
+            "gofile": hr.unwrap_gofile,
+            "streamtape": hr.unwrap_streamtape,
+            "streamwish": hr.unwrap_streamwish,
+            "voe": hr.unwrap_voe,
+            "vidhide": hr.unwrap_vidhide,
+            "uploadflix": hr.unwrap_uploadflix,
+            "1xplayer": hr.unwrap_1xplayer,
+            "moviebox": hr.unwrap_moviebox,
+            "castle": hr.unwrap_castle,
+            "hubcloud": hr.unwrap_hubcloud,
+            "vidbolt": hr.unwrap_vidbolt,
+            "vibuxer": hr.unwrap_vibuxer,
+            "vidrift": hr.unwrap_vidrift,
+            "iqsmart": hr.unwrap_iqsmart,
+            "filmu": hr.unwrap_filmu,
+            "cineverse": hr.unwrap_cineverse,
+            "vidout": hr.unwrap_vidout,
+        }
+        for service, fn in expected.items():
+            self.assertIs(hr.resolver_for_service(service), fn, service)
+        # The packer services share unwrap_packer_hls with the service
+        # bound, so they are not the same object — they must still answer.
+        for service in ("stream", "vidmoly"):
+            fn = hr.resolver_for_service(service)
+            self.assertIsNotNone(fn, service)
+            self.assertEqual(hr.resolve_service(service, "https://example.com/x",
+                                                verify=False)["status"],
+                             "unknown")
+
+    def test_resolver_for_service_returns_none_for_unknown(self):
+        self.assertIsNone(hr.resolver_for_service("nope"))
+        self.assertIsNone(hr.resolver_for_service(""))
+        self.assertIsNone(hr.resolver_for_service(None))
+        # Case and whitespace are not a service.
+        self.assertIs(hr.resolver_for_service("  Vidout "), hr.unwrap_vidout)
+
+    def test_resolve_service_unknown_is_unknown_never_dead(self):
+        verdict = hr.resolve_service("nope", "https://example.com/x")
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertEqual(verdict["reason"], "no_unwrapper")
+        self.assertNotEqual(verdict["status"], "dead")
+
+    def test_resolve_url_routes_vidout(self):
+        fetch = scripted_fetch({
+            "3/find/tt12683756": (200, VIDOUT_WECOLLEGE_MOVIE,
+                                  {"content-type": "application/json"}),
+            "hls/movie/960875": (200, VIDOUT_GITHUB_MOVIE,
+                                 {"content-type": "text/plain"}),
+            "urlset/master.txt": (200, VIDOUT_MASTER,
+                                  {"content-type": "application/vnd.apple.mpegurl"}),
+            "index-f3-v1-a1.txt": (200, VIDOUT_VARIANT,
+                                   {"content-type": "application/vnd.apple.mpegurl"}),
+            "seg-1-f3-v1-a1.woff2": (206, VIDOUT_TS_BYTES, {"content-type": "video/mp2t"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch):
+            verdict = hr.resolve_url("https://vidout.pages.dev/movie/tt12683756")
+        self.assertEqual(verdict["service"], "vidout")
+        self.assertEqual(verdict["status"], "active")
+
+    def test_resolve_url_routes_streamwish(self):
+        fetch = scripted_fetch({
+            "hglink.to/g70gj3eith1c": (200, b"<html/>",
+                                       {"content-type": "text/html"}),
+            "vibuxer.com/g70gj3eith1c": (200, SW_PACKED_PAGE,
+                                         {"content-type": "text/html"}),
+            "master.m3u8": (200, SW_HLS,
+                            {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch):
+            verdict = hr.resolve_url("https://hglink.to/g70gj3eith1c")
+        self.assertEqual(verdict["service"], "streamwish")
+        self.assertEqual(verdict["status"], "active")
+
+    def test_resolve_url_routes_hubcloud(self):
+        fetch = _hc_fetch(
+            (206, HC_MKV_HEAD, HC_R2_HEADERS),
+            (206, HC_MKV_HEAD, HC_R2_HEADERS))
+        with mock.patch.object(hr, "http_request", fetch):
+            verdict = hr.resolve_url(HC_DRIVE_URL)
+        self.assertEqual(verdict["service"], "hubcloud")
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], HC_FSLV2_URL)
+
+    def test_resolve_url_vibuxer_embed_beats_streamwish(self):
+        # streamwish_vibuxer_url refuses /e/ URLs, so a vibuxer embed
+        # must reach unwrap_vibuxer, not the streamwish chain — the two
+        # share a host and only the path distinguishes them.
+        packed = (
+            "eval(function(p,a,c,k,e,d){e=function(c){return c};if(!''.replace(/^/,String)){w..."
+            "}('1.2=\"https://cdn.example.com/hls/master.m3u8?s=123&e=456\";',10,3,"
+            "'|var|links'.split('|'),0,{}))"
+        )
+        html = f"<html><body><script>{packed}</script></body></html>"
+        fetch = scripted_fetch({
+            "vibuxer.com/e/": (200, html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-STREAM-INF\nv.m3u8", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch):
+            verdict = hr.resolve_url("https://vibuxer.com/e/i4p45adamelv")
+        self.assertEqual(verdict["service"], "vibuxer")
+        self.assertEqual(verdict["status"], "active")
+
+    def test_resolve_url_verify_failure_is_unknown_never_dead(self):
+        # A vidout title the GitHub API does not cover is unproven, not
+        # dead: the dispatcher must not rewrite the unwrapper's "unknown".
+        fetch = scripted_fetch({
+            "3/find/tt12683756": (200, VIDOUT_WECOLLEGE_MOVIE,
+                                  {"content-type": "application/json"}),
+            "hls/movie/960875": (404, b"", {"content-type": "text/plain"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch):
+            verdict = hr.resolve_url("https://vidout.pages.dev/movie/tt12683756")
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertNotEqual(verdict["status"], "dead")
+
+
 # Session 104b: the pure helpers behind the three new unwrappers. The
 # end-to-end chains (page -> API -> probe) live in test_database.py, next
 # to the Session 103 unwrapper tests; these pin the parsing rules the

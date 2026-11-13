@@ -486,6 +486,7 @@ class LinkTruthTests(ProjectionTestCase):
             ("1xplayer", "https://1xplayer.top/embed/abc"),
             ("stream", "https://watch-online.mom/e/abc123"),
             ("streamwish", "https://streamwish.com/e/abc123"),
+            ("vidout", "https://vidout.pages.dev/movie/tt12683756"),
         ]
         for service, url in cases:
             links = self.one_work_with([self.src(service, url)])
@@ -513,10 +514,12 @@ class LinkTruthTests(ProjectionTestCase):
         self.assertEqual(links[0]["playability"], "resolve_required")
 
     def test_unresolvable_embed_stays_webview(self):
-        # vidout's playlist host vidmmo.com does not resolve on VM DNS
-        # (item 7) — no server-side unwrapper can be proven for it, so it
-        # stays honestly unplayable in the app player.
-        links = self.one_work_with([self.src("vidout", "https://vidmmo.com/embed/abc123")])
+        # vidsrc has no server-side unwrapper, so it stays honestly
+        # unplayable in the app player. (vidout used to be listed here —
+        # its playlist host did not resolve on VM DNS — but Phase C item 3
+        # gave it a real chain, so it is "resolve_required" now and lives
+        # in the test above.)
+        links = self.one_work_with([self.src("vidsrc", "https://vidsrc.cc/embed/abc123")])
         self.assertEqual(links[0]["kind"], "embed")
         self.assertEqual(links[0]["playability"], "webview")
 

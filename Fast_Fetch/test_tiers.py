@@ -88,6 +88,84 @@ class WinnerTests(unittest.TestCase):
         self.assertNotIn("cdn", label.lower())
 
 
+class BandServicePriorityTests(unittest.TestCase):
+    """Phase C item 4: the §5 measured per-band priority (grand-scale probe,
+    14,089 links, 2026-11-13). The bonus orders copies of the SAME kind by
+    measured alive rate; it never closes the kind gap, and an unlisted
+    service is still a candidate — just not a measured one."""
+
+    def test_priority_band_key_keeps_the_measured_distinctions(self):
+        for text, key in (
+                ("1080p HEVC", "hevc"), ("720p HEVC", "hevc"),
+                ("1080p", "1080p"), ("720p", "720p"), ("480p", "480p"),
+                ("360p", "360p"), ("240p", "240p"), ("4K", "2160p"),
+                ("auto", "auto"), ("HD", "hd"), ("HDTV", "hd"),
+                ("WEB-DL", "unspecified"), ("Download", "unspecified")):
+            self.assertEqual(tiers.priority_band_key(text), key, text)
+
+    def test_band_service_bonus_orders_the_720p_serve_list(self):
+        # §5 720p serve: 5centscdn, mp4moviez, fsl_r2; backups: hubcloud, vidbolt.
+        ordered = ("5centscdn", "mp4moviez", "fsl_r2", "hubcloud", "vidbolt")
+        scores = [tiers.score(link(service=s, playback_type="direct",
+                                   status="active"), "720p", "720p")
+                  for s in ordered]
+        self.assertEqual(scores, sorted(scores, reverse=True), ordered)
+        self.assertGreater(scores[0], scores[-1])
+
+    def test_the_bonus_never_closes_the_kind_gap(self):
+        # A url copy on the best 720p host still trails a direct copy on
+        # the third host: the measured order decides within a kind, never
+        # across one.
+        page = link(service="mp4moviez", playback_type="url", status="active")
+        direct = link(service="fsl_r2", playback_type="direct", status="active")
+        self.assertGreater(tiers.score(direct, "720p", "720p"),
+                           tiers.score(page, "720p", "720p"))
+
+    def test_an_unlisted_service_is_still_a_candidate(self):
+        # mobilejsr is 410/514 dead — never served first — but it is not
+        # excluded by the table: it earns 0 and keeps its kind/status score.
+        dead_host = link(service="mobilejsr", playback_type="direct",
+                         status="active")
+        self.assertEqual(tiers.band_service_bonus("mobilejsr", "720p"), 0)
+        self.assertGreater(tiers.score(dead_host, "720p", "720p"), 0)
+
+    def test_for_release_picks_the_measured_winner_and_two_backups(self):
+        ladder = tiers.for_release({"quality": "720p"}, [
+            link(id=1, service="hubcloud"),
+            link(id=2, service="mobilejsr"),
+            link(id=3, service="fsl_r2"),
+            link(id=4, service="mp4moviez"),
+            link(id=5, service="5centscdn")])
+        tier = ladder["tiers"][0]
+        self.assertEqual(tier["link"]["service"], "5centscdn")
+        self.assertEqual([item["service"] for item in tier["backups"]],
+                         ["mp4moviez", "fsl_r2"])
+        self.assertEqual(len(tier["backups"]), tiers.BACKUP_LIMIT)
+
+    def test_the_auto_band_serves_aryzap_vod(self):
+        ladder = tiers.for_release({"quality": "auto"}, [
+            link(id=1, service="dramadog"),
+            link(id=2, service="aryzap-vod")])
+        self.assertEqual(ladder["tiers"][0]["link"]["service"], "aryzap-vod")
+
+    def test_the_1080p_serve_is_fsl_r2_then_vidbolt(self):
+        self.assertGreater(
+            tiers.score(link(service="fsl_r2"), "1080p", "1080p"),
+            tiers.score(link(service="vidbolt"), "1080p", "1080p"))
+        self.assertGreater(
+            tiers.score(link(service="vidbolt"), "1080p", "1080p"),
+            tiers.score(link(service="hubcloud"), "1080p", "1080p"))
+
+    def test_candidate_order_sql_puts_the_band_first(self):
+        sql = tiers.candidate_order_sql(band="720p")
+        self.assertLess(sql.index("5centscdn"), sql.index("fsl_r2"))
+        self.assertLess(sql.index("fsl_r2"), sql.index("hubcloud_10g"))
+        # Without a band the SQL is byte-identical to the old global order.
+        self.assertEqual(tiers.candidate_order_sql(), tiers.CANDIDATE_ORDER_SQL)
+        self.assertEqual(tiers.candidate_order_sql("s"),
+                         tiers.candidate_order_sql("s"))
+
+
 class AutoDefaultTests(unittest.TestCase):
     def test_auto_is_the_best_playable_band_not_the_highest_one(self):
         # 4K exists here but only as an embed, so the player defaults to 1080p and
@@ -189,7 +267,7 @@ class PublicShapeTests(unittest.TestCase):
         # reaches the response; only the kind changes.
         for service in ("vidrift", "vidbolt", "filmu", "iqsmart", "cineverse",
                         "streamtape", "stream", "streamwish", "mixdrop", "voe",
-                        "vidhide", "1xplayer", "uploadflix"):
+                        "vidhide", "1xplayer", "uploadflix", "vidout"):
             view = viewer.link_view(link(playback_type="iframe", service=service),
                                     "http://our.box")
             self.assertEqual(view["kind"], "resolve", service)
@@ -199,9 +277,11 @@ class PublicShapeTests(unittest.TestCase):
             self.assertNotIn("service", view, service)
 
     def test_an_iframe_with_no_unwrapper_stays_external(self):
-        # vidout's playlist host does not resolve on VM DNS (item 7);
-        # vidsrc has no server-side unwrapper at all.
-        for service in ("vidout", "vidsrc"):
+        # vidsrc has no server-side unwrapper at all. (vidout used to be
+        # listed here — its playlist host did not resolve on VM DNS — but
+        # Phase C item 3 gave it a real chain, so it is "resolve" now and
+        # lives in the test above.)
+        for service in ("vidsrc",):
             view = viewer.link_view(link(playback_type="iframe", service=service),
                                     "http://our.box")
             self.assertEqual(view["kind"], "external", service)
