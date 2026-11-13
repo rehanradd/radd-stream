@@ -66,6 +66,40 @@ SAMPLE_MD_ARCH_720_HTML = """
 </body></html>
 """
 
+# Same-origin duplicate fixture (Rev-9 follow-up): two DIFFERENT archive
+# pages carrying the IDENTICAL <title> — a series re-listing one season
+# pack under two archive ids — with different file-host links. Before the
+# fix the extractor emitted two releases with one title and one origin_url.
+SAMPLE_MD_WP_POST_SAME_TITLE = {
+    "id": 65292,
+    "slug": "visionquest-season-1-2026-web-dl-hindi-720p",
+    "link": "https://new3.moviesdrive.cyou/visionquest-season-1-2026-web-dl-hindi-720p/",
+    "title": {"rendered": "VisionQuest (Season 1) 2026 WEB-DL Hindi 720p"},
+    "content": {"rendered": """
+        <p><a href="https://mdrive.lol/archive/91001/">720p Ep01-05</a></p>
+        <p><a href="https://mdrive.lol/archive/91002/">720p Ep06-10</a></p>
+    """},
+    "date": "2026-11-12T10:00:00",
+}
+
+SAMPLE_MD_ARCH_SAME_TITLE_A_HTML = """
+<!DOCTYPE html>
+<html><head>
+<title>VisionQuest (Season 1) 720p x264 [1.2 GB]</title>
+</head><body>
+<p><a href="https://hubcloud.test/drive/aaaa1111">Download 720p Ep01-05</a></p>
+</body></html>
+"""
+
+SAMPLE_MD_ARCH_SAME_TITLE_B_HTML = """
+<!DOCTYPE html>
+<html><head>
+<title>VisionQuest (Season 1) 720p x264 [1.2 GB]</title>
+</head><body>
+<p><a href="https://hubcloud.test/drive/bbbb2222">Download 720p Ep06-10</a></p>
+</body></html>
+"""
+
 SAMPLE_MD_ARCH_NO_HOST_HTML = """
 <!DOCTYPE html>
 <html><head><title>Some Title (2026) 480p x264 [500 MB]</title></head>
@@ -125,6 +159,28 @@ class TestMoviesDriveExtract(unittest.TestCase):
         }
         self.assertIsNone(import_moviesdrive.extract_post_data_moviesdrive(SAMPLE_MD_WP_POST, archive_pages))
 
+    def test_two_archive_pages_same_title_merge_into_one_release(self):
+        # Rev-9 follow-up: two archive pages with the identical <title>
+        # used to emit two releases with one title and one origin_url —
+        # a same-origin duplicate the refresh delete cannot catch (it
+        # runs before the inserts) and the old dedupe skipped.
+        archive_pages = {
+            "https://mdrive.lol/archive/91001/": SAMPLE_MD_ARCH_SAME_TITLE_A_HTML,
+            "https://mdrive.lol/archive/91002/": SAMPLE_MD_ARCH_SAME_TITLE_B_HTML,
+        }
+        data = import_moviesdrive.extract_post_data_moviesdrive(
+            SAMPLE_MD_WP_POST_SAME_TITLE, archive_pages)
+        self.assertIsNotNone(data)
+        self.assertEqual(len(data["releases"]), 1)
+        self.assertEqual(
+            data["releases"][0]["release_title"],
+            "VisionQuest (Season 1) 720p x264 [1.2 GB]")
+        self.assertEqual(len(data["releases"][0]["sources"]), 2)
+        self.assertEqual(
+            {s["source_url"] for s in data["releases"][0]["sources"]},
+            {"https://hubcloud.test/drive/aaaa1111",
+             "https://hubcloud.test/drive/bbbb2222"})
+
     def test_languages_from_title(self):
         self.assertEqual(
             import_moviesdrive.languages_from_title("Movie (2026) Hindi DD2.0 English 480p"),
@@ -157,6 +213,32 @@ class TestMoviesDriveSave(unittest.TestCase):
             self.assertEqual(row["source_site"], "moviesdrive")
             self.assertEqual(n_rel, 2)
             self.assertEqual(n_src, 2)
+
+    def test_same_title_archives_save_as_one_release(self):
+        # End to end for the merge above: one save must not insert two
+        # rows with the same (post_id, release_title, origin_url).
+        archive_pages = {
+            "https://mdrive.lol/archive/91001/": SAMPLE_MD_ARCH_SAME_TITLE_A_HTML,
+            "https://mdrive.lol/archive/91002/": SAMPLE_MD_ARCH_SAME_TITLE_B_HTML,
+        }
+        data = import_moviesdrive.extract_post_data_moviesdrive(
+            SAMPLE_MD_WP_POST_SAME_TITLE, archive_pages)
+        self.assertIsNotNone(data)
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "moviesdrive.db"
+            fast_fetch.DB_PATH = db_path
+            fast_fetch.init_db()
+            post_id = import_moviesdrive.save_post_record(data, db_path)
+            with sqlite3.connect(str(db_path)) as conn:
+                n_rel = conn.execute("SELECT count(*) FROM releases WHERE post_id = ?", (post_id,)).fetchone()[0]
+                n_src = conn.execute("SELECT count(*) FROM download_sources").fetchone()[0]
+                dups = conn.execute(
+                    "SELECT count(*) FROM (SELECT 1 FROM releases WHERE source_site = 'moviesdrive'"
+                    " GROUP BY post_id, release_title HAVING count(*) > 1)"
+                ).fetchone()[0]
+            self.assertEqual(n_rel, 1)
+            self.assertEqual(n_src, 2)
+            self.assertEqual(dups, 0)
 
 
 class TestMoviesDriveSync(unittest.TestCase):
@@ -518,6 +600,67 @@ class TestDedupeDuplicateReleases(unittest.TestCase):
             import_moviesdrive.save_post_record(data, db_path)
             stats = import_moviesdrive.dedupe_duplicate_releases(db_path)
             self.assertEqual(stats, {"groups": 0, "releases_deleted": 0, "sources_deleted": 0})
+
+    def test_dedupe_removes_same_origin_dupes(self):
+        # Rev-9 follow-up: the 21 same-origin groups the old dedupe
+        # skipped (hosts > 1 filter). Same (post_id, release_title) and
+        # the SAME origin_url — two archive pages, one title, one save.
+        data = _post_data_for_rotation(
+            "https://new3.moviesdrive.cyou/wwe-crown-jewel-2026-2026-web-dl-hindi-dd2-0-english-480p-720p-1080p-x264-esubs-full-movie/")
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "moviesdrive.db"
+            fast_fetch.DB_PATH = db_path
+            fast_fetch.init_db()
+            post_id = import_moviesdrive.save_post_record(data, db_path)
+            with sqlite3.connect(str(db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                first = conn.execute(
+                    "SELECT id, release_title, origin_url FROM releases WHERE post_id = ? ORDER BY id LIMIT 1",
+                    (post_id,),
+                ).fetchone()
+                # Simulate the pre-fix residue: the same release saved
+                # twice from the SAME origin URL.
+                conn.execute(
+                    "INSERT INTO releases (post_id, release_title, quality, source_site, origin_url)"
+                    " VALUES (?, ?, '480p', 'moviesdrive', ?)",
+                    (post_id, first["release_title"], first["origin_url"]),
+                )
+                dup_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "INSERT INTO download_sources (release_id, source_name, service, source_url)"
+                    " VALUES (?, 'Dup', 'hubcloud', 'https://hubcloud.test/dup')",
+                    (dup_id,),
+                )
+                conn.commit()
+                before = conn.execute(
+                    "SELECT count(*) FROM releases WHERE post_id = ?", (post_id,)
+                ).fetchone()[0]
+            self.assertEqual(before, 3)
+            stats = import_moviesdrive.dedupe_duplicate_releases(db_path)
+            self.assertEqual(stats, {"groups": 1, "releases_deleted": 1, "sources_deleted": 1})
+            with sqlite3.connect(str(db_path)) as conn:
+                rows = conn.execute(
+                    "SELECT id, origin_url FROM releases WHERE post_id = ? ORDER BY id",
+                    (post_id,),
+                ).fetchall()
+                n_src = conn.execute("SELECT count(*) FROM download_sources").fetchone()[0]
+            self.assertEqual(len(rows), 2)
+            self.assertTrue(any("new3.moviesdrive.cyou" in r[1] for r in rows))
+            self.assertEqual(n_src, 2)
+
+    def test_dedupe_keeps_distinct_titles_untouched(self):
+        data = _post_data_for_rotation(
+            "https://new3.moviesdrive.cyou/wwe-crown-jewel-2026-2026-web-dl-hindi-dd2-0-english-480p-720p-1080p-x264-esubs-full-movie/")
+        with tempfile.TemporaryDirectory() as td:
+            db_path = Path(td) / "moviesdrive.db"
+            fast_fetch.DB_PATH = db_path
+            fast_fetch.init_db()
+            post_id = import_moviesdrive.save_post_record(data, db_path)
+            stats = import_moviesdrive.dedupe_duplicate_releases(db_path)
+            self.assertEqual(stats, {"groups": 0, "releases_deleted": 0, "sources_deleted": 0})
+            with sqlite3.connect(str(db_path)) as conn:
+                n_rel = conn.execute("SELECT count(*) FROM releases WHERE post_id = ?", (post_id,)).fetchone()[0]
+            self.assertEqual(n_rel, 2)
 
 
 # --- Direct-hubcloud shape (2026-11-13) -------------------------------------

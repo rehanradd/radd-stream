@@ -545,7 +545,21 @@ def extract_post_data_moviesdrive(
         rel["source_site"] = SITE_NAME
         rel["languages"] = languages or rel.get("languages", "")
         rel["sources"] = sources
-        releases.append(rel)
+        # Two different archive pages can carry the identical <title> (a
+        # series re-lists the same season pack under two archive ids). The
+        # title is the release's identity, so a second page with the same
+        # title adds its file-host links to the first release instead of
+        # duplicating the quality tier — otherwise one save inserts two
+        # rows with the same (post_id, release_title, origin_url), a
+        # same-origin duplicate the refresh delete cannot catch (it runs
+        # before the inserts) and the old dedupe skipped (hosts > 1).
+        existing = next(
+            (r for r in releases
+             if r.get("release_title") == rel["release_title"]), None)
+        if existing is not None:
+            existing.setdefault("sources", []).extend(rel["sources"])
+        else:
+            releases.append(rel)
 
     # Direct hubcloud links need no archive fetch: the search-recover URL
     # IS the intermediate. A post carrying both shapes keeps both; a
@@ -648,15 +662,19 @@ def save_post_record(data: dict, db_path: Path, queue_loc: str | None = None) ->
 
 
 def dedupe_duplicate_releases(db_path: Path) -> dict:
-    """Delete older-domain duplicate releases left by past rotations.
+    """Delete duplicate releases left by past rotations and re-listings.
 
     Prior rotations (new1 -> new2) left 60 (post_id, release_title) pairs
     carrying 2 distinct origin_urls across 15 posts: the refresh DELETE then
     keyed on the exact origin_url, so a re-save from the new domain INSERTed
-    a second copy instead of replacing the first. For each such group, keep
-    the newest row (highest id) and delete the rest, with their sources.
-    Only runs when the operator passes --dedupe-releases; scraping never
-    mutates history on its own.
+    a second copy instead of replacing the first. The same shape also
+    arrives same-origin: two archive pages carrying the identical <title>
+    used to emit two releases with one origin_url in a single save, which
+    the refresh delete cannot catch (it runs before the inserts). The
+    extractor now merges those at parse time; this pass cleans the residue
+    either way. For each duplicate group, keep the newest row (highest id)
+    and delete the rest, with their sources. Only runs when the operator
+    passes --dedupe-releases; scraping never mutates history on its own.
     """
     fast_fetch.DB_PATH = db_path
     fast_fetch.init_db()
@@ -670,7 +688,7 @@ def dedupe_duplicate_releases(db_path: Path) -> dict:
                 FROM releases
                 WHERE source_site = 'moviesdrive'
                 GROUP BY post_id, release_title
-                HAVING n > 1 AND hosts > 1
+                HAVING n > 1
                 """
             ).fetchall()
             for post_id, release_title, _n, _hosts, keep_id in groups:
