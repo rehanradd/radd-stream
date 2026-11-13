@@ -3152,8 +3152,15 @@ def _resolve_work_ref(conn, work_ref: str):
     columns; `family:normalized title:year` matches the title the same way
     the key was derived from it (the UDF is registered on this connection
     only, and only for this lookup). When the year is known, `idx_posts_year`
-    seeks that year's rows before the UDF runs; a no-year key ("ny") still
-    pays the full scan, because it has no term to seek on. The family is
+    seeks that year's rows before the UDF runs. A no-year key ("ny") has no
+    term to seek on, so the trigram pass bounds it instead: the key's first
+    meaningful token names the rows sharing a 3-gram with it
+    (`_works_title_candidate_ids`, the detail's candidate pass), and the
+    UDF runs only over those — on a 225k-post catalog a discriminative
+    no-year token resolves in 0.00 s through the pass (vs 1.44 s for the
+    full UDF scan); a token whose grams are shared by most of the
+    catalog falls back to the full scan (1.76 s measured on a colliding
+    synthetic token), never a dropped member for speed. The family is
     checked in Python, because the ledger
     stores the content type, not the family. The adult clause applies at
     every step: a flagged work is indistinguishable from a missing one.
@@ -3190,6 +3197,19 @@ def _resolve_work_ref(conn, work_ref: str):
         except ValueError:
             return None
         sql += " AND p.year = ?"
+    # The trigram bound (see the docstring): a row whose normalized
+    # title equals this key contains the key's first meaningful token,
+    # so it shares a 3-gram with it and the candidate set is a superset
+    # of the matches. An empty set names nothing, so no row can match.
+    first = next((t for t in title.split()
+                  if t not in works.STOPWORDS and len(t) >= 3), "")
+    if first:
+        cand = _works_title_candidate_ids(conn, first)
+        if cand is not None:
+            if not cand:
+                return None
+            sql += " AND p.id IN (%s)" % ", ".join("?" for _ in cand)
+            params.extend(int(pid) for pid in cand)
     sql += " ORDER BY id DESC"
     for row in conn.execute(sql, params).fetchall():
         work_type = catalog_v2.work_type_for(
@@ -4225,9 +4245,11 @@ _WORKS_LIST_CACHE: dict = {}
 #: (POSTS_MAX_OFFSET, 10,000 works) at the live ~1.25 posts-per-work
 #: ratio. `total` is the works in the window, and the window is what
 #: the 120 s cache holds — a title search is unaffected, it names its
-#: own candidate ids first. A `work_ref` call stays unbounded: the
-#: one named post can sit anywhere in the catalog, and bounding its
-#: scan could hide it.
+#: own candidate ids first. A `work_ref` call is bounded differently:
+#: it names one work, so the grouping scan reads only that work's
+#: candidates (`_works_work_ref_candidate_ids`) — the named post can
+#: sit anywhere in the catalog, and the seed is always among the
+#: candidates, so the bound cannot hide it.
 _WORKS_BROWSE_SCAN_LIMIT = 12_500
 
 #: The columns the grouping scan needs: identity for `works.group_posts`
@@ -4540,6 +4562,79 @@ def _works_search_candidate_ids(conn, query: str) -> list[int]:
     return [int(r["id"]) for r in rows]
 
 
+def _works_work_ref_candidate_ids(conn, seed_id: int) -> list[int]:
+    """Post ids that could share a work with the seed post.
+
+    The candidate query `api_v1_get_work_detail` runs for the same
+    seed, ids only: the imdb/tmdb indexed equalities, or a LIKE on the
+    first meaningful title token inside the year window the merge
+    allows, with the trigram pass bounding the LIKE (see
+    `_works_title_candidate_ids`). The list route feeds these ids to
+    the grouping scan instead of the whole catalog, so a `work_ref`
+    call answers the one named work fast wherever its posts sit — the
+    unbounded scan it ran before (11–13 s on a 225k-post catalog, 503
+    live, 2026-11-13). The caller floors the seed id in, so the named
+    work can never be hidden by the bound; the grouping itself still
+    applies the adult rule and the group filter. No adult clause here
+    on purpose, same as the detail: the grouping reads flagged rows
+    deliberately and hides the work only when the corroboration gate
+    agrees.
+
+    The ids are capped at `_WORKS_GROUP_TRIGRAM_LIMIT` (newest first),
+    the same shared 999-variable budget the trigram pass uses: on a
+    pre-migration database, or for an ultra-common first token, the
+    LIKE branch can name more rows than one IN list can carry, and a
+    capped answer beats a 503 — the work still answers with its seed,
+    possibly missing an older twin in that rare fallback.
+    """
+    seed = conn.execute(
+        "SELECT id, clean_title, title, year, imdb_id, tmdb_id"
+        " FROM posts WHERE id = ?", (seed_id,)).fetchone()
+    if seed is None:
+        return []
+    tokens = works.work_title_tokens(seed["clean_title"] or seed["title"] or "")
+    meaningful = [t for t in tokens if t not in works.STOPWORDS and len(t) >= 3]
+    token = meaningful[0] if meaningful else ""
+    try:
+        year = int(seed["year"])
+    except (TypeError, ValueError):
+        year = None
+    like_params: list = []
+    like_sql = "1 = 0"
+    if token:
+        like_sql = "lower(p.clean_title) LIKE ?"
+        like_params.append("%" + token + "%")
+        if year is not None and 1900 <= year <= 2100:
+            like_sql += (" AND (p.year IS NULL OR p.year = 0"
+                         " OR p.year BETWEEN ? AND ?)")
+            like_params.extend([year - 1, year + 1])
+    imdb_id = (seed["imdb_id"] or "").strip()
+    tmdb_id = seed["tmdb_id"]
+    like_ids = _works_title_candidate_ids(conn, token) if token else None
+    if like_ids is not None:
+        if like_ids:
+            like_sql = (f"p.id IN ({', '.join('?' for _ in like_ids)})"
+                        f" AND ({like_sql})")
+            like_params = [int(pid) for pid in like_ids] + like_params
+        else:
+            # No row shares a gram with the token, so no row can
+            # contain it: the LIKE branch matches nothing. (Not
+            # reachable from a real seed — the seed's own title
+            # contains the token — but `IN ()` is a syntax error,
+            # so say so explicitly rather than building one.)
+            like_sql = "1 = 0"
+            like_params = []
+    rows = conn.execute(
+        "SELECT p.id FROM posts p WHERE"
+        " ((p.imdb_id = ? AND p.imdb_id <> '')"
+        " OR (p.tmdb_id = ? AND p.tmdb_id IS NOT NULL)"
+        f" OR ({like_sql}))"
+        " ORDER BY p.id DESC LIMIT %d" % _WORKS_GROUP_TRIGRAM_LIMIT,
+        [imdb_id, tmdb_id if tmdb_id not in (None, "") else -1]
+        + like_params).fetchall()
+    return [int(r["id"]) for r in rows]
+
+
 def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
                      limit: int = 20, full: bool = False,
                      base_url: str = "", industry: str = "", genre: str = "",
@@ -4571,7 +4666,11 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
     the newest `_WORKS_BROWSE_SCAN_LIMIT` posts (see the constant),
     so an empty `q` answers a fast first page instead of timing out
     the whole-catalog grouping (503 `search_timeout` on live,
-    2026-11-13). `total` is the works in that window. `full` is
+    2026-11-13). `total` is the works in that window. A `work_ref`
+    call is bounded the same way in spirit: the grouping scan reads
+    only the named work's candidates (see
+    `_works_work_ref_candidate_ids`), so it answers the one work fast
+    wherever its posts sit. `full` is
     accepted for signature parity with the posts route and ignored:
     the works list never publishes provenance in either mode.
     """
@@ -4619,6 +4718,18 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
         # grouping. None means "no title restriction" (no query, or a
         # mood query answered from genres instead).
         candidate_ids = None
+        if work_ref_post_id is not None:
+            # The named work's own candidates (see
+            # `_works_work_ref_candidate_ids`): the grouping scan reads
+            # those rows only, not the whole catalog — a work_ref-only
+            # call ran the unbounded scan before this (11–13 s on a
+            # 225k-post catalog, 503 live, 2026-11-13). The seed is
+            # always among them, so the named work can never be hidden
+            # by the bound.
+            candidate_ids = _works_work_ref_candidate_ids(
+                conn, work_ref_post_id)
+            if work_ref_post_id not in candidate_ids:
+                candidate_ids.append(work_ref_post_id)
         fuzzy = False
         did_you_mean_query = None
         mood_words = mood_search.moods_for_query(query) if query else []
