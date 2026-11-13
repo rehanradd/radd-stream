@@ -1291,15 +1291,12 @@ def sync_payload(conn, *, scope: str, since, limit: int, secret: str,
 
 # ── GET /feed.m3u (§12) ──────────────────────────────────────────────────────
 
-def feed_playlist(conn, *, work_id, base_url: str, secret: str) -> str:
-    """An IPTV playlist of what a player may actually start right now.
+def feed_playlist_rows(conn, *, work_id):
+    """The rows a playlist is built from, in render order.
 
     Adult-scoped, and only links that are non-ephemeral, streamable and active:
     an IPTV client has no failover logic, so a token that expired between the
     projection and the playlist load is a dead channel rather than a retry.
-    Titles are our own display title with brands removed, and every entry is
-    addressed to *our* host through our own resolver — a playlist naming an
-    upstream server would undo everything this layer exists to do.
     """
     clauses = [adult_scope("w"), "l.ephemeral = 0",
                "l.playability IN ('stream', 'both')", "l.state = 'active'"]
@@ -1307,7 +1304,7 @@ def feed_playlist(conn, *, work_id, base_url: str, secret: str) -> str:
     if work_id is not None:
         clauses.append("w.id = :wid")
         params["wid"] = int(work_id)
-    rows = conn.execute(
+    return conn.execute(
         f"""
         SELECT l.id, w.id AS work_ref_id, w.title, w.runtime_minutes,
                (SELECT MAX(e.runtime_minutes) FROM cat_episodes e WHERE e.work_id = w.id)
@@ -1318,6 +1315,23 @@ def feed_playlist(conn, *, work_id, base_url: str, secret: str) -> str:
         ORDER BY w.id DESC, l.id ASC
         LIMIT :lim
         """, params).fetchall()
+
+
+def feed_playlist_seed(rows, *, work_id) -> str:
+    """Stable playlist identity for the validator: the ordered
+    (link id, scrubbed title) pairs the body renders, plus the work
+    filter — no minted handle, no expiry second. The etag is a weak
+    validator (§16.2), so two bodies that differ only in a handle's
+    expiry second are the same playlist for caching; minting fresh
+    handles every call still hands the client a live token."""
+    parts = [f"feed|{'' if work_id is None else int(work_id)}"]
+    for row in rows:
+        parts.append(f"{int(row['id'])}:"
+                     f"{redact.scrub_text(row['title'] or 'Untitled')}")
+    return "|".join(parts)
+
+
+def render_feed_playlist(rows, *, base_url: str, secret: str) -> str:
     lines = ['#EXTM3U']
     for row in rows:
         title = redact.scrub_text(row["title"] or "Untitled")
@@ -1330,6 +1344,17 @@ def feed_playlist(conn, *, work_id, base_url: str, secret: str) -> str:
         lines.append(target)
     lines.append("#EXT-X-ENDLIST")
     return "\n".join(lines) + "\n"
+
+
+def feed_playlist(conn, *, work_id, base_url: str, secret: str) -> str:
+    """An IPTV playlist of what a player may actually start right now.
+
+    Titles are our own display title with brands removed, and every entry is
+    addressed to *our* host through our own resolver — a playlist naming an
+    upstream server would undo everything this layer exists to do.
+    """
+    return render_feed_playlist(feed_playlist_rows(conn, work_id=work_id),
+                                base_url=base_url, secret=secret)
 
 
 # ── GET /resolve/{link_id} (§12, B13) ────────────────────────────────────────
@@ -1810,9 +1835,14 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             return True
 
         if head == "feed.m3u":
-            body = feed_playlist(conn, work_id=_int_or_none(_q(query, "work_id")),
-                                 base_url=base_url, secret=secret)
-            etag = etag_for(body, versions)
+            wid = _int_or_none(_q(query, "work_id"))
+            rows = feed_playlist_rows(conn, work_id=wid)
+            body = render_feed_playlist(rows, base_url=base_url, secret=secret)
+            # The validator is over the stable playlist content, NOT the
+            # minted body: every call mints fresh handles whose expiry is
+            # stamped to the second, so an etag over the body moves across
+            # a second boundary and a revalidation answers 200, not 304.
+            etag = etag_for(feed_playlist_seed(rows, work_id=wid), versions)
             if etag_matches(str(handler.headers.get("If-None-Match") or ""), etag):
                 not_modified(handler, cache=CACHE_DETAIL, etag=etag, rid=rid,
                              last_modified=stamp)

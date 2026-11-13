@@ -1755,6 +1755,53 @@ class V2CachingTests(V2WireFixture):
                                           headers={"If-None-Match": 'W/"cat-1-nope"'}
                                           ).status, 200)
 
+    def test_feed_etag_survives_a_second_boundary(self):
+        """The feed validator is over stable playlist content, not the
+        per-second-minted handles — a revalidation straddling a second
+        boundary must still answer 304 (§16.2)."""
+        first = self.get("/api/v2/feed.m3u")
+        etag = first.header("etag")
+        self.assertTrue(etag and etag.startswith('W/"'), etag)
+        # Re-mint every handle two seconds later: the body moves, the
+        # validator must not.
+        real_mint = redact.mint_token
+
+        def later(number, secret, ttl_seconds=86400, now=None):
+            return real_mint(number, secret, ttl_seconds,
+                             now=time.time() + 2)
+
+        with unittest.mock.patch.object(api_v2.redact, "mint_token",
+                                        side_effect=later):
+            again = self.get("/api/v2/feed.m3u",
+                             headers={"If-None-Match": etag})
+        self.assertEqual(again.status, 304,
+                         "a second-boundary revalidation answered 200: "
+                         "the etag is over the minted body, not the playlist")
+        self.assertEqual(again.header("etag"), etag)
+        self.assertEqual(again.body, b"", "a 304 with a body is a cache poison")
+
+    def test_feed_seed_ignores_the_minted_handle(self):
+        """Two playlists minted with different handles have different
+        bodies and the same stable seed."""
+        rows = api_v2.feed_playlist_rows(self.conn, work_id=None)
+        self.assertTrue(len(rows) > 1, "the corpus needs >1 feed row")
+        seed = api_v2.feed_playlist_seed(rows, work_id=None)
+        with unittest.mock.patch.object(
+                api_v2.redact, "mint_token",
+                side_effect=lambda n, s, ttl_seconds=86400, now=None: "HANDLE-A"):
+            body_a = api_v2.feed_playlist(self.conn, work_id=None,
+                                          base_url=HOST, secret=self.secret)
+        with unittest.mock.patch.object(
+                api_v2.redact, "mint_token",
+                side_effect=lambda n, s, ttl_seconds=86400, now=None: "HANDLE-B"):
+            body_b = api_v2.feed_playlist(self.conn, work_id=None,
+                                          base_url=HOST, secret=self.secret)
+        self.assertNotEqual(body_a, body_b, "the handles did not move the body")
+        self.assertEqual(api_v2.feed_playlist_seed(rows, work_id=None), seed)
+        self.assertEqual(api_v2.etag_for(seed, 1),
+                         api_v2.etag_for(
+                             api_v2.feed_playlist_seed(rows, work_id=None), 1))
+
     def test_etag_moves_with_the_revision_not_with_the_query_shape(self):
         """Two spellings, one payload ⇒ one validator (§16.2's whole point)."""
         plain = self.get("/api/v2/browse")
