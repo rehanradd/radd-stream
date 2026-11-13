@@ -641,6 +641,17 @@ class SyncAccountRepository @Inject constructor(
     private var lastEntitlementReadMs: Long = 0L
 
     /**
+     * Session 153 — whether a live VIP pass is in hand right now, without a
+     * network call. The quality gate trusts this, not the entitlement flag
+     * alone: the stream endpoint serves a gated band only to a caller
+     * carrying the pass, and a trial account can hold `vip=true` while its
+     * presses are still refused. False until the pass lands (launch refresh
+     * or [currentVipPass]); the entitlement refresh re-publishes when it
+     * does, so the gate lifts without reopening the screen.
+     */
+    fun hasLiveVipPass(): Boolean = cachedLivePass() != null
+
+    /**
      * The signed VIP pass the stream/download URLs carry (Session 123), and
      * the instant it stops being good — the server's `expires_at` in epoch
      * seconds, kept in millis beside it. In-memory only: a pass is a 6-hour
@@ -713,14 +724,19 @@ class SyncAccountRepository @Inject constructor(
             val read = apiProvider.current().getEntitlement(bearerHeader(key)).entitlement
             if (read != null) {
                 lastEntitlementReadMs = now
+                // Session 153: a VIP answer warms the URL pass BEFORE the
+                // entitlement is published, so an observer that rebuilds the
+                // gated ladder on this publish already sees the live pass —
+                // publishing first and warming second left the gate reading
+                // "VIP, no pass" and gating a viewer the stream would serve.
+                // The pass itself is good for six hours at most, capped at
+                // the membership end, and the app re-asks when it refreshes
+                // its entitlement.
+                if (read.vip) refreshVipPass(key)
                 _entitlement.value = read
                 // Mirror the server's answer so the next cold start has it before any network
                 // call can fail. The ledger remains the only authority; this is its cache.
                 settingsRepository.saveEntitlement(read)
-                // Session 123: a VIP answer warms the URL pass, so the next
-                // play/download already carries it — the server expects the
-                // app to re-ask when it refreshes its entitlement.
-                if (read.vip) refreshVipPass(key)
                 if (read.vipCancelledAt != null) {
                     settingsRepository.setVipPendingCancel(false)
                 }

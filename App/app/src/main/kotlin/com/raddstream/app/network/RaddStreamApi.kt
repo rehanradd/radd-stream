@@ -255,11 +255,21 @@ interface RaddStreamApi {
      * `resumable`, `expires_in`) and never a location; playback does not need this call at all,
      * because Media3 follows the 302 of `redirect=1` itself. It exists to learn whether a handle
      * is resumable/ephemeral before offering it for keeping.
+     *
+     * Session 153: the call carries the viewer's sync key when signed in (the
+     * same Bearer the v2 play call sends), so a gated handle is warmed as the
+     * account that will press it — pressed anonymously it 402s, banks nothing,
+     * and Play pays the live resolve again. The header rides a metadata-only
+     * call (`redirect=0`): no redirect is followed, so the key never leaves
+     * our own server. It is last with a null default so the download
+     * metadata call, which resolves anonymously and carries its own VIP pass
+     * on the download URL, compiles unchanged.
      */
     @GET("api/v1/stream")
     suspend fun resolveStream(
         @Query("id") streamId: String,
         @Query("redirect") redirect: String = "0",
+        @Header("Authorization") authorization: String? = null,
     ): StreamResponse
 
     /** GET /api/v1/stats — catalog and diagnostic counts. */

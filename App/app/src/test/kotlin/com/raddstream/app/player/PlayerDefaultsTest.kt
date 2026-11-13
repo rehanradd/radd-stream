@@ -73,4 +73,15 @@ class PlayerDefaultsTest {
         assertEquals("720p" to false, resolveStartBand(null, true, "720p", rungs))
         assertEquals("1080p" to true, resolveStartBand(null, true, "auto", rungs))
     }
+
+    // ── Session 153: the player waits out the slow resolve ───────────────
+
+    @Test
+    fun `the read timeout clears the measured resolve ceiling`() {
+        // The redirector's live resolve is 6-12 s measured; a 10 s read
+        // timeout fired while the 302 was still being minted, before Media3
+        // ever touched the file.
+        assertTrue(MEDIA_READ_TIMEOUT_MS > 12_000)
+        assertTrue(MEDIA_CONNECT_TIMEOUT_MS < MEDIA_READ_TIMEOUT_MS)
+    }
 }

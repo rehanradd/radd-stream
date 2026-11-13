@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 
 data class DetailUiState(
     val post: PostDetail? = null,
@@ -336,8 +337,17 @@ class DetailViewModel @Inject constructor(
      */
     private var downloadsEnabled: Boolean = true
 
-    /** Who may see the top rungs: a confirmed member, or everyone while the switch is off. */
-    private val premiumAccess: Boolean get() = VipQualityGate.premiumAccess(qualityGateEnabled, serverVip)
+    /** Who may see the top rungs: a confirmed member holding a live VIP pass, or everyone while the switch is off. */
+    private val premiumAccess: Boolean get() =
+        VipQualityGate.premiumAccess(
+            qualityGateEnabled,
+            // Session 153: the entitlement flag alone does not open them —
+            // the stream serves a gated band only to a caller carrying the
+            // pass, so a `vip=true` without one is a free viewer for quality
+            // purposes. Every gate call below reads this one property, so the
+            // ladder, the card, the player Auto and the preresolve all agree.
+            qualityVipAccess(serverVip, syncAccountRepository.hasLiveVipPass()),
+        )
 
     /** The ungated catalog answer; every gated view is derived from it on entitlement change. */
     private var rawDetail: PostDetail? = null
@@ -524,6 +534,11 @@ class DetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
+            // Session 153: warm the connection once before the first detail
+            // call — a cold pool can fail the first tap before any byte
+            // leaves the device. Bounded and silent: a slow warm must never
+            // hold the detail back, it only ever helps it.
+            withTimeoutOrNull(3_000) { catalogRepository.warmConnectionIfNeeded() }
             try {
                 val detail = fetchDetailWithRetry()
                 if (detail != null) {
@@ -1162,7 +1177,7 @@ class DetailViewModel @Inject constructor(
      */
     private fun stageAutoLadder(option: QualityOption) {
         val ladder = _uiState.value.ladder
-        val auto = ladder.autoBand != null && option.band == ladder.autoBand
+        val auto = isAutoRung(ladder, option)
         val rungs = ladder.options
             .filter { it.playsHere && it.streamId.isNotBlank() && it.band.isNotBlank() }
             .map { LadderRung(band = it.band, streamId = it.streamId, backupHandles = it.backupHandles, label = it.title) }
@@ -1375,6 +1390,14 @@ class DetailViewModel @Inject constructor(
             playability = winner.playability,
             score = winner.linkScore,
         )
+        // Session 153: stage the gated ladder's rungs for the winner's band
+        // before playing, so a 402 on this print steps down to the next rung
+        // instead of giving up. Only `playLadder` staged one before, so the
+        // Play-button path had no step-down plan at all — a gated handle
+        // that reached the player burned the whole start budget. The winner's
+        // band is the print's resolution band; a rung with no band match
+        // stages nothing, and the player falls back to its own failover.
+        rungForBand(_uiState.value.ladder, print.resolution.wire)?.let { stageAutoLadder(it) }
         playLink(link, external, print.season, print.episodeFrom)
         return true
     }

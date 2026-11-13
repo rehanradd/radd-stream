@@ -21,6 +21,24 @@ fun shouldAutoAdvance(autoplayNext: Boolean, action: NextEpisodeAction): Boolean
 const val AUTOPLAY_COUNTDOWN_SECONDS = 10
 
 /**
+ * Session 153 — the HTTP timeouts on the player's own data source.
+ *
+ * The redirector's live resolve takes 6–12 s measured (Salaar's 720p
+ * handle: 6.1–12.0 s per press, and the press is not cached — a repeat
+ * press of the same handle costs the same again), so the old 10 s read
+ * timeout fired while the 302 was still being minted, before Media3 ever
+ * touched the file. Five 302s in the device log and no frame is that
+ * timeout, not a dead link. The read timeout is now above the measured
+ * resolve ceiling; the 20 s start watchdog still bounds each handle and
+ * fails it over, and the 30 s give-up still bounds the attempt — these
+ * timeouts are the backstop that turns a hung socket into a player error,
+ * not the wait itself. Connect stays short: a host that will not connect
+ * at all is not worth the start budget.
+ */
+const val MEDIA_CONNECT_TIMEOUT_MS: Int = 15_000
+const val MEDIA_READ_TIMEOUT_MS: Int = 25_000
+
+/**
  * One autoplay-next countdown, as pure state: the seconds left, and the tick
  * that moves it. [tick] returns null at zero — the moment the advance fires —
  * so the caller never has to compare against a magic number, and a JVM test

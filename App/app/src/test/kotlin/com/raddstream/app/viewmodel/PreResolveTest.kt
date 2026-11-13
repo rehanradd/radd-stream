@@ -471,4 +471,60 @@ class PreResolveTest {
 
         assertNull(stepDownRung(ladder, failed = rung("2160p", "h2160", true), premiumAccess = true, freeQualityCap = "720p"))
     }
+
+    // ── Session 153: the gate trusts the live VIP pass ───────────────────
+
+    @Test
+    fun `quality VIP needs both the entitlement and a live pass`() {
+        assertTrue(qualityVipAccess(serverVip = true, hasLiveVipPass = true))
+        assertFalse(qualityVipAccess(serverVip = true, hasLiveVipPass = false))
+        assertFalse(qualityVipAccess(serverVip = false, hasLiveVipPass = true))
+        assertFalse(qualityVipAccess(serverVip = false, hasLiveVipPass = false))
+    }
+
+    @Test
+    fun `a gated Auto rung is still Auto when the server pointer is nulled`() {
+        // The gate removed 2160p/1080p and nulled autoBand; the effective
+        // band is the first rung that plays (720p). The old autoBand check
+        // would have called this rung "not Auto".
+        val ladder = LadderForScope(
+            options = listOf(rung("720p", "h720", true), rung("480p", "h480", true)),
+            autoBand = null,
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertEquals("720p", ladder.effectiveAutoBand)
+        assertTrue(isAutoRung(ladder, rung("720p", "h720", true)))
+        assertFalse(isAutoRung(ladder, rung("480p", "h480", true)))
+    }
+
+    @Test
+    fun `an ungated Auto rung is the server pointer`() {
+        val ladder = LadderForScope(
+            options = listOf(rung("2160p", "h2160", true), rung("720p", "h720", true)),
+            autoBand = "2160p",
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertTrue(isAutoRung(ladder, rung("2160p", "h2160", true)))
+        assertFalse(isAutoRung(ladder, rung("720p", "h720", true)))
+    }
+
+    @Test
+    fun `rungForBand finds the winner band and nothing else`() {
+        val ladder = LadderForScope(
+            options = listOf(rung("720p", "h720", true), rung("480p", "h480", true)),
+            autoBand = null,
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertEquals("h720", rungForBand(ladder, "720p")?.streamId)
+        assertNull(rungForBand(ladder, "2160p"))
+        assertNull(rungForBand(ladder, ""))
+    }
+
+    @Test
+    fun `a null detail gets two retries`() {
+        assertEquals(2, DETAIL_LOAD_NULL_RETRIES)
+    }
 }

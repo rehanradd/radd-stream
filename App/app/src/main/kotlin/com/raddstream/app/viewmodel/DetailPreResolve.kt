@@ -195,6 +195,46 @@ internal fun autoOptionFor(
 }
 
 /**
+ * Session 153 — the VIP the quality gate may trust.
+ *
+ * The entitlement flag alone is not enough: the stream endpoint serves a
+ * gated band only to a caller carrying a live VIP capability (the signed
+ * pass), and the Sauce Labs device test proved a trial account can hold
+ * `vip=true` while its presses are still refused (402 on every gated
+ * handle, while the same handle with a fresh pass 302s). The gate lifts
+ * only when the account is VIP AND a live pass is in hand; anything else
+ * is a free viewer for quality purposes, so Auto resolves to the best free
+ * print (720p on Salaar) and the ladder, the card, the player and the
+ * preresolve all agree — they all read `premiumAccess`, which is built
+ * from this. A VIP whose pass has not landed yet sees the free ladder
+ * until the pass arrives; the entitlement refresh re-publishes then, so
+ * the gate lifts without reopening the screen.
+ */
+internal fun qualityVipAccess(serverVip: Boolean, hasLiveVipPass: Boolean): Boolean =
+    serverVip && hasLiveVipPass
+
+/**
+ * Session 153 — is this rung the ladder's Auto pick.
+ *
+ * The same pointer the card reads ([LadderForScope.effectiveAutoBand]),
+ * not the server's raw `autoBand`: the gate nulls `autoBand` on a gated
+ * ladder, so comparing against it would record `auto = false` for an Auto
+ * play staged from a gated ladder, and the player would never step down
+ * from it. The effective band survives the gate, so a gated Auto play is
+ * still recognised as Auto.
+ */
+internal fun isAutoRung(ladder: LadderForScope, option: QualityOption): Boolean =
+    ladder.effectiveAutoBand != null && option.band == ladder.effectiveAutoBand
+
+/**
+ * Session 153 — the rung of one band, for staging a step-down plan.
+ * The winner's print is known by its resolution band, not by a link, so
+ * the Play-button path stages the rungs of the winner's band this way.
+ */
+internal fun rungForBand(ladder: LadderForScope, band: String): QualityOption? =
+    ladder.options.firstOrNull { it.band == band }
+
+/**
  * Gap A2 follow-up — the scope warm: the handle the quality card's Auto rung
  * would press for one season/episode scope, or null when the scope has
  * nothing playable here. The detail-open warm covers only the title's best
@@ -274,7 +314,16 @@ internal fun siblingBackupHandles(
  *    not on the server answers null twice and stays "not available".
  */
 internal const val DETAIL_LOAD_MAX_ATTEMPTS: Int = 3
-internal const val DETAIL_LOAD_NULL_RETRIES: Int = 1
+/**
+ * Session 153: a null after a swallowed timeout deserves two more chances,
+ * not one — the first tap on a cold connection can die before any byte
+ * leaves the device, and a single retry is not enough to cover a cold
+ * pool plus a slow first call. The v2 path swallows HTTP/IO failures into
+ * null inside the repository, so a null is the only shape a 429/503 takes
+ * there. A title that genuinely is not on the server answers null three
+ * times and stays "not available".
+ */
+internal const val DETAIL_LOAD_NULL_RETRIES: Int = 2
 
 internal fun detailLoadBackoffMs(attempt: Int): Long =
     when (attempt) {

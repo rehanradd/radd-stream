@@ -97,18 +97,20 @@ class PlaybackService : MediaSessionService() {
         // Cross-protocol redirects ON: resolver 302s are the normal path on this backend.
         // Cleartext: debug builds allow http (app/src/debug/AndroidManifest.xml); the release
         // HTTP-only gap is documented in PLAYER_SPEC.md §3.4 + HANDOFF_appplayer.md.
-        // Explicit timeouts on the fallback 302 path (2026-11-12 rework): the
-        // client-ladder fallback plays through the same slow resolve, so the
-        // HTTP layer itself must bound the wait — 10 s to connect, 10 s
-        // between bytes — instead of leaving it to Media3's defaults and
-        // the 30 s start card. The 8 s stall watchdog fires first on a
+        // Explicit timeouts on the fallback 302 path (2026-11-12 rework, raised
+        // Session 153): the client-ladder fallback plays through the same slow
+        // resolve, so the HTTP layer itself must bound the wait — 15 s to
+        // connect, 25 s between bytes — instead of leaving it to Media3's
+        // defaults and the 30 s start card. The redirector's live resolve is
+        // 6–12 s measured, so a 10 s read timeout fired while the 302 was
+        // still being minted. The 20 s stall watchdog fires first on a
         // silent stall; these timeouts are the backstop that turns a hung
         // socket into a player error the failover machine can act on.
         val httpFactory = DefaultHttpDataSource.Factory()
             .setUserAgent(Brand.userAgent)
             .setAllowCrossProtocolRedirects(true)
-            .setConnectTimeoutMs(10_000)
-            .setReadTimeoutMs(10_000)
+            .setConnectTimeoutMs(MEDIA_CONNECT_TIMEOUT_MS)
+            .setReadTimeoutMs(MEDIA_READ_TIMEOUT_MS)
         // Local playback: a finished download is a `content://` (MediaStore) or
         // `file://` URI, not an HTTP address. Handing DefaultHttpDataSource a
         // content URI makes ExoPlayer fail before the first frame, so all reads

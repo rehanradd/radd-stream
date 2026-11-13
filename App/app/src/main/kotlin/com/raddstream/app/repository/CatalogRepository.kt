@@ -22,6 +22,7 @@ import com.raddstream.app.network.models.WirePlayRequest
 import com.raddstream.app.player.Coverage
 import com.raddstream.app.player.toPlayerCoverage
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
 import retrofit2.HttpException
@@ -39,6 +40,22 @@ class CatalogRepository @Inject constructor(
     }
 
     suspend fun getStats(): StatsResponse = apiProvider.current().getStats()
+
+    private val connectionWarmed = AtomicBoolean(false)
+
+    /**
+     * Session 153 — warm the connection once per process before the first
+     * detail load: one cheap stats call through the same provider, so DNS +
+     * TCP + the OkHttp pool are warm when the big v2 detail call goes out.
+     * A first tap that fails before any byte leaves the device is a cold
+     * connection, not a slow server; warming it here costs one small call
+     * and never holds the detail back (failures are swallowed, and the
+     * caller bounds the wait). Only the first call pays it.
+     */
+    suspend fun warmConnectionIfNeeded() {
+        if (!connectionWarmed.compareAndSet(false, true)) return
+        runCatching { getStats() }
+    }
 
     /** Live TV channels from the server-side registry (see `live_tv.py`). */
     suspend fun getLiveTvChannels(
@@ -314,9 +331,18 @@ class CatalogRepository @Inject constructor(
     /**
      * Ask OUR OWN redirector about one opaque handle (`redirect=0`): metadata only, never a
      * location. Not needed to play — Media3 follows the 302 — only to learn resumability.
+     *
+     * Session 153: the call carries the viewer's sync key when signed in, so a
+     * gated handle warms as the account that will press it instead of 402ing
+     * anonymously and banking nothing. Same pattern as [playV2] below; the
+     * key rides a metadata-only call, so no redirect ever carries it onward.
      */
-    suspend fun resolveStream(streamId: String): StreamResponse =
-        apiProvider.current().resolveStream(streamId, redirect = "0")
+    suspend fun resolveStream(streamId: String): StreamResponse {
+        val authorization = runCatching {
+            bearerHeader(settingsRepository.syncKey.first())
+        }.getOrNull()
+        return apiProvider.current().resolveStream(streamId, redirect = "0", authorization = authorization)
+    }
 
     /**
      * POST /api/v2/play for one print (plan §5 step 13): the server's own ranked
