@@ -1428,6 +1428,321 @@ class TestVidriftUnpack(unittest.TestCase):
         self.assertIn("publishes no active streams", json.dumps(verdict["notes"]))
 
 
+# Fixtures for TestUnwrapVidout, taken from the probed live shapes
+# (2026-11-13, Phase C item 3): the wecollege find answer, the GitHub API
+# movie text / TV season JSON, and a master + variant playlist pair in the
+# urlset shape the live Kites master carries.
+VIDOUT_WECOLLEGE_MOVIE = json.dumps({
+    "movie_results": [{"id": 960875, "title": "The Chalk Line"}],
+    "tv_results": [], "person_results": [],
+}).encode("utf-8")
+VIDOUT_WECOLLEGE_TV = json.dumps({
+    "movie_results": [],
+    "tv_results": [{"id": 1396, "name": "Breaking Bad"}],
+    "person_results": [],
+}).encode("utf-8")
+VIDOUT_GITHUB_MOVIE = b"https://cdn.example.com/hls3/01/08725/2ryp7m05xrsm_,l,n,h,.urlset/master.txt"
+VIDOUT_GITHUB_TV_S1 = json.dumps({
+    "1": "https://cdn.example.com/v4/epu/99occ/cf-master.1760494247.txt",
+    "2": "https://cdn.example.com/v4/epu/99occ/cf-master.1760494248.txt",
+}).encode("utf-8")
+VIDOUT_MASTER = (
+    "#EXTM3U\n"
+    "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio0\",NAME=\"English\",LANGUAGE=\"en\","
+    "AUTOSELECT=YES,DEFAULT=YES,CHANNELS=\"2\",URI=\"index-f1-a1.txt\"\n"
+    "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=522386,RESOLUTION=852x480,"
+    "FRAME-RATE=24.000,CODECS=\"avc1.64001e,mp4a.40.2\",VIDEO-RANGE=SDR,AUDIO=\"audio0\"\n"
+    "index-f1-v1-a1.txt\n"
+    "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=1045047,RESOLUTION=1280x720,"
+    "FRAME-RATE=24.000,CODECS=\"avc1.64001f,mp4a.40.2\",VIDEO-RANGE=SDR,AUDIO=\"audio0\"\n"
+    "index-f2-v1-a1.txt\n"
+    "#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=2164674,RESOLUTION=1920x1080,"
+    "FRAME-RATE=24.000,CODECS=\"avc1.640028,mp4a.40.2\",VIDEO-RANGE=SDR,AUDIO=\"audio0\"\n"
+    "index-f3-v1-a1.txt\n"
+).encode("utf-8")
+# The live variant playlist: segments wear a .woff2 name (disguised MPEG-TS,
+# served as video/MP2T) on absolute paths — no .ts line anywhere.
+VIDOUT_VARIANT = (
+    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n"
+    "#EXTINF:10.0,\n/hls3/01/08725/seg-1-f3-v1-a1.woff2\n"
+    "#EXTINF:10.0,\n/hls3/01/08725/seg-2-f3-v1-a1.woff2\n"
+).encode("utf-8")
+# A plain .ts variant playlist, for the .ts-first branch of _first_media_segment.
+VIDOUT_VARIANT_TS = (
+    "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:10\n"
+    "#EXTINF:10.0,\nseg-0001.ts\n#EXTINF:10.0,\nseg-0002.ts\n"
+).encode("utf-8")
+# A Shaka Packager (fMP4/CMAF) master + variant, the shape the CloudFront TV
+# masters carry: variants are h264_*.m3u8, segments are .m4s under ../dash/.
+VIDOUT_MASTER_FMP4 = (
+    "#EXTM3U\n"
+    "## Generated with https://github.com/google/shaka-packager version v2.4.3-dd9870075f-release\n\n"
+    "#EXT-X-STREAM-INF:BANDWIDTH=2136250,CODECS=\"avc1.640028,mp4a.40.2\",RESOLUTION=852x480,FRAME-RATE=25.000,VIDEO-RANGE=SDR,AUDIO=\"audio\"\n"
+    "h264_480_high_1750k.m3u8\n"
+    "#EXT-X-STREAM-INF:BANDWIDTH=12335566,CODECS=\"avc1.640028,mp4a.40.2\",RESOLUTION=1920x1080,FRAME-RATE=25.000,VIDEO-RANGE=SDR,AUDIO=\"audio\"\n"
+    "h264_1080_high_5800k.m3u8\n"
+    "#EXT-X-STREAM-INF:BANDWIDTH=504022,CODECS=\"avc1.640028,mp4a.40.2\",RESOLUTION=320x180,FRAME-RATE=25.000,VIDEO-RANGE=SDR,AUDIO=\"audio\"\n"
+    "h264_180_high_235k.m3u8\n"
+).encode("utf-8")
+VIDOUT_VARIANT_FMP4 = (
+    "#EXTM3U\n#EXT-X-VERSION:6\n#EXT-X-TARGETDURATION:6\n#EXT-X-PLAYLIST-TYPE:VOD\n"
+    "#EXT-X-MAP:URI=\"../dash/h264_high_segments/h264_1080_high_5800k.mp4\"\n"
+    "#EXTINF:6.000,\n../dash/h264_high_segments/h264_1080_high_5800k_1.m4s\n"
+    "#EXTINF:6.000,\n../dash/h264_high_segments/h264_1080_high_5800k_2.m4s\n"
+).encode("utf-8")
+# A 512-byte fMP4 segment slice: an styp box (size 36) with isom/iso8/mp41/
+# dash/avc1 brands — the exact first 32 bytes of a live CloudFront segment.
+VIDOUT_FMP4_BYTES = (b"\x00\x00\x00\x24stypisom\x00\x00\x00\x00iso8mp41dashavc1"
+                     + b"\x00" * 480)
+# A 512-byte MPEG-TS slice: 0x47 sync at offset 0 and offset 188.
+VIDOUT_TS_BYTES = b"\x47" + b"\x00" * 187 + b"\x47" + b"\x00" * 323
+
+
+class TestVidoutRecognition(unittest.TestCase):
+    def test_movie_url_is_recognized(self):
+        self.assertTrue(hr.is_vidout_page("https://vidout.pages.dev/movie/tt12683756"))
+
+    def test_tv_url_is_recognized(self):
+        self.assertTrue(hr.is_vidout_page("https://vidout.pages.dev/tv/tt0903747"))
+        self.assertTrue(hr.is_vidout_page("https://vidout.pages.dev/tv/tt0903747/1/2"))
+        # The TMDB-id TV shape: /tv/<tmdb>/s<season>/e<episode>.
+        self.assertTrue(hr.is_vidout_page("https://vidout.pages.dev/tv/315036/s1/e31"))
+
+    def test_invalid_url_is_rejected(self):
+        self.assertFalse(hr.is_vidout_page("https://vidout.pages.dev/movie/"))
+        self.assertFalse(hr.is_vidout_page("https://vidout.pages.dev/about"))
+        self.assertFalse(hr.is_vidout_page("https://vidout.pages.dev/movie/abc"))
+        self.assertFalse(hr.is_vidout_page("https://fakevidout.pages.dev/movie/tt12683756"))
+        self.assertFalse(hr.is_vidout_page("https://vidout.pages.dev/movie/tt12683756/extra/deep"))
+        self.assertFalse(hr.is_vidout_page("https://vidout.pages.dev/tv/315036/s1"))
+
+    def test_url_parser_extracts_content_keys(self):
+        movie = hr.vidout_parse_url("https://vidout.pages.dev/movie/tt12683756")
+        self.assertEqual(movie, {"type": "movie", "imdb_id": "tt12683756",
+                                 "tmdb_id": None, "season": None, "episode": None})
+        tv = hr.vidout_parse_url("https://vidout.pages.dev/tv/tt0903747/1/2")
+        self.assertEqual(tv, {"type": "tv", "imdb_id": "tt0903747",
+                              "tmdb_id": None, "season": "1", "episode": "2"})
+        tmdb_tv = hr.vidout_parse_url("https://vidout.pages.dev/tv/315036/s1/e31")
+        self.assertEqual(tmdb_tv, {"type": "tv", "imdb_id": None,
+                                   "tmdb_id": "315036", "season": "1", "episode": "31"})
+
+
+class TestUnwrapVidout(unittest.TestCase):
+    def _movie_fetch(self, master_status=200, master_body=VIDOUT_MASTER):
+        return scripted_fetch({
+            "3/find/tt12683756": (200, VIDOUT_WECOLLEGE_MOVIE,
+                                  {"content-type": "application/json"}),
+            "hls/movie/960875": (200, VIDOUT_GITHUB_MOVIE,
+                                 {"content-type": "text/plain"}),
+            "urlset/master.txt": (master_status, master_body,
+                                  {"content-type": "application/vnd.apple.mpegurl"}),
+            "index-f3-v1-a1.txt": (200, VIDOUT_VARIANT,
+                                   {"content-type": "application/vnd.apple.mpegurl"}),
+            "seg-1-f3-v1-a1.woff2": (206, VIDOUT_TS_BYTES, {"content-type": "video/mp2t"}),
+        })
+
+    def test_movie_resolve_active(self):
+        fetch = self._movie_fetch()
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/movie/tt12683756",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "vidout")
+        self.assertEqual(verdict["final_url"],
+                         "https://cdn.example.com/hls3/01/08725/2ryp7m05xrsm_,l,n,h,.urlset/master.txt")
+        # The highest variant wins, so the quality is the 1080p rendition.
+        self.assertEqual(verdict["quality"], "1080p")
+        # The manifest fetch is a ranged GET carrying the vidout page as Referer.
+        master_calls = [c for c in fetch.calls if "master.txt" in c[0]]
+        self.assertEqual(len(master_calls), 1)
+        self.assertEqual(master_calls[0][1].get("Referer"),
+                         "https://vidout.pages.dev/movie/tt12683756")
+        self.assertEqual(master_calls[0][1].get("Range"), "bytes=0-1023")
+        # The segment probe carries the same Referer.
+        seg_calls = [c for c in fetch.calls if "seg-1-f3-v1-a1.woff2" in c[0]]
+        self.assertEqual(len(seg_calls), 1)
+        self.assertEqual(seg_calls[0][1].get("Referer"),
+                         "https://vidout.pages.dev/movie/tt12683756")
+
+    def test_tv_resolve_active(self):
+        fetch = scripted_fetch({
+            "3/find/tt0903747": (200, VIDOUT_WECOLLEGE_TV,
+                                 {"content-type": "application/json"}),
+            "hls/tv/1396/S1.json": (200, VIDOUT_GITHUB_TV_S1,
+                                    {"content-type": "application/json"}),
+            "cf-master.1760494247.txt": (200, VIDOUT_MASTER,
+                                         {"content-type": "application/vnd.apple.mpegurl"}),
+            "index-f3-v1-a1.txt": (200, VIDOUT_VARIANT,
+                                   {"content-type": "application/vnd.apple.mpegurl"}),
+            "seg-1-f3-v1-a1.woff2": (206, VIDOUT_TS_BYTES, {"content-type": "video/mp2t"}),
+        })
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/tv/tt0903747/1/1",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "vidout")
+        self.assertEqual(verdict["final_url"],
+                         "https://cdn.example.com/v4/epu/99occ/cf-master.1760494247.txt")
+        self.assertEqual(verdict["quality"], "1080p")
+
+    def test_tv_tmdb_shape_skips_wecollege_find(self):
+        # /tv/<tmdb>/s<s>/e<e> already carries the TMDB id: no find request
+        # is made (scripted_fetch 404s unmatched URLs, so a find attempt
+        # would surface as "wecollege find HTTP 404").
+        fetch = scripted_fetch({
+            "hls/tv/1396/S1.json": (200, VIDOUT_GITHUB_TV_S1,
+                                    {"content-type": "application/json"}),
+            "cf-master.1760494247.txt": (200, VIDOUT_MASTER,
+                                         {"content-type": "application/vnd.apple.mpegurl"}),
+            "index-f3-v1-a1.txt": (200, VIDOUT_VARIANT,
+                                   {"content-type": "application/vnd.apple.mpegurl"}),
+            "seg-1-f3-v1-a1.woff2": (206, VIDOUT_TS_BYTES, {"content-type": "video/mp2t"}),
+        })
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/tv/1396/s1/e1",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "vidout")
+        self.assertEqual(verdict["final_url"],
+                         "https://cdn.example.com/v4/epu/99occ/cf-master.1760494247.txt")
+        self.assertFalse(any("3/find/" in c[0] for c in fetch.calls))
+
+    def test_master_requires_referer(self):
+        # The CDN 404s a bare master GET and answers 200 with the vidout
+        # page as Referer — if the resolver ever stops sending it, this fails.
+        page = "https://vidout.pages.dev/movie/tt12683756"
+
+        def fetch(url, headers=None, timeout=None, method="GET", follow=True, data=None):
+            headers = headers or {}
+            if "3/find/" in url:
+                return 200, VIDOUT_WECOLLEGE_MOVIE, {"content-type": "application/json"}, url
+            if "hls/movie/" in url:
+                return 200, VIDOUT_GITHUB_MOVIE, {"content-type": "text/plain"}, url
+            if "master.txt" in url or "index-f" in url or ".woff2" in url:
+                if headers.get("Referer") != page:
+                    return 404, b"", {"content-type": "text/html"}, url
+                if "master.txt" in url:
+                    return 200, VIDOUT_MASTER, {"content-type": "application/vnd.apple.mpegurl"}, url
+                if "index-f" in url:
+                    return 200, VIDOUT_VARIANT, {"content-type": "application/vnd.apple.mpegurl"}, url
+                return 206, VIDOUT_TS_BYTES, {"content-type": "video/mp2t"}, url
+            return 404, b"", {"content-type": "text/html"}, url
+
+        verdict = hr.unwrap_vidout(page, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+
+    def test_github_404_is_unknown_not_dead(self):
+        fetch = scripted_fetch({
+            "3/find/tt12683756": (200, VIDOUT_WECOLLEGE_MOVIE,
+                                  {"content-type": "application/json"}),
+            "hls/movie/960875": (404, b"", {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/movie/tt12683756",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("not in the API", json.dumps(verdict["notes"]))
+
+    def test_wecollege_no_match_is_unknown(self):
+        empty = json.dumps({"movie_results": [], "tv_results": [],
+                            "person_results": []}).encode("utf-8")
+        fetch = scripted_fetch({
+            "3/find/tt12683756": (200, empty, {"content-type": "application/json"}),
+        })
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/movie/tt12683756",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no movie match", json.dumps(verdict["notes"]))
+
+    def test_master_404_is_unknown_not_dead(self):
+        # A master that 404s is a stale/expired URL — the API may refresh
+        # it — so it is "unknown", never "dead".
+        fetch = self._movie_fetch(master_status=404, master_body=b"")
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/movie/tt12683756",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("master playlist HTTP 404", json.dumps(verdict["notes"]))
+
+    def test_segment_probe_failure_is_unknown(self):
+        fetch = scripted_fetch({
+            "3/find/tt12683756": (200, VIDOUT_WECOLLEGE_MOVIE,
+                                  {"content-type": "application/json"}),
+            "hls/movie/960875": (200, VIDOUT_GITHUB_MOVIE,
+                                 {"content-type": "text/plain"}),
+            "urlset/master.txt": (200, VIDOUT_MASTER,
+                                  {"content-type": "application/vnd.apple.mpegurl"}),
+            "index-f3-v1-a1.txt": (200, VIDOUT_VARIANT,
+                                   {"content-type": "application/vnd.apple.mpegurl"}),
+            "seg-1-f3-v1-a1.woff2": (404, b"", {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/movie/tt12683756",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("segment probe HTTP 404", json.dumps(verdict["notes"]))
+
+    def test_ts_segments_still_work(self):
+        # A variant playlist whose segments are plain .ts takes the
+        # .ts-first branch of _first_media_segment.
+        fetch = scripted_fetch({
+            "3/find/tt12683756": (200, VIDOUT_WECOLLEGE_MOVIE,
+                                  {"content-type": "application/json"}),
+            "hls/movie/960875": (200, VIDOUT_GITHUB_MOVIE,
+                                 {"content-type": "text/plain"}),
+            "urlset/master.txt": (200, VIDOUT_MASTER,
+                                  {"content-type": "application/vnd.apple.mpegurl"}),
+            "index-f3-v1-a1.txt": (200, VIDOUT_VARIANT_TS,
+                                   {"content-type": "application/vnd.apple.mpegurl"}),
+            "seg-0001.ts": (206, VIDOUT_TS_BYTES, {"content-type": "video/mp2t"}),
+        })
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/movie/tt12683756",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        seg_calls = [c for c in fetch.calls if "seg-0001.ts" in c[0]]
+        self.assertEqual(len(seg_calls), 1)
+
+    def test_fmp4_segments_are_active(self):
+        # The CloudFront TV masters are Shaka Packager fMP4: the segments
+        # are .m4s (styp box, binary/octet-stream), not MPEG-TS — they
+        # still count as active.
+        github_tv = json.dumps({
+            "9": "https://cdn.example.com/video/abc123/2/hls/h264_master.m3u8",
+        }).encode("utf-8")
+        fetch = scripted_fetch({
+            "hls/tv/92779/S1.json": (200, github_tv,
+                                     {"content-type": "application/json"}),
+            "h264_master.m3u8": (200, VIDOUT_MASTER_FMP4,
+                                 {"content-type": "application/vnd.apple.mpegurl"}),
+            "h264_1080_high_5800k.m3u8": (200, VIDOUT_VARIANT_FMP4,
+                                          {"content-type": "application/vnd.apple.mpegurl"}),
+            "h264_1080_high_5800k_1.m4s": (206, VIDOUT_FMP4_BYTES,
+                                           {"content-type": "binary/octet-stream"}),
+        })
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/tv/92779/s1/e9",
+                                   fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "vidout")
+        self.assertEqual(verdict["quality"], "1080p")
+
+    def test_fmp4_segment_detection(self):
+        self.assertTrue(hr._is_fmp4_segment(VIDOUT_FMP4_BYTES))
+        self.assertTrue(hr._is_fmp4_segment(b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00"))
+        self.assertTrue(hr._is_fmp4_segment(b"\x00\x00\x10\x00moof" + b"\x00" * 100))
+        self.assertFalse(hr._is_fmp4_segment(b""))
+        self.assertFalse(hr._is_fmp4_segment(b"\x00\x00\x00\x08xxxx"))
+        self.assertFalse(hr._is_fmp4_segment(VIDOUT_TS_BYTES))
+
+    def test_verify_false_skips_probing(self):
+        fetch = self._movie_fetch(master_status=404, master_body=b"")
+        verdict = hr.unwrap_vidout("https://vidout.pages.dev/movie/tt12683756",
+                                   fetch=fetch, verify=False)
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(verdict["final_url"],
+                         "https://cdn.example.com/hls3/01/08725/2ryp7m05xrsm_,l,n,h,.urlset/master.txt")
+
+    def test_not_a_vidout_url_is_unknown(self):
+        verdict = hr.unwrap_vidout("https://example.com/movie/tt12683756",
+                                   fetch=self._movie_fetch())
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("not a vidout page URL", json.dumps(verdict["notes"]))
+
+
 class TestIqsmartUnpack(unittest.TestCase):
     def test_movie_resolve_active(self):
         api_resp = json.dumps({"data": [{"fileslug": "slug123"}]}).encode("utf-8")
@@ -2133,6 +2448,24 @@ class TestMain(unittest.TestCase):
             self.assertEqual(hr.main(["https://vidbolt.xyz/movie/550"]), 0)
         printed = json.loads(buf.getvalue())
         self.assertEqual(printed["service"], "vidbolt")
+        self.assertEqual(printed["status"], "active")
+
+    def test_a_vidout_url_dispatches_to_the_vidout_resolver(self):
+        fetch = scripted_fetch({
+            "3/find/tt12683756": (200, VIDOUT_WECOLLEGE_MOVIE,
+                                  {"content-type": "application/json"}),
+            "hls/movie/960875": (200, VIDOUT_GITHUB_MOVIE,
+                                 {"content-type": "text/plain"}),
+            "urlset/master.txt": (200, VIDOUT_MASTER,
+                                  {"content-type": "application/vnd.apple.mpegurl"}),
+            "index-f3-v1-a1.txt": (200, VIDOUT_VARIANT,
+                                   {"content-type": "application/vnd.apple.mpegurl"}),
+            "seg-1-f3-v1-a1.woff2": (206, VIDOUT_TS_BYTES, {"content-type": "video/mp2t"}),
+        })
+        with mock.patch.object(hr, "http_request", fetch), silenced() as buf:
+            self.assertEqual(hr.main(["https://vidout.pages.dev/movie/tt12683756"]), 0)
+        printed = json.loads(buf.getvalue())
+        self.assertEqual(printed["service"], "vidout")
         self.assertEqual(printed["status"], "active")
 
     def test_a_vibuxer_url_dispatches_to_the_vibuxer_resolver(self):

@@ -351,6 +351,7 @@ SERVICE_VIDRIFT = "vidrift"
 SERVICE_IQSMART = "iqsmart"
 SERVICE_FILMU = "filmu"
 SERVICE_CINEVERSE = "cineverse"
+SERVICE_VIDOUT = "vidout"
 
 VIDBOLT_HOST_RE = re.compile(r"(?:^|\.)vidbolt\.(?:xyz|pro)$", re.I)
 VIDBOLT_CONTENT_RE = re.compile(
@@ -382,6 +383,20 @@ CINEVERSE_HOST_RE = re.compile(r"(?:^|\.)(?:modiplay\.xyz|cineverse\.[a-z]+)$", 
 CINEVERSE_CONTENT_RE = re.compile(
     r"^/embed/tmdb/(?:movie|tv)/?$",
     re.I)
+VIDOUT_HOST_RE = re.compile(r"(?:^|\.)vidout\.pages\.dev$", re.I)
+# Two page shapes live in the catalog: /movie/<imdb> and /tv/<imdb>/<s>/<e>
+# (IMDb id, plain season/episode), and /tv/<tmdb>/s<s>/e<e> (TMDB id,
+# s/e-prefixed season/episode). The id is tt-prefixed for IMDb, bare digits
+# for TMDB.
+VIDOUT_CONTENT_RE = re.compile(
+    r"^/(movie|tv)/((?:tt\d+)|[0-9]+)(?:/s?([0-9]+)/e?([0-9]+))?/?$",
+    re.I)
+# Vidout resolves through a public TMDB lookup + a public GitHub API (see
+# unwrap_vidout): the vidout page URL carries only the IMDb id, so the
+# resolver maps it to a TMDB id first, then to the master.txt URL.
+WECOLLEGE_FIND_URL = "https://db.wecollege.net/3/find/{imdb}?external_source=imdb_id"
+VIDOUT_API_BASE = ("https://raw.githubusercontent.com/Watchout2025/api/"
+                   "refs/heads/main/hls")
 VIDBOLT_DEFAULT_EXPIRY_SECONDS = 14400  # 4 hours conservative cache window
 
 # uploadflix (Session 104b, verified live 2026-11-08): a generic XFS file
@@ -990,6 +1005,39 @@ def vidrift_parse_url(url: str) -> dict | None:
 
 def is_vidrift_embed(url: str) -> bool:
     return vidrift_parse_url(url) is not None
+
+
+def vidout_parse_url(url: str) -> dict | None:
+    """
+    Parse a Vidout page URL:
+    returns {"type": "movie"|"tv", "imdb_id": str|None, "tmdb_id": str|None,
+    "season": str|None, "episode": str|None}. Exactly one of imdb_id /
+    tmdb_id is set: a tt-prefixed id is IMDb, bare digits are TMDB (the
+    /tv/<tmdb>/s<s>/e<e> shape). The TMDB id comes from the wecollege find
+    step for IMDb URLs; TMDB URLs skip that step.
+    """
+    clean = (url or "").strip()
+    parts = urllib.parse.urlsplit(clean if "://" in clean else f"https:{clean}")
+    host = (parts.hostname or "").lower()
+    if not host or not VIDOUT_HOST_RE.search(host):
+        return None
+    match = VIDOUT_CONTENT_RE.match(parts.path or "/")
+    if not match:
+        return None
+    kind, content_id, season, episode = match.groups()
+    is_tv = kind.lower() == "tv"
+    is_imdb = content_id.lower().startswith("tt")
+    return {
+        "type": "tv" if is_tv else "movie",
+        "imdb_id": content_id if is_imdb else None,
+        "tmdb_id": None if is_imdb else content_id,
+        "season": season if is_tv else None,
+        "episode": episode if is_tv else None,
+    }
+
+
+def is_vidout_page(url: str) -> bool:
+    return vidout_parse_url(url) is not None
 
 
 def iqsmart_parse_url(url: str) -> dict | None:
@@ -1975,6 +2023,198 @@ def unwrap_vidrift(url: str, fetch=None, verify: bool = True,
     _expires_at, result["expires_in"] = duration_expiry_from_url(result["final_url"])
     result["signed_params"] = sorted(signature_params(result["final_url"]))
     return _finish_media(result, fetch, verify, req_headers={"Referer": "https://embed.vidrift.net/"})
+
+
+def unwrap_vidout(url: str, fetch=None, verify: bool = True,
+                  referer: str | None = None) -> dict:
+    """
+    Vidout page URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Chain (verified live 2026-11-13, Phase C item 3): the vidout player
+    resolves a title through a public TMDB lookup and a public GitHub API.
+    vidout.pages.dev/<movie|tv>/<imdb> -> GET db.wecollege.net/3/find/<imdb>
+    ?external_source=imdb_id (TMDB JSON; movie_results[0].id / tv_results[0].id)
+    -> GET raw.githubusercontent.com/Watchout2025/api/refs/heads/main/hls/movie/<tmdb>
+    (plain-text master.txt URL) or hls/tv/<tmdb>/S<season>.json (JSON
+    episode -> master.txt URL). The /tv/<tmdb>/s<s>/e<e> page shape already
+    carries the TMDB id, so it skips the find step and goes straight to the
+    GitHub API. The master is an HLS playlist on a rotating
+    CDN host, Referer-gated: a bare GET 404s, with the vidout page as Referer
+    it answers 200 #EXTM3U — so every request in the chain carries the page
+    as Referer, and the resolver MUST re-resolve per play and NEVER cache
+    the master URL. The master URL is time-limited (a HAR title's master was
+    200 at 08:36 PKT; the URL family rotates), so a master that 404s is
+    "unknown" (stale URL — the API may refresh it), never "dead".
+    verify=True goes one step further than the master: the highest variant
+    playlist is fetched and its first segment Range-probed (200/206) — a
+    master alone proves the playlist exists, the segment proves the video
+    does. The segments wear a .woff2 name (disguised MPEG-TS, served as
+    video/MP2T) and are Referer-gated too, so the segment is found by the
+    first bare line of the variant playlist, not by a .ts-only match. The
+    segment is MPEG-TS (video/mp2t or 0x47 sync) on the urlset masters, or
+    fMP4 (.m4s, Shaka Packager on CloudFront) on the TV masters, so both
+    shapes count as active.
+    (sw5.aurorionacademy.site) does not complete a TLS handshake from the
+    Oracle VM egress (curl 000, urllib SSL EOF), so TV verifies as "unknown"
+    (transport) from there until that host is reachable again.
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_VIDOUT, clean_url)
+    _withheld_referrer(result, referer)
+    parsed = vidout_parse_url(clean_url)
+    if not parsed:
+        result["status"] = "unknown"
+        result["notes"].append("not a vidout page URL")
+        return result
+
+    kind = parsed["type"]
+    imdb_id = parsed["imdb_id"]
+    tmdb_id = parsed["tmdb_id"]
+    season = parsed["season"] or "1"
+    episode = parsed["episode"] or "1"
+    page_url = clean_url
+
+    # Step 1: IMDb -> TMDB id via the public wecollege find API. A page URL
+    # that already carries a TMDB id (/tv/<tmdb>/s<s>/e<e>) skips this step.
+    if not tmdb_id:
+        find_url = WECOLLEGE_FIND_URL.format(imdb=imdb_id)
+        result["bridge_url"] = find_url
+        status, body, _headers, _final = fetch(find_url)
+        if status != 200:
+            result["status"] = ("unknown" if status in (404, 410)
+                                else "blocked" if status in (401, 403, 429)
+                                else "unknown")
+            result["notes"].append(f"wecollege find HTTP {status}")
+            return result
+        try:
+            data = json.loads(_page_text(body))
+        except Exception as e:
+            result["status"] = "unknown"
+            result["notes"].append(f"wecollege find JSON parse error: {e}")
+            return result
+        results_key = "movie_results" if kind == "movie" else "tv_results"
+        matches = data.get(results_key) if isinstance(data, dict) else None
+        if matches and isinstance(matches, list) and isinstance(matches[0], dict):
+            tmdb_id = str(matches[0].get("id") or "").strip()
+        if not tmdb_id:
+            result["status"] = "unknown"
+            result["notes"].append(f"wecollege find returned no {kind} match for {imdb_id}")
+            return result
+
+    # Step 2: TMDB id -> master.txt URL via the public GitHub API.
+    if kind == "movie":
+        api_url = f"{VIDOUT_API_BASE}/movie/{tmdb_id}"
+    else:
+        api_url = f"{VIDOUT_API_BASE}/tv/{tmdb_id}/S{season}.json"
+    result["bridge_url"] = api_url
+    status, body, _headers, _final = fetch(api_url)
+    if status != 200:
+        result["status"] = ("unknown" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(
+            f"vidout api HTTP {status} (title not in the API)"
+            if status in (404, 410) else f"vidout api HTTP {status}")
+        return result
+    master = ""
+    if kind == "movie":
+        master = _page_text(body).strip().lstrip("\ufeff")
+        if not master.startswith("http") or ".txt" not in master.split("?")[0]:
+            result["status"] = "unknown"
+            result["notes"].append("vidout api answer is not a master URL")
+            return result
+    else:
+        try:
+            episodes = json.loads(_page_text(body))
+        except Exception as e:
+            result["status"] = "unknown"
+            result["notes"].append(f"vidout tv api JSON parse error: {e}")
+            return result
+        if isinstance(episodes, dict):
+            master = str(episodes.get(str(episode)) or "").strip()
+        if not master.startswith("http"):
+            result["status"] = "unknown"
+            result["notes"].append(
+                f"vidout tv api has no master URL for S{season}E{episode}")
+            return result
+
+    result["final_url"] = master
+    result["sources"] = [{"url": master, "mime": "application/vnd.apple.mpegurl",
+                          "label": "hls"}]
+    result["notes"].append(
+        "master URL is time-limited and rotates; re-resolve per play, never cache")
+    if not verify:
+        result["notes"].append("master only; the byte endpoint was not probed")
+        return result
+
+    # Step 3: verify the manifest — a ranged GET with the vidout page as
+    # Referer (a bare GET 404s on the CDN). The first 1 KB carries the
+    # #EXT-X-STREAM-INF lines for the observed playlists; if it does not,
+    # re-fetch the whole (small) master for the variant list.
+    status, body, headers, _final = fetch(
+        master,
+        headers={"Range": "bytes=0-1023", "Referer": page_url},
+        method="GET")
+    if status not in (200, 206):
+        result["status"] = ("unknown" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"master playlist HTTP {status}")
+        return result
+    master_body = _page_text(body)
+    if not master_body.startswith("#EXTM3U"):
+        result["status"] = "unknown"
+        result["notes"].append("master answer is not a playlist")
+        return result
+    result["http_status"] = status
+    result["content_type"] = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    result["size_bytes"] = len(body) if isinstance(body, bytes) else None
+    variants = _m3u8_variants(master_body, master)
+    if not variants:
+        status, body, _headers, _final = fetch(
+            master, headers={"Referer": page_url}, method="GET")
+        if status == 200 and _page_text(body).startswith("#EXTM3U"):
+            variants = _m3u8_variants(_page_text(body), master)
+    if not variants:
+        result["status"] = "unknown"
+        result["notes"].append("master playlist names no variant")
+        return result
+    height, variant_url = max(variants, key=lambda item: item[0])
+    if height > 0:
+        result["quality"] = f"{height}p"
+
+    # Step 4: the highest variant playlist, then its first segment
+    # (a .ts or a disguised .woff2 — see _first_media_segment).
+    status, body, _headers, _final = fetch(
+        variant_url, headers={"Referer": page_url}, method="GET")
+    if status != 200:
+        result["status"] = ("unknown" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429)
+                            else "unknown")
+        result["notes"].append(f"variant playlist HTTP {status}")
+        return result
+    segment_url = _first_media_segment(_page_text(body), variant_url)
+    if not segment_url:
+        result["status"] = "unknown"
+        result["notes"].append("variant playlist names no segment")
+        return result
+    status, body, headers, _final = fetch(
+        segment_url,
+        headers={"Range": f"bytes=0-{RANGE_PROBE_BYTES - 1}",
+                 "Referer": page_url},
+        method="GET")
+    content_type = (headers.get("content-type") or "").split(";")[0].strip().lower()
+    if status in (200, 206) and (_ts_segment_ok(body, content_type)
+                                 or _is_fmp4_segment(body)):
+        result["status"] = "active"
+        return result
+    result["status"] = ("unknown" if status in (404, 410)
+                        else "blocked" if status in (401, 403, 429)
+                        else "unknown")
+    result["notes"].append(
+        f"segment probe HTTP {status} {content_type or 'no content-type'}")
+    return result
 
 
 def unwrap_iqsmart(url: str, fetch=None, verify: bool = True,
@@ -3074,12 +3314,39 @@ def _m3u8_variants(body: str, base_url: str) -> list[tuple[int, str]]:
     return out
 
 
+def _first_media_segment(body: str, base_url: str) -> str:
+    """First segment URI of an HLS media playlist, whatever its extension."""
+    for match in XPLAYER_SEGMENT_RE.finditer(body or ""):
+        return urllib.parse.urljoin(base_url, match.group(1))
+    # A media playlist's bare lines ARE segment URIs — vidout's segments
+    # wear a .woff2 name (disguised MPEG-TS, served as video/MP2T), so the
+    # .ts-only shape above finds nothing for them.
+    for line in (body or "").splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return urllib.parse.urljoin(base_url, line)
+    return ""
+
+
 def _ts_segment_ok(body, content_type: str) -> bool:
     """Whether a Range slice is real MPEG-TS: video/mp2t, or the 0x47 sync."""
     data = body if isinstance(body, bytes) else (body or "").encode("utf-8", "ignore")
     if (content_type or "").split(";")[0].strip().lower().startswith("video/"):
         return True
     return len(data) >= 189 and data[0:1] == b"\x47" and data[188:189] == b"\x47"
+
+
+def _is_fmp4_segment(body) -> bool:
+    """Whether a Range slice is a real fMP4 (CMAF/DASH) segment: an ISO-BMFF
+    box at offset 0 whose type is a known segment box (ftyp/styp for the
+    type box, moof for a media fragment, mdat for media data)."""
+    data = body if isinstance(body, bytes) else (body or "").encode("utf-8", "ignore")
+    if len(data) < 8:
+        return False
+    if data[4:8] not in (b"ftyp", b"styp", b"moof", b"mdat"):
+        return False
+    size = int.from_bytes(data[0:4], "big")
+    return size in (0, 1) or 8 <= size <= 16_000_000
 
 
 def unwrap_1xplayer(url: str, fetch=None, verify: bool = True) -> dict:
@@ -3767,6 +4034,8 @@ def main(argv: list[str] | None = None) -> int:
         unwrap = unwrap_vidbolt
     elif is_vidrift_embed(url):
         unwrap = unwrap_vidrift
+    elif is_vidout_page(url):
+        unwrap = unwrap_vidout
     elif is_iqsmart_embed(url):
         unwrap = unwrap_iqsmart
     elif is_filmu_embed(url):
