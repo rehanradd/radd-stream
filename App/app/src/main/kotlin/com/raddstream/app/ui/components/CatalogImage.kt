@@ -24,6 +24,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.graphics.drawable.toBitmap
 import coil.compose.SubcomposeAsyncImage
@@ -32,6 +33,8 @@ import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.images.ArtUrlPolicy
 import com.raddstream.app.images.ImageSizingHolder
 import com.raddstream.app.images.ImageSizingPolicy
+import com.raddstream.app.ui.theme.RaddPlaceholderHigh
+import com.raddstream.app.ui.theme.RaddPlaceholderLow
 import com.raddstream.app.ui.theme.RaddStreamMark
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
@@ -75,7 +78,7 @@ import dagger.hilt.components.SingletonComponent
  * so instead of leaving a bare surfaceVariant rectangle (which reads as "this title has no
  * artwork", a claim about the content rather than about the network) the tile paints
  * [ImageFallbackCard]: a dark branded panel carrying the source-ripple mark and, when the
- * caller supplied one, the title's initials. [fallbackLabel] is optional precisely because
+ * caller supplied one, the title itself. [fallbackLabel] is optional precisely because
  * not every call site has a title to hand; the mark alone is a complete answer.
  *
  * A failed load is retried, not filed away. Samsung RTL (v1.1.2, Issue 5):
@@ -225,13 +228,12 @@ fun ImageFallbackCard(
         modifier = modifier
             .fillMaxSize()
             .background(
+                // F6 (Batch A): the placeholder is a branded gradient, not a flat
+                // surface — a failed or missing poster still reads as a designed
+                // tile, and the title under the mark says which title it is.
                 Brush.verticalGradient(
-                    listOf(
-                        MaterialTheme.colorScheme.surfaceVariant,
-                        MaterialTheme.colorScheme.surface,
-                        MaterialTheme.colorScheme.background,
-                    )
-                )
+                    listOf(RaddPlaceholderHigh, RaddPlaceholderLow),
+                ),
             ),
         contentAlignment = Alignment.Center,
     ) {
@@ -243,9 +245,11 @@ fun ImageFallbackCard(
                 diameter = 30.dp,
                 color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
             )
-            // Session 121 (P-15): the label is title initials ("AL"), never punctuation.
+            // Session 121 (P-15): the label is the title itself, never punctuation.
             // A label with no letter or digit in it — a "?" from a mistyped title, or
             // a stray symbol — renders as the mark alone instead of a stray glyph.
+            // F6: the full title, up to two lines — the initials ("AL") told a
+            // viewer nothing about which title failed to load.
             val safeLabel = label?.takeIf { it.any { ch -> ch.isLetterOrDigit() } }
             if (!safeLabel.isNullOrBlank()) {
                 Text(
@@ -253,7 +257,8 @@ fun ImageFallbackCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.titleSmall,
                     textAlign = TextAlign.Center,
-                    maxLines = 1,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(top = 6.dp),
                 )
             }

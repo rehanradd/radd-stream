@@ -13,7 +13,7 @@ import org.robolectric.RobolectricTestRunner
  * rectangle (image contrast 1.33) — the null model left the box blank behind
  * the shimmer, because a request that was never made still rendered the
  * loading state. A request that was never made now renders the branded
- * fallback (mark + initials) instead, so the poster area always has visible
+ * fallback (mark + title) instead, so the poster area always has visible
  * content. The shimmer is a loading state only, and nothing is loading.
  */
 @RunWith(RobolectricTestRunner::class)
@@ -43,5 +43,17 @@ class CatalogImageFallbackTest {
             }
         }
         compose.onNodeWithText("TS").assertExists()
+    }
+
+    // F6 (Batch A): the fallback carries the full title, not initials — the
+    // tile must say which title failed to load.
+    @Test
+    fun fullTitleShowsInFallback() {
+        compose.setContent {
+            RaddStreamTheme {
+                CatalogImage(url = null, contentDescription = "Poster", fallbackLabel = "The Three Stooges")
+            }
+        }
+        compose.onNodeWithText("The Three Stooges").assertExists()
     }
 }

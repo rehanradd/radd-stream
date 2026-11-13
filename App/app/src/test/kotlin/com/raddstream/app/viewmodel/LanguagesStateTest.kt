@@ -70,6 +70,40 @@ class LanguagesStateTest {
         assertEquals(200, state(style = SubtitleUiSettings(sizePercent = 200)).subtitleSizePercent)
     }
 
+    // F5a (Batch A): each language row names where its value came from, so the
+    // Languages screen and the Settings card can never disagree without saying
+    // why — the screenshot disagreement was a stored word ("Player default")
+    // shown next to an effective value ("Hindi"), with no provenance on either.
+    @Test
+    fun `a stored pick is the viewers own choice`() {
+        val s = state(audio = "Urdu", subtitle = "Off")
+        assertEquals("your choice", s.audioProvenance)
+        assertEquals("your choice", s.subtitleProvenance)
+    }
+
+    @Test
+    fun `a stored Player default is still the viewers own choice`() {
+        val s = state(audio = "Player default")
+        assertEquals("Player default", s.audioLanguage)
+        assertEquals("your choice", s.audioProvenance)
+    }
+
+    @Test
+    fun `a viewer who never chose gets the region default provenance`() {
+        val desi = state()
+        assertEquals("Desi default", desi.audioProvenance)
+        assertEquals("Desi default", desi.subtitleProvenance)
+
+        assertEquals("East Asian default", state(region = "east_asian").audioProvenance)
+        assertEquals("International default", state(region = "international").subtitleProvenance)
+    }
+
+    @Test
+    fun `a blank stored value falls back to the region default provenance`() {
+        assertEquals("Desi default", state(audio = "  ").audioProvenance)
+        assertEquals("Desi default", state(subtitle = "").subtitleProvenance)
+    }
+
     @Test
     fun `the other style fields do not leak into the state`() {
         val s = state(style = SubtitleUiSettings(sizePercent = 120, bold = true, delayMs = 4200))

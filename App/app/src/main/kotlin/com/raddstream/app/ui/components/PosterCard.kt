@@ -150,7 +150,9 @@ fun PosterCard(
                 if (posterUrl == null) {
                     ImageFallbackCard(
                         modifier = Modifier.fillMaxSize(),
-                        label = title.take(2).uppercase(),
+                        // F6 (Batch A): the full title, not initials — the tile
+                        // must say which title has no poster.
+                        label = title,
                     )
                 } else {
                     CatalogImage(
@@ -159,7 +161,7 @@ fun PosterCard(
                         modifier = Modifier.fillMaxSize(),
                         // A dead poster URL must not look like "no artwork exists" — the
                         // branded fallback says what failed, and keeps the title readable.
-                        fallbackLabel = title.take(2).uppercase(),
+                        fallbackLabel = title,
                     )
                 }
 

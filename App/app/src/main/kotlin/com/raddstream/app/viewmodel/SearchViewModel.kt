@@ -150,8 +150,55 @@ data class TypeGroup(val label: String, val typeKey: String?, val items: List<Po
  * column for, so it is narrowed here. Saying "37 results" while the server holds 4,000
  * of them is the difference between a filtered catalog and a broken-looking one.
  */
+/**
+ * F5c (Batch A): what the "Filtered" pill actually names. The pill used to read the
+ * bare word "Filtered" while its comment claimed it named the facets — a viewer
+ * could not tell which filter was on. The summary lists the active filters in the
+ * order the sheet shows them, so "Filtered: Movies · Hindi" is always true and
+ * always checkable against the sheet.
+ */
+internal fun activeFilterSummary(filters: SearchFilters): List<String> = buildList {
+    filters.type?.let { type ->
+        add(
+            when (type) {
+                "movie" -> "Movies"
+                "series" -> "Series"
+                "anime" -> "Anime"
+                "complete_season" -> "Complete series"
+                else -> type
+            },
+        )
+    }
+    if (filters.industry != IndustryFilter.ALL) add(filters.industry.label)
+    if (filters.genre != GenreFilter.ALL) add(filters.genre.label)
+    if (filters.quality != QualityFilter.ALL) add(filters.quality.label)
+    if (filters.language != LanguageFilter.ALL) add(filters.language.label)
+    val year = when {
+        filters.yearFrom != null && filters.yearTo != null -> "${filters.yearFrom}–${filters.yearTo}"
+        filters.yearFrom != null -> "From ${filters.yearFrom}"
+        filters.yearTo != null -> "To ${filters.yearTo}"
+        else -> null
+    }
+    year?.let { add(it) }
+    if (filters.includedOnly) add("Included in my plan")
+}
+
+/** The "Filtered" pill's label: the active filters, named, first two in full. */
+internal fun filteredPillLabel(filters: SearchFilters): String {
+    val parts = activeFilterSummary(filters)
+    return when {
+        parts.isEmpty() -> "Filtered"
+        parts.size <= 2 -> "Filtered: " + parts.joinToString(" · ")
+        else -> "Filtered: " + parts.take(2).joinToString(" · ") + " +${parts.size - 2} more"
+    }
+}
+
 internal fun resultsSummary(loaded: Int, serverTotal: Int, hasMore: Boolean): String = when {
-    hasMore || loaded < serverTotal -> "Showing $loaded of $serverTotal"
+    // F5d (Batch A): relabel only — the two numbers count different populations
+    // (loaded posts vs the server's total for the query), so the partial line now
+    // says "results" like the complete line does, and the group subtitle keeps
+    // saying "titles". The numbers are NOT forced to agree; they never will.
+    hasMore || loaded < serverTotal -> "Showing $loaded of $serverTotal results"
     else -> "$loaded result" + if (loaded == 1) "" else "s"
 }
 

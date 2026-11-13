@@ -351,15 +351,18 @@ private fun HeroSlide(
             .clickable(onClick = onClick),
     ) {
         // 1 — artwork, or the branded fallback card when there is nothing to paint.
+        // F6 (Batch A): the blank-backdrop branch used to paint a labelless card —
+        // a bare gradient with no title at all. It now names the title, like the
+        // failed-load fallback below it.
         if (backdropUrl.isNullOrBlank()) {
-            ImageFallbackCard()
+            ImageFallbackCard(label = title)
         } else {
             CatalogImage(
                 url = backdropUrl,
                 contentDescription = null, // the merged description above already tells it
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
-                fallbackLabel = title.take(2).uppercase(),
+                fallbackLabel = title,
             )
         }
 
@@ -553,15 +556,29 @@ private fun HeroIndicator(
 }
 
 /**
+ * A language value the server actually knows. The catalog sends the literal words
+ * "Unknown" and "N/A" for titles whose language was never recorded — a missing value,
+ * not a language — so every place that draws a language name drops those (F2, Batch A),
+ * instead of each site re-deciding what counts as unknown.
+ */
+internal fun isKnownLanguage(value: String): Boolean =
+    value.isNotBlank() && !value.equals("unknown", ignoreCase = true) && !value.equals("n/a", ignoreCase = true)
+
+/**
  * Language pills, trimmed to what a banner can show. `posts.language` is free TEXT —
  * "Hindi + English + Japanese", a bare "English", sometimes nothing — so [WireText.listOf]
  * is the only sanctioned reader, and a single long value is cut rather than allowed to
  * push the title off the slide.
+ *
+ * F2 (Batch A): the server also sends the literal words "Unknown" and "N/A" for titles
+ * whose language was never recorded — a missing value, not a language. Those are dropped
+ * here, and [DetailScreen]'s meta row and the audio/subtitle badges hide them the same
+ * way, so no pill, meta line or badge ever reads "Unknown" at a viewer.
  */
 internal fun heroLanguagePills(raw: String?, max: Int = MAX_LANGUAGE_PILLS): List<String> =
     WireText.listOf(raw)
         .map { it.trim() }
-        .filter { it.isNotEmpty() && it.length <= MAX_PILL_LENGTH }
+        .filter { isKnownLanguage(it) && it.length <= MAX_PILL_LENGTH }
         .distinct()
         .take(max)
 

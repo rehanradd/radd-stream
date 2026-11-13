@@ -106,7 +106,7 @@
     <!-- Session 126 (NAV-4/NAV-5): the catch-all deep-link destination. -->
     <string name="dead_link_title">This link didn’t lead anywhere</string>
     <string name="dead_link_body">The link doesn’t name a title this app knows. It may be mistyped, or from an older share. Go back home and find the title again.</string>
-    <string name="player_start_slow">Taking longer than usual — finding your video</string>
+    <string name="player_start_slow">Taking longer than usual</string>
     <string name="player_start_try_another">Try another version</string>
     <string name="player_attempt_counter">Trying copy %1$d of %2$d</string>
     <string name="player_start_giveup_message">This copy did not start within 30 seconds.</string>
@@ -196,6 +196,14 @@
     <string name="embed_retry">Try again</string>
     <string name="embed_open_in_browser">Open in browser</string>
     <string name="embed_page_title">Provider page</string>
+    <!-- ═══ UI FIX BATCH A (2026-11-14) ═══
+         Plain-language replacements for the developer-speak paragraphs the
+         November UI reviews flagged (F1). One short sentence each, no
+         implementation words. Named languages_*/search_* so they stay
+         outside the player_* copy rules in PlayerChromeCopyTest. -->
+    <string name="languages_audio_help">The player plays the soundtrack in your language when the title has one.</string>
+    <string name="languages_sync_help">Change your language in one place and it changes everywhere — here, in Settings, and in the player.</string>
+    <string name="search_filters_help">Filters narrow the whole catalog — only the year range applies to the titles already loaded.</string>
     <string name="embed_load_failed">The page did not load: %1$s</string>
     <string name="embed_load_failed_unknown">The page did not load</string>
 </resources>

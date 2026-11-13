@@ -79,6 +79,10 @@ data class UserPreferences(
     val audioBoost: Float = AudioBoost.BASELINE,
     /** The audio language in force — the stored pick, or the region's default when never set. */
     val audioLanguage: String = AUDIO_LANGUAGE_DEFAULT,
+    /** F5a (Batch A): where [audioLanguage] came from — "your choice" or "<Region> default". */
+    val audioProvenance: String = "Desi default",
+    /** F5a (Batch A): where [subtitleLang] came from — "your choice" or "<Region> default". */
+    val subtitleProvenance: String = "Desi default",
     /** Play the next episode on its own when this one ends (plan §5 step 10, D4: on). */
     val autoplayNext: Boolean = true,
     /** Let the Home hero move on its own (plan §5 step 10); off stops the carousel. */
@@ -420,15 +424,26 @@ class SettingsViewModel @Inject constructor(
                 settingsRepository.preferredAudioLanguage,
                 settingsRepository.preferredSubtitleLanguage,
             ) { region, audio, subtitle ->
-                Pair(
+                // F5a: the provenance rides with the effective value, decided by the
+                // same stored-vs-blank rule — a stored word is the viewer's pick,
+                // a blank means the region's default is speaking.
+                Triple(
                     LanguageDefaults.effectiveAudioLanguage(audio, region)
                         ?: UserPreferences.AUDIO_LANGUAGE_DEFAULT,
                     LanguageDefaults.effectiveSubtitleLanguage(subtitle, region)
                         ?: UserPreferences.SUBTITLE_DEFAULT,
+                    Pair(provenanceOf(audio, region), provenanceOf(subtitle, region)),
                 )
-            }.collect { (audio, subtitle) ->
+            }.collect { (audio, subtitle, provenances) ->
                 _uiState.update {
-                    it.copy(prefs = it.prefs.copy(audioLanguage = audio, subtitleLang = subtitle))
+                    it.copy(
+                        prefs = it.prefs.copy(
+                            audioLanguage = audio,
+                            subtitleLang = subtitle,
+                            audioProvenance = provenances.first,
+                            subtitleProvenance = provenances.second,
+                        ),
+                    )
                 }
             }
         }
@@ -636,7 +651,8 @@ class SettingsViewModel @Inject constructor(
 
     /** [UserPreferences.SUBTITLE_DEFAULT] is stored as the word itself, like the audio row. */
     fun setSubtitleLang(value: String) {
-        updatePrefs { it.copy(subtitleLang = value) }
+        // F5a: a tap IS a stored pick, so the provenance flips at once.
+        updatePrefs { it.copy(subtitleLang = value, subtitleProvenance = "your choice") }
         viewModelScope.launch { settingsRepository.savePreferredSubtitleLanguage(value) }
     }
 
@@ -665,7 +681,8 @@ class SettingsViewModel @Inject constructor(
      * region's default).
      */
     fun setAudioLanguage(value: String) {
-        updatePrefs { it.copy(audioLanguage = value) }
+        // F5a: a tap IS a stored pick, so the provenance flips at once.
+        updatePrefs { it.copy(audioLanguage = value, audioProvenance = "your choice") }
         viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(value) }
     }
 

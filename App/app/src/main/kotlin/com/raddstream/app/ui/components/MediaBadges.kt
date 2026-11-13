@@ -201,7 +201,7 @@ internal fun audioBadgeText(
     languages: List<String>,
     maxLanguages: Int = 2,
 ): String? {
-    val names = languages.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(maxLanguages)
+    val names = languages.map { it.trim() }.filter(::isKnownLanguage).distinct().take(maxLanguages)
     if (names.isEmpty()) return if (dualAudio) "Dual Audio" else null
     val joined = names.joinToString(" + ")
     return if (dualAudio) "Dual Audio $joined" else "$joined audio"
@@ -237,7 +237,7 @@ internal fun subtitleBadgeText(
     maxLanguages: Int = 2,
 ): String? {
     if (!available && !external && !hardcoded && languages.isEmpty()) return null
-    val names = languages.map { it.trim() }.filter { it.isNotEmpty() }.distinct().take(maxLanguages)
+    val names = languages.map { it.trim() }.filter(::isKnownLanguage).distinct().take(maxLanguages)
     val suffix = if (names.isEmpty()) "" else " " + names.joinToString("/")
     return when {
         hardcoded -> "Hardcoded subs$suffix"
