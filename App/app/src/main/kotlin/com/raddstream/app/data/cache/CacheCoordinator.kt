@@ -50,6 +50,28 @@ class CacheCoordinator(
     /** Latest absolute playhead byte per task, fed by Media3 progress callbacks. */
     private val playheadBytes = ConcurrentHashMap<Long, Long>()
 
+    /**
+     * Pre-resolve better (2026-11-13) — source keys whose NEXT fill is a
+     * detail-open first seed, capped at [AheadFetcher.FIRST_SEED_AHEAD_BYTES]
+     * instead of the full ahead window. The set is the only place the small
+     * window lives: the task row carries no window column (no Room schema
+     * change), and the fetcher reads the mode, not this set. A key is
+     * consumed once its first fill reaches the small window; a key left
+     * behind by a refused or abandoned seed is harmless — it only ever
+     * makes a later re-seed of the same source take the small window first,
+     * which is what a first seed is.
+     */
+    private val firstSeedWindows = ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Pre-resolve better (2026-11-13): mark [sourceKey]'s next fill as a
+     * detail-open first seed. Called by the repository inside the enqueue,
+     * before the drive the enqueue starts, so the first pass already sees it.
+     */
+    fun setFirstSeedWindow(sourceKey: String) {
+        firstSeedWindows.add(sourceKey)
+    }
+
     /** One scheduling tick: decide who runs given priorities, cap, network, and budget. */
     suspend fun tick() {
         val now = clock.nowElapsedRealtime()
@@ -107,14 +129,22 @@ class CacheCoordinator(
             }
             when (outcome) {
                 FetchOutcome.COMPLETED -> {
+                    consumeFirstSeedWindow(task.sourceKey)
                     safeTransition(taskId, CacheTaskState.LOADING, CacheTaskState.COMPLETED)
                     return
                 }
                 FetchOutcome.ALREADY_COMPLETE -> {
+                    consumeFirstSeedWindow(task.sourceKey)
                     safeTransition(taskId, CacheTaskState.LOADING, CacheTaskState.COMPLETED)
                     return
                 }
                 FetchOutcome.WINDOW_FILLED -> {
+                    // Pre-resolve better (2026-11-13): a first-seed fill
+                    // that reached its small window has spent its cap — the
+                    // next drive (the playhead advancing on Play) takes the
+                    // full ahead window. A normal preview pass has no cap
+                    // to consume; the remove is a no-op for it.
+                    consumeFirstSeedWindow(task.sourceKey)
                     if (mode == FetchMode.FULL_DOWNLOAD) {
                         // more gaps remain; keep looping but bound by cancellation checks
                         continue
@@ -176,6 +206,7 @@ class CacheCoordinator(
     private suspend fun handleGated(task: CacheTaskEntity) {
         playheadBytes.remove(task.id)
         if (task.priorityEnum == CachePriority.AUTO_PREVIEW) {
+            consumeFirstSeedWindow(task.sourceKey)
             manifestDao.deleteForTask(task.id)
             runCatching { storage.deleteOnDisk(task.sourceKey) }
             fileDao.listByTask(task.id).forEach { fileDao.deleteById(it.fileId) }
@@ -190,10 +221,20 @@ class CacheCoordinator(
      * What one pass is for. A user-requested row fetches the whole file; an opportunistic preview
      * fills only the window ahead of the playhead and then parks. The single owner of that choice
      * is the row's priority, read fresh — never remembered from the last read.
+     *
+     * Pre-resolve better (2026-11-13): a preview whose source is marked as a first seed fills
+     * only the small first-seed window on its first pass; once that fill reaches the window the
+     * mark is consumed and later passes take the full ahead window like any other preview.
      */
     private fun fetchModeFor(task: CacheTaskEntity): FetchMode =
         if (task.priorityEnum == CachePriority.USER_REQUESTED) FetchMode.FULL_DOWNLOAD
+        else if (firstSeedWindows.contains(task.sourceKey)) FetchMode.AUTO_PREVIEW_FIRST_SEED
         else FetchMode.AUTO_PREVIEW_AHEAD
+
+    /** Drop a first-seed mark once its window is filled, the file is done, or the seed is gone. */
+    private fun consumeFirstSeedWindow(sourceKey: String) {
+        firstSeedWindows.remove(sourceKey)
+    }
 
     /**
      * One HLS pass. A preview fills the window ahead of the playhead and parks; a full
@@ -305,6 +346,10 @@ class CacheCoordinator(
     suspend fun keepNow(sourceKey: String): LocalPlaybackHandle? {
         val task = taskDao.getBySourceKey(sourceKey) ?: return null
         taskDao.promoteToUserKeep(task.id)
+        // Pre-resolve better (2026-11-13): a promoted row fetches the whole
+        // file from here on, so a first-seed mark on it is meaningless —
+        // drop it rather than letting a later re-read mistake it for a cap.
+        consumeFirstSeedWindow(sourceKey)
         // Both rows, not just the task. TtlPolicy rule 1 and EvictionCandidate.isProtected read the
         // FILE's origin, so a promoted task whose file row still says AUTO_PREVIEW is a keep the
         // Downloads screen calls permanent while the sweeper is timing its delete and the low-storage
@@ -353,6 +398,25 @@ class CacheCoordinator(
             return
         }
         launchTask(task.id)
+    }
+
+    /**
+     * Pre-resolve better (2026-11-13) — cancel a preview seed the viewer
+     * abandoned: stop its job, drop its held bytes and ledger, and remove
+     * the row, exactly like [cancelTask] — but ONLY when the row is still
+     * an opportunistic auto-preview. The distinction is the row's priority,
+     * read fresh: a row the viewer promoted to a keep
+     * ([CachePriority.USER_REQUESTED], whether tapped on the detail screen
+     * or in the player) is never touched, and neither is a row that is
+     * already gone. A preview that never started downloading has no bytes
+     * to drop; removing its row is still the right answer, so no QUEUED
+     * seed lingers for a title the viewer left.
+     */
+    suspend fun cancelPreview(sourceKey: String) {
+        val task = taskDao.getBySourceKey(sourceKey) ?: return
+        if (task.priorityEnum != CachePriority.AUTO_PREVIEW) return
+        consumeFirstSeedWindow(sourceKey)
+        cancelTask(task.id)
     }
 
     /**

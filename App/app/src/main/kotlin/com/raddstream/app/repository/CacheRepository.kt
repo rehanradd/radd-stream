@@ -116,6 +116,13 @@ class CacheRepository @Inject constructor(
      *
      * An existing row is never downgraded: a task already enqueued as an explicit keep stays an
      * explicit keep no matter who asks next.
+     *
+     * Pre-resolve better (2026-11-13): [firstSeed] marks a detail-open first
+     * seed, whose first fill is capped at the small window. The mark is
+     * registered inside the enqueue, before the drive the enqueue starts,
+     * so the first pass cannot race ahead of it — and a refused enqueue
+     * returns before any mark is set, so a seed that never happened caps
+     * nothing later.
      */
     suspend fun preview(
         handle: String,
@@ -123,6 +130,7 @@ class CacheRepository @Inject constructor(
         sizeBytes: Long?,
         resumable: Boolean,
         printLabel: String = "",
+        firstSeed: Boolean = false,
     ): KeepOutcome = enqueue(
         handle = handle,
         title = title,
@@ -131,6 +139,7 @@ class CacheRepository @Inject constructor(
         printLabel = printLabel,
         priority = CachePriority.AUTO_PREVIEW,
         mayEvictForAdmission = false,
+        firstSeed = firstSeed,
     )
 
     private suspend fun enqueue(
@@ -141,12 +150,14 @@ class CacheRepository @Inject constructor(
         printLabel: String,
         priority: CachePriority,
         mayEvictForAdmission: Boolean,
+        firstSeed: Boolean = false,
     ): KeepOutcome {
         val seed = factory.seedForKeep(handle, sizeBytes, resumable) ?: return KeepOutcome.Unavailable
 
         val existing = taskDao.getBySourceKey(seed.sourceKey)
         if (existing != null && existing.stateEnum != CacheTaskState.DELETED) {
             // Already kept, or still downloading: re-arm the engine, never start a second copy.
+            if (firstSeed) coordinator.setFirstSeedWindow(seed.sourceKey)
             coordinator.startTask(seed.sourceKey)
             return KeepOutcome.AlreadyKept(existing.id)
         }
@@ -186,6 +197,7 @@ class CacheRepository @Inject constructor(
         val taskId = if (insertedId != -1L) insertedId
         else taskDao.getBySourceKey(seed.sourceKey)?.id ?: return KeepOutcome.Unavailable
 
+        if (firstSeed) coordinator.setFirstSeedWindow(seed.sourceKey)
         coordinator.startTask(seed.sourceKey)
         return KeepOutcome.Enqueued(taskId)
     }

@@ -21,7 +21,18 @@ fun interface AheadExecutor {
     suspend fun run(task: CacheTaskEntity, mode: FetchMode, playhead: PlayheadProvider): FetchOutcome
 }
 
-enum class FetchMode { AUTO_PREVIEW_AHEAD, FULL_DOWNLOAD }
+enum class FetchMode {
+    AUTO_PREVIEW_AHEAD,
+    FULL_DOWNLOAD,
+    /**
+     * Pre-resolve better (2026-11-13): a detail-open first seed. Same
+     * shape as [AUTO_PREVIEW_AHEAD] — fill the window ahead of the playhead
+     * and park — but the window is [AheadFetcher.FIRST_SEED_AHEAD_BYTES],
+     * not the full ahead window. The player extends it to the full window
+     * on Play by re-driving in [AUTO_PREVIEW_AHEAD] once the playhead moves.
+     */
+    AUTO_PREVIEW_FIRST_SEED,
+}
 
 /** Terminal-ish outcome of one [AheadFetcher.run] pass. The coordinator drives the next step. */
 enum class FetchOutcome {
@@ -71,11 +82,24 @@ class AheadFetcher(
         var currentUrl = task.currentUrl
 
         // Where do we stop this pass?
+        //
+        // Pre-resolve better (2026-11-13): the window is per mode, not per
+        // fetcher. A detail-open first seed fills only the small window —
+        // 8 MiB is the container header plus roughly the first half-minute
+        // of a 480p–720p stream, far more than the first frame needs, and
+        // 8 chunks instead of 40 is a fifth of the stream GETs that tripped
+        // the server's 429 bucket — while a normal preview still takes the
+        // full 40 MiB ahead window and a keep takes the whole file.
+        val windowBytes: Long = when (mode) {
+            FetchMode.FULL_DOWNLOAD -> aheadBytes
+            FetchMode.AUTO_PREVIEW_AHEAD -> aheadBytes
+            FetchMode.AUTO_PREVIEW_FIRST_SEED -> FIRST_SEED_AHEAD_BYTES
+        }
         val windowEnd: Long = when (mode) {
             FetchMode.FULL_DOWNLOAD -> if (totalSize > 0) totalSize else Long.MAX_VALUE
-            FetchMode.AUTO_PREVIEW_AHEAD -> {
+            FetchMode.AUTO_PREVIEW_AHEAD, FetchMode.AUTO_PREVIEW_FIRST_SEED -> {
                 val head = playhead.currentByte().coerceAtLeast(0L)
-                val target = head + aheadBytes
+                val target = head + windowBytes
                 if (totalSize > 0) minOf(target, totalSize) else target
             }
         }
@@ -83,9 +107,9 @@ class AheadFetcher(
         // Ranges to fetch = the gaps within [0, windowEnd), fetched low-to-high so the verified
         // prefix (what a sequential player can trust) grows first.
         val planRanges = if (windowEnd == Long.MAX_VALUE) {
-            // unknown size: extend the contiguous prefix forward
+            // unknown size: extend the contiguous prefix forward by this mode's window.
             val start = ledger.verifiedPrefix()
-            listOf(ByteInterval(start, start + aheadBytes))
+            listOf(ByteInterval(start, start + windowBytes))
         } else {
             ledger.missingWithin(0, windowEnd)
         }
@@ -299,6 +323,15 @@ class AheadFetcher(
 
     companion object {
         const val DEFAULT_AHEAD_BYTES = 40L * 1024 * 1024       // ~40 MiB ahead of the playhead
+        /**
+         * Pre-resolve better (2026-11-13): a detail-open first seed's window.
+         * 8 MiB — the container header plus roughly the first half-minute of
+         * a 480p–720p stream, far more than the first frame needs, and 8
+         * stream GETs instead of 40. The player's own ahead window stays
+         * [DEFAULT_AHEAD_BYTES]: this constant is honoured only for
+         * [FetchMode.AUTO_PREVIEW_FIRST_SEED], never for a normal preview.
+         */
+        const val FIRST_SEED_AHEAD_BYTES = 8L * 1024 * 1024    // ~8 MiB first fill for a detail-open seed
         const val DEFAULT_MAX_BYTES_PER_PASS = 256L * 1024 * 1024
         const val DEFAULT_CHUNK_BYTES = 1024 * 1024              // 1 MiB pieces bound per-chunk stall
     }

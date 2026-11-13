@@ -744,6 +744,51 @@ class OfflineCacheWiringTest {
         assertEquals("gated", row.lastError)
     }
 
+    // ── Pre-resolve better (2026-11-13) ────────────────────────────────────
+
+    @Test
+    fun `a first-seed preview drives in first-seed mode once, then in the full ahead mode`() = runBlocking {
+        val w = wiring(coroutineContext, FakeAhead(FetchOutcome.WINDOW_FILLED, FetchOutcome.WINDOW_FILLED))
+        val outcome = w.repository.preview("HDL-20", "Work", 2000, resumable = true, firstSeed = true)
+        val taskId = (outcome as KeepOutcome.Enqueued).taskId
+        awaitState(w.taskDao, taskId, CacheTaskState.PAUSED)
+
+        assertEquals("the detail-open seed caps its first fill at the small window",
+            listOf(FetchMode.AUTO_PREVIEW_FIRST_SEED), w.ahead.seenModes)
+
+        // Play starts: the playhead moves, and the next pass takes the full window.
+        w.coordinator.onPlayheadAdvanced(KeepIdentity.sourceKeyFor("HDL-20"), 0L)
+        awaitPasses(w.ahead, 2)
+        assertEquals("the cap is spent after the first fill — Play extends to 40 MiB",
+            listOf(FetchMode.AUTO_PREVIEW_FIRST_SEED, FetchMode.AUTO_PREVIEW_AHEAD),
+            w.ahead.seenModes)
+    }
+
+    @Test
+    fun `cancelPreview drops an abandoned auto-preview and never a keep`() = runBlocking {
+        val w = wiring(
+            coroutineContext,
+            FakeAhead(FetchOutcome.WINDOW_FILLED, FetchOutcome.COMPLETED),
+        )
+        val previewId = (w.repository.preview("HDL-21", "Work", 2000, resumable = true)
+            as KeepOutcome.Enqueued).taskId
+        awaitState(w.taskDao, previewId, CacheTaskState.PAUSED)
+        val keepId = (w.repository.keep("HDL-22", "Work", 2000, resumable = true)
+            as KeepOutcome.Enqueued).taskId
+        awaitState(w.taskDao, keepId, CacheTaskState.COMPLETED)
+
+        // The detail is left: the abandoned preview goes — row, bytes, ledger.
+        w.coordinator.cancelPreview(KeepIdentity.sourceKeyFor("HDL-21"))
+        assertNull(w.taskDao.getById(previewId))
+
+        // A keep is a promise to the viewer: never touched, whatever its state.
+        w.coordinator.cancelPreview(KeepIdentity.sourceKeyFor("HDL-22"))
+        assertNotNull(w.taskDao.getById(keepId))
+
+        // A missing key is a silent no-op, not a crash.
+        w.coordinator.cancelPreview(KeepIdentity.sourceKeyFor("HDL-missing"))
+    }
+
     /** Let the engine run until the row is gone (a silent drop has no terminal state to wait for). */
     private suspend fun awaitGone(dao: FakeTaskDao, id: Long) {
         var guard = 0

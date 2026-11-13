@@ -538,4 +538,70 @@ class PreResolveTest {
     fun `a null detail gets two retries`() {
         assertEquals(2, DETAIL_LOAD_NULL_RETRIES)
     }
+
+    // ── Pre-resolve better (2026-11-13): the seed waits out a linger ──────
+
+    @Test
+    fun `the seed linger is three seconds`() {
+        // Long enough to outlast a flinch — a carousel swipe or a mistap
+        // leaves within a second or two — and short enough that a viewer
+        // who stays still gets the seed well before they tap Play.
+        assertEquals(3_000L, PREVIEW_SEED_LINGER_MS)
+    }
+
+    @Test
+    fun `a fresh bundle on wifi still wants its seed after the linger`() {
+        assertTrue(
+            shouldSeedAfterLinger(
+                cachedReleaseId = 22, cachedAtMs = 1_000L, releaseId = 22,
+                onWifi = true, nowMs = 4_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun `no seed when the device left wifi during the linger`() {
+        assertFalse(
+            shouldSeedAfterLinger(
+                cachedReleaseId = 22, cachedAtMs = 1_000L, releaseId = 22,
+                onWifi = false, nowMs = 4_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun `no seed when a newer load superseded the bundle during the linger`() {
+        assertFalse(
+            shouldSeedAfterLinger(
+                cachedReleaseId = 11, cachedAtMs = 1_000L, releaseId = 22,
+                onWifi = true, nowMs = 4_000L,
+            ),
+        )
+    }
+
+    @Test
+    fun `no seed when the bundle aged out during the linger`() {
+        assertFalse(
+            shouldSeedAfterLinger(
+                cachedReleaseId = 22, cachedAtMs = 1_000L, releaseId = 22,
+                onWifi = true, nowMs = 1_000L + PRERESOLVE_FRESH_MS + 1L,
+            ),
+        )
+    }
+
+    @Test
+    fun `a bundle is fresh at exactly the reuse window and stale one millisecond later`() {
+        assertTrue(
+            isPreresolveFresh(
+                cachedReleaseId = 22, cachedAtMs = 1_000L, releaseId = 22,
+                nowMs = 1_000L + PRERESOLVE_FRESH_MS,
+            ),
+        )
+        assertFalse(
+            isPreresolveFresh(
+                cachedReleaseId = 22, cachedAtMs = 1_000L, releaseId = 22,
+                nowMs = 1_000L + PRERESOLVE_FRESH_MS + 1L,
+            ),
+        )
+    }
 }

@@ -41,6 +41,43 @@ internal fun detailWarmAudio(region: String): String? =
  */
 internal const val PRERESOLVE_FRESH_MS: Long = 120_000L
 
+/**
+ * Pre-resolve better (2026-11-13) — the byte seed's linger: how long the
+ * viewer must stay on the detail before the heavy pre-buffer starts.
+ *
+ * The `playV2` pre-resolve itself stays immediate (one cheap call, and it
+ * is what makes Play instant), but the seed that follows it pulls up to a
+ * whole ahead-window in 1 MiB chunks — 36–54 stream GETs over 60–85 s in
+ * the two BrowserStack sessions, enough to trip the server's 429 bucket.
+ * A viewer who opens a title by accident (a carousel swipe, a mistap)
+ * leaves within a second or two; 3 s is past that flinch and still well
+ * before a genuinely interested viewer taps Play (the S6 Play tap came
+ * ~30 s after the detail opened, and the seed only needs ~12–16 s for its
+ * 8 MiB first window). A seed that never starts costs nothing; a seed
+ * that starts 3 s late still leaves Play fast, because Play reuses the
+ * bundle instantly and the player extends the window from the seeded
+ * prefix. The wait runs in `viewModelScope`, so leaving the detail
+ * cancels it outright — the re-check below is the second line of defence
+ * for a network change or a superseded bundle during the wait.
+ */
+internal const val PREVIEW_SEED_LINGER_MS: Long = 3_000L
+
+/**
+ * Pre-resolve better (2026-11-13) — the re-check after the linger: seed
+ * only when this detail's own bundle is still the current one AND the
+ * device is still on Wi-Fi. A detail re-load clears the cached bundle, so
+ * a stale id means a newer load superseded this seed; a network change
+ * during the wait means the Wi-Fi-only seed no longer applies. Pure so a
+ * test can pin it without a ViewModel.
+ */
+internal fun shouldSeedAfterLinger(
+    cachedReleaseId: Int?,
+    cachedAtMs: Long?,
+    releaseId: Int,
+    onWifi: Boolean,
+    nowMs: Long,
+): Boolean = onWifi && isPreresolveFresh(cachedReleaseId, cachedAtMs, releaseId, nowMs)
+
 internal fun bestPrintOf(layout: ReleaseLayout?): RankedPrint? {
     val all = layout?.let {
         it.workPrints +

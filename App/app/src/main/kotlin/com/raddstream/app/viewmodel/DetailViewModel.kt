@@ -1043,6 +1043,39 @@ class DetailViewModel @Inject constructor(
     private var preresolveJob: Job? = null
 
     /**
+     * Pre-resolve better (2026-11-13) — the byte seed's linger gate and the
+     * key of the seed this detail started. The gate waits out
+     * [PREVIEW_SEED_LINGER_MS] after the bundle lands before the seed may
+     * run, so a viewer who leaves at once never starts a download; the key
+     * is what [onCleared] cancels in the engine when the viewer does leave
+     * after the seed started — the download lives in the engine's scope,
+     * not this ViewModel's, so cancelling the ViewModel's jobs alone would
+     * never stop it.
+     */
+    private val previewSeedGate = PreviewSeedGate(viewModelScope)
+    private var seededPreviewKey: CacheSessionKey? = null
+
+    /**
+     * Pre-resolve better (2026-11-13) — leaving the detail stops everything
+     * this detail started: the in-flight pre-resolve, a seed still waiting
+     * out its linger, and — through the engine — a seed already downloading
+     * for a title the viewer abandoned. The engine cancels only an
+     * opportunistic auto-preview row; a row the viewer promoted to a keep
+     * is never touched. `viewModelScope` is cancelled on clear anyway; the
+     * explicit cancels here are the record that the seed's engine side is
+     * owned by this screen too.
+     */
+    override fun onCleared() {
+        preresolveJob?.cancel()
+        previewSeedGate.cancel()
+        seededPreviewKey?.let { key ->
+            seededPreviewKey = null
+            CacheEngineHolder.engine?.cancelPreview(key)
+        }
+        super.onCleared()
+    }
+
+    /**
      * Gap A2: resolve the best print's `playV2` bundle while the viewer is
      * still on the detail page. Same ceiling ([PRERESOLVE_TIMEOUT_MS]) and
      * same quality preference as the Play-press call, same print Play would
@@ -1057,6 +1090,7 @@ class DetailViewModel @Inject constructor(
      */
     private fun preresolveTopLink() {
         preresolveJob?.cancel()
+        previewSeedGate.cancel()
         preresolvedReleaseId = null
         preresolvedResult = null
         preresolvedAtMs = null
@@ -1085,7 +1119,25 @@ class DetailViewModel @Inject constructor(
             preresolvedReleaseId = warm.releaseId
             preresolvedResult = result
             preresolvedAtMs = System.currentTimeMillis()
-            if (onWifi) seedPreviewTopLink(warm, result)
+            // Pre-resolve better (2026-11-13): the bundle itself is ready
+            // immediately — Play reuses it at once. The byte seed is not
+            // immediate any more: the gate waits out the linger and
+            // re-checks this bundle is still current and the device is
+            // still on Wi-Fi before a single byte moves.
+            if (onWifi) {
+                previewSeedGate.schedule(
+                    stillWanted = {
+                        shouldSeedAfterLinger(
+                            preresolvedReleaseId,
+                            preresolvedAtMs,
+                            warm.releaseId,
+                            onWifi,
+                            System.currentTimeMillis(),
+                        )
+                    },
+                    seed = { seedPreviewTopLink(warm, result) },
+                )
+            }
         }
     }
 
@@ -1096,14 +1148,22 @@ class DetailViewModel @Inject constructor(
         val handle = winner.streamId?.takeIf { it.isNotBlank() } ?: return
         val engine = CacheEngineHolder.engine ?: return
         val url = withVipPass(playUrl, runCatching { syncAccountRepository.currentVipPass() }.getOrNull())
+        // Pre-resolve better (2026-11-13): remember the seed's key BEFORE
+        // the engine call, so onCleared can cancel this exact preview even
+        // if the seed is still in flight. The seed is a first seed — the
+        // engine caps its first fill at the small window, and the player
+        // extends it to the full ahead window when Play starts.
+        val key = CacheSessionKey(renditionKey = handle, url = url)
+        seededPreviewKey = key
         runCatching {
             engine.seedPreview(
                 PreviewRequest(
-                    key = CacheSessionKey(renditionKey = handle, url = url),
+                    key = key,
                     url = url,
                     expectedTotalBytes = best.sizeBytes?.takeIf { it > 0L },
                     resumable = winner.resumable,
                     printLabel = winner.label ?: best.rawTitle ?: "Top link",
+                    firstSeed = true,
                 ),
             )
         }

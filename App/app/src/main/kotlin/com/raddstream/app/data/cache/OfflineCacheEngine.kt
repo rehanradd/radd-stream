@@ -16,6 +16,7 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -134,13 +135,30 @@ class OfflineCacheEngine @Inject constructor(
         // Guessing 0 would let a spent data budget buy a real download.
         val asksForBytes = totalBytes ?: AheadFetcher.DEFAULT_AHEAD_BYTES
         if (!coordinator.mayPreview(asksForBytes)) return
+        // Pre-resolve better (2026-11-13): a first seed caps its first fill
+        // at the small window. The flag rides into `repository.preview`,
+        // which registers the cap inside the enqueue before the drive the
+        // enqueue starts — never after it, so the first pass cannot race
+        // ahead of the mark.
         repository.preview(
             handle = handle,
             title = "",
             sizeBytes = totalBytes,
             resumable = request.resumable,
             printLabel = request.printLabel,
+            firstSeed = request.firstSeed,
         )
+    }
+
+    override fun cancelPreview(key: CacheSessionKey) {
+        // Fire-and-forget on the engine's own scope: the caller is usually
+        // `ViewModel.onCleared`, where no coroutine scope survives, and the
+        // work is a DAO lookup plus the coordinator's cancel — nothing the
+        // caller needs to await. The coordinator itself refuses any row
+        // that is not still an opportunistic auto-preview.
+        scope.launch {
+            key.sourceKeyOrNull()?.let { coordinator.cancelPreview(it) }
+        }
     }
 
     override suspend fun cancelKeep(key: CacheSessionKey) {

@@ -119,6 +119,15 @@ data class PreviewRequest(
     val resumable: Boolean,
     /** Print label so the engine's library UI can show what this file is. */
     val printLabel: String,
+    /**
+     * Pre-resolve better (2026-11-13): true when this seed is the
+     * detail-open first seed. The engine then caps this seed's first fill
+     * at the small first-seed window instead of the full ahead window —
+     * enough for an instant start, and the player extends it to the full
+     * window when Play starts. The player's own seed (Play pressed) leaves
+     * this false and takes the full window at once.
+     */
+    val firstSeed: Boolean = false,
 )
 
 /** Keep outcomes the UI must be able to explain (hostile realities from the task brief). */
@@ -155,6 +164,16 @@ interface ProgressiveCacheEngine {
      */
     suspend fun seedPreview(request: PreviewRequest)
     suspend fun cancelKeep(key: CacheSessionKey)
+    /**
+     * Pre-resolve better (2026-11-13): cancel a preview seed this detail
+     * started, when the viewer leaves the detail before playing. Only an
+     * opportunistic auto-preview row is ever cancelled — a row the viewer
+     * promoted to a keep (user-requested priority) is never touched, and a
+     * missing row is a no-op. Fire-and-forget: it returns at once and does
+     * the work on the engine's own scope, so it is safe to call from
+     * `ViewModel.onCleared`, where no coroutine scope survives.
+     */
+    fun cancelPreview(key: CacheSessionKey)
     suspend fun release(key: CacheSessionKey)
     fun storagePressure(): StoragePressure
     /** When the app opens an already-STORED file, ask the engine for its playable URL. */
