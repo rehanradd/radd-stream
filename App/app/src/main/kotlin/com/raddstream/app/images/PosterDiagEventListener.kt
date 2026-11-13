@@ -2,8 +2,8 @@ package com.raddstream.app.images
 
 import android.os.SystemClock
 import android.util.Log
+import coil.EventListener
 import coil.request.ErrorResult
-import coil.request.EventListener
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import java.util.concurrent.ConcurrentHashMap
@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
  * instead (metered gate / allowlist / missing URL). If COIL_START exists but no
  * COIL_SUCCESS/COIL_ERROR follows, the request was still in flight when the session ended.
  */
-object PosterDiagEventListener : EventListener() {
+object PosterDiagEventListener : EventListener {
 
     private val startedAtMs = ConcurrentHashMap<Int, Long>()
 
