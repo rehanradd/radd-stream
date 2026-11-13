@@ -42,6 +42,71 @@ class PreResolveTest {
         assertNull(bestPrintOf(null))
     }
 
+    // ── Salaar (2026-11-13): Auto respects VIP status ─────────────────────
+
+    @Test
+    fun `best playable print is the best free print for a free viewer`() {
+        assertEquals(
+            11,
+            bestPlayablePrintOf(movieLayout(), premiumAccess = false, freeQualityCap = "720p")?.releaseId,
+        )
+    }
+
+    @Test
+    fun `best playable print keeps the raw best for a premium viewer`() {
+        assertEquals(
+            22,
+            bestPlayablePrintOf(movieLayout(), premiumAccess = true, freeQualityCap = "720p")?.releaseId,
+        )
+    }
+
+    @Test
+    fun `best playable print is null when no free print remains`() {
+        val layout = ReleaseLayoutBuilder.build(
+            "movie",
+            listOf(ReleaseDetail(id = 22, quality = "1080p")),
+        )
+
+        assertNull(bestPlayablePrintOf(layout, premiumAccess = false, freeQualityCap = "720p"))
+        assertEquals(22, bestPlayablePrintOf(layout, premiumAccess = true, freeQualityCap = "720p")?.releaseId)
+    }
+
+    @Test
+    fun `best playable print under a 480p cap demotes 720p too`() {
+        val layout = ReleaseLayoutBuilder.build(
+            "movie",
+            listOf(
+                ReleaseDetail(id = 31, quality = "720p"),
+                ReleaseDetail(id = 11, quality = "480p"),
+            ),
+        )
+
+        assertEquals(11, bestPlayablePrintOf(layout, premiumAccess = false, freeQualityCap = "480p")?.releaseId)
+    }
+
+    @Test
+    fun `salaar free viewer gets 720p never the refused 4k print`() {
+        val layout = ReleaseLayoutBuilder.build(
+            "movie",
+            listOf(
+                ReleaseDetail(id = 1318138, quality = "2160p"),
+                ReleaseDetail(id = 1318132, quality = "720p"),
+            ),
+        )
+
+        // The raw best is the 4K print — the one the server refuses to
+        // bundle for a free caller. Auto must never point at it.
+        assertEquals(1318138, bestPrintOf(layout)?.releaseId)
+        assertEquals(
+            1318132,
+            bestPlayablePrintOf(layout, premiumAccess = false, freeQualityCap = "720p")?.releaseId,
+        )
+        assertEquals(
+            1318138,
+            bestPlayablePrintOf(layout, premiumAccess = true, freeQualityCap = "720p")?.releaseId,
+        )
+    }
+
     @Test
     fun `fresh cache for the same print is reused`() {
         assertTrue(isPreresolveFresh(cachedReleaseId = 22, cachedAtMs = 1_000L, releaseId = 22, nowMs = 60_000L))
@@ -109,6 +174,30 @@ class PreResolveTest {
     @Test
     fun `scope warm is null for an empty ladder`() {
         assertNull(scopeWarmHandle(LadderForScope.EMPTY))
+    }
+
+    @Test
+    fun `scope warm never warms a gated auto rung for a free viewer`() {
+        val ladder = LadderForScope(
+            options = listOf(rung("1080p", "h1080", true), rung("720p", "h720", true)),
+            autoBand = "1080p",
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertEquals("h720", scopeWarmHandle(ladder, premiumAccess = false, freeQualityCap = "720p"))
+        assertEquals("h1080", scopeWarmHandle(ladder, premiumAccess = true, freeQualityCap = "720p"))
+    }
+
+    @Test
+    fun `scope warm is null when the gate leaves nothing playable`() {
+        val ladder = LadderForScope(
+            options = listOf(rung("1080p", "h1080", true)),
+            autoBand = "1080p",
+            downloadOnlyBands = emptyList(),
+        )
+
+        assertNull(scopeWarmHandle(ladder, premiumAccess = false, freeQualityCap = "720p"))
+        assertEquals("h1080", scopeWarmHandle(ladder, premiumAccess = true, freeQualityCap = "720p"))
     }
 
     // ── Gap A2 follow-up: the fallback's runner-ups ──────────────────────────

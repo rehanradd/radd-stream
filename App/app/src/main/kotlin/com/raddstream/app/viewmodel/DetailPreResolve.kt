@@ -28,7 +28,10 @@ internal fun detailWarmAudio(region: String): String? =
  *
  *  - [bestPrintOf]: the same "best" the screen's own Play button offers
  *    (highest `rankKey` across every print of the title), so the
- *    pre-resolve warms the link Play would actually press.
+ *    pre-resolve warms the link Play would actually press. It is
+ *    deliberately VIP-blind — the raw best, whatever the caller may play —
+ *    so [bestPlayablePrintOf] is the one Play paths call: the best print
+ *    the caller may actually play, never a VIP-only tier for a free viewer.
  *  - [isPreresolveFresh]: a pre-resolved bundle is reused only for the
  *    print it was resolved for, and only inside [PRERESOLVE_FRESH_MS].
  *    The window is short on purpose — the bundle itself carries a session
@@ -44,6 +47,37 @@ internal fun bestPrintOf(layout: ReleaseLayout?): RankedPrint? {
             it.seasons.flatMap { season -> season.packedPrints }
     }.orEmpty()
     return all.maxByOrNull { print -> print.rankKey }
+}
+
+/**
+ * Salaar (2026-11-13) — the best print the caller may actually play.
+ * [bestPrintOf] is the raw best, and on Salaar that is the 2160p 4K print
+ * (release 1318138, score 755) — a print the server's preresolve refuses
+ * for a free caller (`premium_quality_requires_vip`, zero tiers), so Auto
+ * pointing at it is a quality the free viewer can never play. A free
+ * caller gets the highest non-VIP print instead (Salaar: the 720p print,
+ * release 1318132, score 530, which preresolves playable with a 720p
+ * tier); a VIP caller keeps the raw best. Same preference shape as
+ * [stepDownPrint] — a playable copy first, any allowed print second —
+ * and null when no allowed print remains, so the caller shows the VIP
+ * lock instead of pressing a tier it cannot play.
+ */
+internal fun bestPlayablePrintOf(
+    layout: ReleaseLayout?,
+    premiumAccess: Boolean,
+    freeQualityCap: String,
+): RankedPrint? {
+    if (premiumAccess) return bestPrintOf(layout)
+    val all = layout?.let {
+        it.workPrints +
+            it.seasons.flatMap { season -> season.episodes.flatMap { e -> e.prints } } +
+            it.seasons.flatMap { season -> season.packedPrints }
+    }.orEmpty()
+    val allowed = all.filter {
+        !VipQualityGate.isPremiumResolution(it.resolution, freeQualityCap)
+    }
+    return allowed.filter { it.playableHere }.maxByOrNull { it.rankKey }
+        ?: allowed.maxByOrNull { it.rankKey }
 }
 
 internal fun isPreresolveFresh(
@@ -134,6 +168,33 @@ internal fun stepDownRung(
 }
 
 /**
+ * Salaar (2026-11-13) — the rung Auto actually starts at for this viewer.
+ * [LadderForScope.autoOption] is the server's pointer, VIP-blind: on
+ * Salaar it is the 2160p rung, which the server refuses to bundle for a
+ * free caller — so a free Auto must never resolve to it. A premium caller
+ * keeps the server pointer. A free caller gets that rung only when it
+ * survives the gate, else the best free rung that plays here (the ladder
+ * is best-first), else the first allowed rung. Same rule as
+ * [VipQualityGate.gate] — band and label both checked — applied at the
+ * selection point, so a rung the gate would have removed can never be the
+ * Auto answer even if it reaches this function ungated.
+ */
+internal fun autoOptionFor(
+    ladder: LadderForScope,
+    premiumAccess: Boolean,
+    freeQualityCap: String,
+): QualityOption? {
+    if (premiumAccess) return ladder.autoOption
+    val allowed = ladder.options.filter {
+        VipQualityGate.allowsBand(it.band, premiumAccess, freeQualityCap) &&
+            !VipQualityGate.isPremiumLabel(it.title, freeQualityCap)
+    }
+    return allowed.firstOrNull { it.band == ladder.autoBand }
+        ?: allowed.firstOrNull { it.playsHere }
+        ?: allowed.firstOrNull()
+}
+
+/**
  * Gap A2 follow-up — the scope warm: the handle the quality card's Auto rung
  * would press for one season/episode scope, or null when the scope has
  * nothing playable here. The detail-open warm covers only the title's best
@@ -142,19 +203,31 @@ internal fun stepDownRung(
  * player. Warming this handle (a metadata ask on our own redirector) makes
  * the server live-resolve AND bank the answer, so the Play press 302s from
  * cache. A download-only rung is never warmed — its handle is not a stream.
+ *
+ * Salaar (2026-11-13): the warm resolves Auto through [autoOptionFor], so
+ * a free viewer warms the best free rung, never a gated one — warming a
+ * rung the viewer may not play would spend the server's answer on nothing.
  */
-internal fun scopeWarmHandle(ladder: LadderForScope): String? {
-    val auto = ladder.autoOption ?: return null
+internal fun scopeWarmHandle(
+    ladder: LadderForScope,
+    premiumAccess: Boolean,
+    freeQualityCap: String,
+): String? {
+    val auto = autoOptionFor(ladder, premiumAccess, freeQualityCap) ?: return null
     if (!auto.playsHere) return null
     return auto.streamId.takeIf { it.isNotBlank() }
 }
+
+/** The same warm with no VIP question asked: the server pointer, as before. */
+internal fun scopeWarmHandle(ladder: LadderForScope): String? =
+    scopeWarmHandle(ladder, premiumAccess = true, freeQualityCap = "720p")
 
 /**
  * Gap A2 follow-up — the fallback's runner-ups: the other playable copies
  * of the same print, for the play path that never got a server bundle.
  * The v2 bundle stages its own runner-ups and the ladder stages its rung's,
  * but the client-side fallback (`playLink`) launched a bare
- * single-rendition bundle, so the 8 s watchdog could only retry the same
+ * single-rendition bundle, so the 20 s watchdog could only retry the same
  * slow address and then give up. Same print, same quality, different copy —
  * exactly what a silent hop within the rung is for. Provider pages are
  * never backups (a hop must never land on a page), dead links are never
@@ -225,7 +298,7 @@ internal fun isTransientDetailError(ex: Exception): Boolean {
  * have answered — and the fallback is a cold single link, strictly worse
  * than the ranked bundle with its runner-ups. The expected case is still
  * well under a second; the ceilings are a margin, not a wait. Both are
- * far under the player's 8 s watchdog (which only starts at playback),
+ * far under the player's 20 s watchdog (which only starts at playback),
  * and neither call resolves a link — the resolve is paid by the server
  * warm and inside the player — so a longer ceiling cannot stall playback,
  * it only lets the bundle arrive.

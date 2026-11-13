@@ -418,7 +418,7 @@ class PlaybackService : MediaSessionService() {
         // redirector's, so the ask falls through to nothing.
         seedPreviewFor(rendition)
         // The stall watchdog: a load that never errors and never renders
-        // must fail over on its own at eight seconds, not sit on the
+        // must fail over on its own at twenty seconds, not sit on the
         // "Warming the link" notice until the thirty-second card.
         armStartWatchdog(bundle, rendition)
     }

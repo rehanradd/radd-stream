@@ -125,9 +125,13 @@ class StartDeadlineTest {
 
     @Test
     fun `the stall watchdog fires before the thirty second give-up`() {
-        // 2026-11-12 rework, audit #1: a load that never errors and never
-        // renders fails over on its own at eight seconds — the automatic
-        // failover — while the thirty-second card stays the last resort.
+        // 2026-11-12 rework, raised 2026-11-13: a load that never errors and
+        // never renders fails over on its own at twenty seconds — the
+        // automatic failover — while the thirty-second card stays the last
+        // resort. Twenty is the resolve ceiling the live diagnostics
+        // measured (Salaar's free print resolves in 5.7–10.4 s cold), so a
+        // slow resolve survives it and a truly hung one still fails over.
+        assertEquals(20_000L, StartDeadline.START_WATCHDOG_MS)
         assertTrue(StartDeadline.START_WATCHDOG_MS < StartDeadline.GIVE_UP_AFTER_MS)
         assertEquals(StartDeadlineStage.ACTIONS, StartDeadline.stage(StartDeadline.START_WATCHDOG_MS, firstFrame = false))
     }
