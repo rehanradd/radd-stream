@@ -6,6 +6,9 @@ import androidx.work.Configuration
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
+import coil.ImageLoader
+import coil.ImageLoaderFactory
+import coil.util.DebugLogger
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.DeviceIdentity
 import com.raddstream.app.data.RemoteConfigWatcher
@@ -16,6 +19,7 @@ import com.raddstream.app.data.cache.CacheSweepWorker
 import com.raddstream.app.data.cache.KeepTtlHolder
 import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.images.ImageSizingHolder
+import com.raddstream.app.images.PosterDiagEventListener
 import com.raddstream.app.share.LanShareRunner
 import com.raddstream.app.sync.SyncAccountRepository
 import dagger.hilt.android.HiltAndroidApp
@@ -31,7 +35,7 @@ import kotlinx.coroutines.launch
  * Referenced in AndroidManifest.xml as android:name=".RaddStreamApplication"
  */
 @HiltAndroidApp
-class RaddStreamApplication : Application(), Configuration.Provider {
+class RaddStreamApplication : Application(), Configuration.Provider, ImageLoaderFactory {
 
     @Inject
     lateinit var cacheEngineRunner: CacheEngineRunner
@@ -65,6 +69,22 @@ class RaddStreamApplication : Application(), Configuration.Provider {
     // a @HiltWorker at all.
     override val workManagerConfiguration: Configuration
         get() = Configuration.Builder().setWorkerFactory(workerFactory).build()
+
+    /**
+     * DIAGNOSTIC ONLY (poster-diag build, 2026-11-13): the app's Coil loader, built with
+     * Coil's own defaults — same OkHttp client, same timeouts, same caches as the
+     * default singleton this replaces — plus a Debug logger and the [PosterDiagEventListener]
+     * that logs every request's start/success/error with its URL and elapsed time.
+     * Nothing about loading behaviour changes; the BrowserStack poster experiment
+     * (20:49–21:00 PKT 13 Nov) proved Coil never fired a request on device, and this
+     * is the only way to see why. Remove this whole override to go back to the
+     * untouched default loader.
+     */
+    override fun newImageLoader(): ImageLoader =
+        ImageLoader.Builder(this)
+            .logger(DebugLogger())
+            .eventListener(PosterDiagEventListener)
+            .build()
 
     override fun onCreate() {
         super.onCreate()

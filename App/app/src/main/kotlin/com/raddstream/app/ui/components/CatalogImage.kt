@@ -2,6 +2,7 @@ package com.raddstream.app.ui.components
 
 import android.content.Context
 import android.graphics.Bitmap
+import android.util.Log
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -126,6 +127,21 @@ fun CatalogImage(
         )
         val clean = url?.takeIf { it.isNotBlank() }
         val allowed = allowAnyHost || ArtUrlPolicy.isAllowed(clean, serverHost)
+        // DIAGNOSTIC ONLY (poster-diag build, 2026-11-13): one line per load decision —
+        // this remember block re-runs only when a decision input changes, so a scrolling
+        // list does not spam logcat. It answers the three questions the BrowserStack
+        // poster experiment left open: did a URL arrive at all (kind/host), did the
+        // metered gate block it (metered + mobileDataAllowed -> shouldLoad), and did
+        // the allowlist block it (allowed) — before Coil is even involved. The full
+        // URL is deliberately NOT logged: an art handle carries a signed token.
+        // Filter: tag:PosterDiag, look for DECISION.
+        Log.d(
+            "PosterDiag",
+            "DECISION kind=${posterUrlKind(clean)} host=${ArtUrlPolicy.hostOf(clean)} " +
+                "metered=$metered mobileDataAllowed=${sizing.imagesAllowedOnMobileData} " +
+                "shouldLoad=${decision.shouldLoad} allowed=$allowed " +
+                "outcome=${if (clean != null && decision.shouldLoad && allowed) "REQUEST" else "NO_REQUEST"}",
+        )
         if (clean != null && decision.shouldLoad && allowed) {
             ImageRequest.Builder(context)
                 .data(clean)
@@ -210,6 +226,18 @@ internal const val MAX_IMAGE_AUTO_RETRIES = 2
 
 internal fun shouldAutoRetryImage(attempt: Int, maxAutoRetries: Int = MAX_IMAGE_AUTO_RETRIES): Boolean =
     attempt < maxAutoRetries
+
+/**
+ * DIAGNOSTIC ONLY (poster-diag build, 2026-11-13): classifies a poster URL for the DECISION
+ * log line — "art" is a server `/api/v1/art` handle, "direct" is a CDN/upload-host URL the
+ * server passed through untouched, "none" is a missing/blank URL. Pure so it stays testable
+ * without a device.
+ */
+internal fun posterUrlKind(url: String?): String = when {
+    url.isNullOrBlank() -> "none"
+    "/api/v1/art" in url -> "art"
+    else -> "direct"
+}
 
 /**
  * The dark placeholder every failed catalog image falls back to. Colours come only from
