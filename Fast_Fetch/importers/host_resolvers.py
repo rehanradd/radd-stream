@@ -186,11 +186,46 @@ So a plain request chain cannot even read the code that would tell it where the
 file is. `filemoon` rows stay `playback_type='iframe'` / `status='unverified'`
 in the catalog: honest evidence that the site published a player, and no claim
 that a client can play it.
+
+HUBCLOUD — THE DRIVE PAGE IS A DOOR, NOT A FILE
+-------------------------------------------------
+The catalog's largest gateway family (460,696 links: hubcloud, fsl_r2,
+hubcloud-ist, hubcloud_10g) stores `hubcloud.ist/drive/<id>` pages. A probe
+of the gateway itself scores dead — it returns 200 HTML — while the file sits
+two hops behind it. Cracked 2026-11-12, re-verified live 2026-11-13, and
+cross-checked against CloudStream core `HubCloud.kt`, which implements the
+same chain (its `div.card-body h2 a.btn` selector is stale as written — the
+live template wraps the whole card in one <h2> — so the buttons are read as
+btn-class anchors and dispatched by id/text):
+
+    GET https://hubcloud.ist/drive/<id>                    200, ~19 KB
+        <a id="download" href="https://gamerxyt.com/hubcloud.php
+        ?host=hubcloud&id=<id>&token=<60-char>">
+    GET that gamerxyt URL (Referer: drive page, Cookie: xla=s4t)
+        200, ~17-20 KB. Buttons, in serve order: FSLv2 (#s3, presigned R2,
+        5 h) -> FSL (#fsl, presigned R2, 8 h) -> PixelServer (#pxl-1,
+        pixeldrain) -> S3 -> Buzz (GET $link/download, hx-redirect) ->
+        Mega -> PDL -> 10Gbps (a page, "Resume Not Supported")
+    Range: bytes=0-511 on each candidate in order; the first 206 with real
+    video bytes is the file. Viruman 2022 (8.63 GB): FSL 206, EBML, resumable.
+    Ramayana 2026 (1.7 GB): FSLv2 206 while the same page's FSL was 403
+    NotEntitled — the two are different R2 accounts, so FSLv2 is tried first
+    and neither is assumed alive.
+
+The gamerxyt token is per page load (same file fetched twice -> two
+different tokens) and expires, so the drive page is fetched fresh on every
+resolve and the gamerxyt URL is never stored; the presigned URL dies in 5-8
+hours, so it is never served stored either. The gamerxyt HTML always
+contains a `swal({title: "Token Expired!"…})` script — a static template
+that fires only when the size reads `NAN` — so the string is never a
+dead-token signal; an empty button list is. MUST run from the Oracle VM's
+egress: the hatch egress proxy gets an empty reply from gamerxyt.
 """
 
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
@@ -309,6 +344,7 @@ SERVICE_UPLOADFLIX = "uploadflix"
 SERVICE_1XPLAYER = "1xplayer"
 SERVICE_MOVIEBOX = "moviebox"
 SERVICE_CASTLE = "castle"
+SERVICE_HUBCLOUD = "hubcloud"
 SERVICE_VIDBOLT = "vidbolt"
 SERVICE_VIBUXER = "vibuxer"
 SERVICE_VIDRIFT = "vidrift"
@@ -791,6 +827,34 @@ def duration_expiry_from_url(url: str) -> tuple[int | None, int | None]:
     return expires_at, expires_at - int(time.time())
 
 
+def r2_presigned_expiry(url: str) -> tuple[int | None, int | None]:
+    """
+    (expires_at epoch seconds, seconds-from-now) for an R2/S3 presigned URL,
+    else (None, None).
+
+    The presigned form carries `X-Amz-Date` (the generation instant, UTC,
+    `YYYYMMDDTHHMMSSZ`) and `X-Amz-Expires` (a LIFETIME in seconds, not an
+    epoch — 18000 is FSLv2's five hours, 28800 is FSL's eight). Neither
+    `expiry_from_url` (wants an epoch in `e`) nor `duration_expiry_from_url`
+    (wants an `s` epoch) reads this shape, and each rejects the other's, so
+    the presigned convention gets its own reader rather than a guess. A
+    stripped or forged query returns (None, None): the signature is required
+    and a URL without it is not a live file.
+    """
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url or "").query)
+    date_raw = (query.get("X-Amz-Date") or [""])[0]
+    lifetime_raw = (query.get("X-Amz-Expires") or [""])[0]
+    if not date_raw or not lifetime_raw.isdigit():
+        return None, None
+    try:
+        issued = datetime.strptime(date_raw, "%Y%m%dT%H%M%SZ").replace(
+            tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None, None
+    expires_at = int(issued) + int(lifetime_raw)
+    return expires_at, expires_at - int(time.time())
+
+
 def signature_params(url: str) -> dict:
     """
     Which signed query keys the endpoint carries, values masked.
@@ -971,6 +1035,44 @@ def cineverse_parse_url(url: str) -> dict | None:
 
 def is_cineverse_embed(url: str) -> bool:
     return cineverse_parse_url(url) is not None
+
+
+# HubCloud's drive page. The TLD is not pinned: the family rotates it
+# (hubcloud.ist 302s to hubcloud.pw, measured 2026-11-12) and the in-tree
+# bridge tracer already matches `hubcloud\.[a-z]+/drive/<id>`; what is
+# pinned is the `/drive/<id>` path, which is what makes the page a drive
+# page rather than any other hubcloud host.
+HUBCLOUD_HOST_RE = re.compile(r"(?:^|\.)hubcloud\.[a-z]+$", re.I)
+HUBCLOUD_DRIVE_RE = re.compile(r"^/drive/([A-Za-z0-9_-]+)/?$", re.I)
+# The gamerxyt intermediate page: `hubcloud.php?host=hubcloud&id=<id>&token=<60>`.
+HUBCLOUD_BRIDGE_RE = re.compile(r"(?:^|\.)gamerxyt\.com$", re.I)
+HUBCLOUD_BRIDGE_PATH_RE = re.compile(r"^/hubcloud\.php$", re.I)
+
+
+def hubcloud_drive_id(url: str) -> str:
+    """The drive id a hubcloud URL names, or "" when it names none."""
+    parts = urllib.parse.urlsplit(absolutize(url))
+    host = (parts.netloc or "").lower()
+    if not host or not HUBCLOUD_HOST_RE.search(host):
+        return ""
+    match = HUBCLOUD_DRIVE_RE.match(parts.path or "/")
+    return match.group(1) if match else ""
+
+
+def is_hubcloud_drive(url: str) -> bool:
+    return bool(hubcloud_drive_id(url))
+
+
+def is_hubcloud_bridge(url: str) -> bool:
+    """True for a gamerxyt hubcloud.php intermediate URL (the drive page's target)."""
+    parts = urllib.parse.urlsplit(absolutize(url))
+    host = (parts.netloc or "").lower()
+    if not host or not HUBCLOUD_BRIDGE_RE.search(host):
+        return False
+    if not HUBCLOUD_BRIDGE_PATH_RE.match(parts.path or "/"):
+        return False
+    params = urllib.parse.parse_qs(parts.query)
+    return bool(params.get("id", [""])[0])
 
 
 def gdrive_file_id(url: str) -> str:
@@ -3160,6 +3262,324 @@ def unwrap_castle(url: str, fetch=None, verify: bool = True) -> dict:
     return result
 
 
+# ---------------------------------------------------------------------------
+# hubcloud (drive pages -> gamerxyt -> R2)
+# ---------------------------------------------------------------------------
+
+_HUBCLOUD_ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.*?)</a>", re.I | re.S)
+_HUBCLOUD_ATTR_RE = re.compile(r"""([\w-]+)\s*=\s*["']([^"']*)["']""", re.I)
+_HUBCLOUD_CARD_HEADER_RE = re.compile(
+    r"""<div\b[^>]*\bclass\s*=\s*["'][^"']*\bcard-header\b[^"']*["'][^>]*>(.*?)</div>""",
+    re.I | re.S)
+_HUBCLOUD_QUALITY_RE = re.compile(r"(\d{3,4})[pP]")
+
+# Button dispatch, in serve order. The id is checked first: the live page
+# names its buttons `s3` (FSLv2), `fsl` (FSL) and `pxl-1` (PixelServer), and
+# those ids are unambiguous where the text is a wrapper
+# ("Download [FSLv2 Server]"). Buttons without an id fall back to the text,
+# which is CloudStream core HubCloud.kt's dispatch. "Download File" is
+# HubCloud.kt's direct-file case, slotted after FSL: it is a plain href to
+# a file, so it belongs with the direct-file group, and the named order
+# (FSLv2, FSL, PixelServer, S3, Buzz, Mega, PDL, 10Gbps) is preserved.
+_HUBCLOUD_ID_DISPATCH = {"s3": "fslv2", "fsl": "fsl",
+                         "pxl-1": "pixel", "pxl": "pixel"}
+_HUBCLOUD_LABELS = {
+    "fslv2": "FSLv2", "fsl": "FSL", "download": "Download",
+    "pixel": "PixelServer", "s3": "S3", "buzz": "Buzz",
+    "mega": "Mega", "pdl": "PDL", "10gbps": "10Gbps",
+}
+_HUBCLOUD_PRIORITY = ("fslv2", "fsl", "download", "pixel", "s3", "buzz",
+                      "mega", "pdl", "10gbps")
+
+
+def _hubcloud_anchors(page: str) -> list[tuple[dict, str]]:
+    """(attrs, inner text) for every <a> in the page, in order."""
+    out = []
+    for attrs_raw, inner in _HUBCLOUD_ANCHOR_RE.findall(page or ""):
+        attrs = {name.lower(): value
+                 for name, value in _HUBCLOUD_ATTR_RE.findall(attrs_raw)}
+        text = re.sub(r"<[^>]+>", "", inner or "").strip()
+        out.append((attrs, text))
+    return out
+
+
+def _hubcloud_abs(url: str, base: str) -> str:
+    """Absolute URL for a possibly relative href (HubCloud.kt resolves the same way)."""
+    text = absolutize(url)
+    if text.startswith("http"):
+        return text
+    return urllib.parse.urljoin(base, text)
+
+
+def _hubcloud_download_href(page: str) -> str:
+    """The gamerxyt URL from a drive page's <a id="download">, or ""."""
+    anchors = _hubcloud_anchors(page)
+    for attrs, _text in anchors:
+        if attrs.get("id", "").lower() == "download" and attrs.get("href"):
+            return attrs["href"]
+    for attrs, _text in anchors:
+        href = attrs.get("href", "")
+        if "hubcloud.php" in href:
+            return href
+    return ""
+
+
+def _hubcloud_dispatch(attrs: dict, text: str) -> str:
+    """The candidate kind a gamerxyt button is, or "" when it is not a file button."""
+    kind = _HUBCLOUD_ID_DISPATCH.get((attrs.get("id") or "").lower())
+    if kind:
+        return kind
+    low = (text or "").lower()
+    if "fslv2" in low:
+        return "fslv2"
+    if "fsl" in low:
+        return "fsl"
+    if "pixel" in low or "pixeldra" in low:
+        return "pixel"
+    if "download file" in low:
+        return "download"
+    if "s3" in low:
+        return "s3"
+    if "buzz" in low:
+        return "buzz"
+    if "mega" in low:
+        return "mega"
+    if "pdl" in low:
+        return "pdl"
+    if "10gbps" in low:
+        return "10gbps"
+    return ""
+
+
+def _hubcloud_pixel_url(href: str) -> str:
+    """The byte URL for a PixelServer button.
+
+    CloudStream's HubCloud.kt rule: a link that already carries `download`
+    is used as-is, otherwise `<base>/api/file/<last-segment>?download`.
+    """
+    if "download" in href.lower():
+        return href
+    parts = urllib.parse.urlsplit(href)
+    last = (parts.path or "/").rstrip("/").rsplit("/", 1)[-1]
+    if not last:
+        return href
+    return f"{parts.scheme}://{parts.netloc}/api/file/{last}?download"
+
+
+def _hubcloud_buzz_url(fetch, link: str, referer: str) -> str:
+    """The file URL a BuzzServer button redirects to, or "".
+
+    CloudStream's rule: GET `$link/download` without following redirects
+    and read the `hx-redirect` response header. The hop is extraction,
+    not a media probe, so it runs even when the caller asked for
+    verify=False.
+    """
+    _status, _body, headers, _final = fetch(
+        link.rstrip("/") + "/download",
+        headers={"Referer": referer}, follow=False)
+    target = (headers or {}).get("hx-redirect", "")
+    return target.strip() if isinstance(target, str) else ""
+
+
+def _hubcloud_candidates(fetch, page: str, page_url: str) -> tuple[list[dict], list[str]]:
+    """Ordered file candidates from a gamerxyt page, plus notes about what was skipped.
+
+    Each candidate is {"kind", "label", "url"}. Buttons that are not file
+    servers (Watch Online, Telegram, Gofile, ads) are ignored and named in
+    the notes so the verdict explains itself instead of silently dropping
+    them. Only btn-class anchors are read: on the live template those are
+    exactly the server buttons (verified 2026-11-13 against the saved
+    2026-11-12 gamerxyt page).
+    """
+    found: dict[str, dict] = {}
+    ignored: list[str] = []
+    for attrs, text in _hubcloud_anchors(page):
+        if "btn" not in (attrs.get("class") or "").lower():
+            continue
+        href = (attrs.get("href") or "").strip()
+        if not href:
+            continue
+        kind = _hubcloud_dispatch(attrs, text)
+        if not kind:
+            label = text or attrs.get("id") or href
+            if label not in ignored:
+                ignored.append(label)
+            continue
+        if kind in found:
+            continue
+        url = _hubcloud_abs(href, page_url)
+        if kind == "pixel":
+            url = _hubcloud_pixel_url(url)
+        elif kind == "buzz":
+            url = _hubcloud_buzz_url(fetch, url, page_url)
+            if not url:
+                ignored.append("BuzzServer (no hx-redirect)")
+                continue
+        found[kind] = {"kind": kind, "label": _HUBCLOUD_LABELS[kind], "url": url}
+    ordered = [found[kind] for kind in _HUBCLOUD_PRIORITY if kind in found]
+    notes = []
+    if ignored:
+        notes.append("ignored non-file buttons: " + ", ".join(ignored[:6]))
+    return ordered, notes
+
+
+def _hubcloud_quality(page: str) -> str:
+    """The quality tag from the gamerxyt card header (the file name), or ""."""
+    match = _HUBCLOUD_CARD_HEADER_RE.search(page or "")
+    if not match:
+        return ""
+    header = re.sub(r"<[^>]+>", "", match.group(1))
+    found = _HUBCLOUD_QUALITY_RE.search(header)
+    return f"{found.group(1)}p" if found else ""
+
+
+def unwrap_hubcloud(url: str, fetch=None, verify: bool = True,
+                    referer: str | None = None) -> dict:
+    """
+    HubCloud drive URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Chain (cracked 2026-11-12, re-verified live 2026-11-13 against a stored
+    hubcloud.pw drive URL; cross-checked against CloudStream core
+    HubCloud.kt, which implements the same chain):
+
+        GET https://hubcloud.pw/drive/<id>                  200, ~19 KB
+            <a id="download" href="https://gamerxyt.com/hubcloud.php
+            ?host=hubcloud&id=<id>&token=<60-char>">
+        GET that gamerxyt URL (Referer: drive page, Cookie: xla=s4t)
+            200, ~17-20 KB; server buttons are <a class="btn …"> anchors
+            dispatched by id/text: FSLv2 (#s3) -> FSL (#fsl) -> PixelServer
+            (#pxl-1) -> S3 -> Buzz (GET $link/download, hx-redirect) ->
+            Mega -> PDL -> 10Gbps (a page, "Resume Not Supported")
+        Range-probe each candidate in that order; the first 206 with real
+        video bytes is the file.
+
+    The gamerxyt token is per page load and expires, so the drive page is
+    fetched fresh on every call and its URL is never stored; the R2
+    presigned URL dies in 5 h (FSLv2) or 8 h (FSL), so the final URL is a
+    result, never catalog data. A drive page that 404s is dead; a failed
+    unwrap is "unknown", never "dead" — FSL/FSLv2 liveness flaps per R2
+    account (one file's FSL was 403 NotEntitled while its FSLv2 was 206).
+
+    Two traps this code does not fall into, both measured on the live pages:
+    the gamerxyt HTML always contains a `swal({title: "Token Expired!"…})`
+    script — it is a static template that fires only when the size reads
+    `NAN`, so the string is never used as a dead-token signal; the retry
+    trigger is an empty button list instead. And CloudStream's
+    `div.card-body h2 a.btn` selector is stale as written — the live
+    template wraps the whole card in one <h2>, so the buttons are read as
+    btn-class anchors and dispatched by id/text.
+    """
+    fetch = fetch or http_request
+    result = _new_result(SERVICE_HUBCLOUD, url)
+    _withheld_referrer(result, referer)
+    clean_url = (url or "").strip()
+    drive_id = hubcloud_drive_id(clean_url)
+    bridge_url = ""
+    if is_hubcloud_bridge(clean_url):
+        bridge_url = clean_url
+        params = urllib.parse.parse_qs(urllib.parse.urlsplit(clean_url).query)
+        drive_id = params.get("id", [""])[0]
+    elif not drive_id:
+        result["status"] = "unknown"
+        result["notes"].append("not a hubcloud drive URL")
+        return result
+
+    candidates: list[dict] = []
+    skip_notes: list[str] = []
+    gx_page = ""
+    gx_url = bridge_url
+    for _attempt in range(2):
+        if not gx_url:
+            drive_url = result["embed_url"]
+            status, body, _headers, _final = fetch(drive_url)
+            if status != 200:
+                result["status"] = ("dead" if status in (404, 410)
+                                    else "blocked" if status in (401, 403, 429)
+                                    else "unknown")
+                result["notes"].append(f"hubcloud drive page HTTP {status}")
+                return result
+            drive_page = _page_text(body)
+            download_href = _hubcloud_download_href(drive_page)
+            if not download_href:
+                result["status"] = "unknown"
+                result["notes"].append("hubcloud drive page carries no download link")
+                return result
+            gx_url = _hubcloud_abs(download_href, drive_url)
+        referer_url = (f"https://hubcloud.ist/drive/{drive_id}" if bridge_url
+                       else result["embed_url"])
+        status, body, _headers, _final = fetch(
+            gx_url, headers={"Referer": referer_url, "Cookie": "xla=s4t"})
+        if status != 200:
+            result["status"] = ("dead" if status in (404, 410)
+                                else "blocked" if status in (401, 403, 429)
+                                else "unknown")
+            result["notes"].append(f"gamerxyt page HTTP {status}")
+            return result
+        gx_page = _page_text(body)
+        candidates, skip_notes = _hubcloud_candidates(fetch, gx_page, gx_url)
+        if candidates or bridge_url:
+            break
+        # No server buttons on a drive-derived page: the token the drive
+        # page minted is already dead, so the page renders the expiry alert
+        # instead of buttons. One fresh drive fetch, then stop — a second
+        # empty page is a real unknown, not a reason to loop.
+        gx_url = ""
+    result["notes"].extend(skip_notes)
+    if not candidates:
+        result["status"] = "unknown"
+        result["notes"].append("gamerxyt page publishes no server buttons")
+        return result
+
+    result["bridge_url"] = gx_url
+    result["quality"] = _hubcloud_quality(gx_page)
+    result["sources"] = [{"url": cand["url"], "mime": "", "label": cand["label"]}
+                         for cand in candidates]
+    result["final_url"] = candidates[0]["url"]
+    if not verify:
+        _expires_at, result["expires_in"] = r2_presigned_expiry(result["final_url"])
+        if result["expires_in"] is None:
+            result["notes"].append("signed query carries no parsable expiry")
+        result["signed_params"] = sorted(signature_params(result["final_url"]))
+        result["notes"].append("unpacked only; the byte endpoint was not probed")
+        return result
+
+    probe_statuses: list[str] = []
+    first_probe = None
+    for cand in candidates:
+        probe = probe_range(cand["url"], fetch=fetch)
+        probe_statuses.append(probe["status"])
+        if first_probe is None:
+            first_probe = probe
+        if probe["status"] == "active":
+            result["final_url"] = cand["url"]
+            result["http_status"] = probe["http_status"]
+            result["content_type"] = probe["content_type"]
+            result["size_bytes"] = probe["size_bytes"]
+            result["status"] = "active"
+            if probe["reason"]:
+                result["notes"].append(f"{cand['label']}: {probe['reason']}")
+            _expires_at, result["expires_in"] = r2_presigned_expiry(cand["url"])
+            if result["expires_in"] is None:
+                result["notes"].append("signed query carries no parsable expiry")
+            result["signed_params"] = sorted(signature_params(cand["url"]))
+            return result
+        result["notes"].append(
+            f"{cand['label']}: {probe['reason'] or probe['status']}")
+    if first_probe is not None:
+        result["http_status"] = first_probe["http_status"]
+        result["content_type"] = first_probe["content_type"]
+        result["size_bytes"] = first_probe["size_bytes"]
+    _expires_at, result["expires_in"] = r2_presigned_expiry(result["final_url"])
+    if result["expires_in"] is None:
+        result["notes"].append("signed query carries no parsable expiry")
+    result["signed_params"] = sorted(signature_params(result["final_url"]))
+    # Every copy gone is dead; any other failure flaps and stays unknown.
+    result["status"] = ("dead" if probe_statuses
+                        and all(s == "dead" for s in probe_statuses)
+                        else "unknown")
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     """One URL in, one JSON verdict out — a manual check of the chain."""
     args = argv if argv is not None else sys.argv[1:]
@@ -3188,6 +3608,8 @@ def main(argv: list[str] | None = None) -> int:
         unwrap = unwrap_animahd
     elif is_castle_page(url):
         unwrap = unwrap_castle
+    elif is_hubcloud_drive(url) or is_hubcloud_bridge(url):
+        unwrap = unwrap_hubcloud
     else:
         unwrap = unwrap_mxdrop
     verdict = unwrap(url, verify="--no-verify" not in args)

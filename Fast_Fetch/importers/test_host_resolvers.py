@@ -2231,5 +2231,363 @@ class TestUnwrapCastle(unittest.TestCase):
         self.assertNotIn("expire=", verdict["final_url"])
 
 
+# ---------------------------------------------------------------------------
+# HubCloud
+# ---------------------------------------------------------------------------
+
+# A hubcloud drive page + gamerxyt page, reduced to what the resolver has
+# to read but structurally faithful to the live pages (drive fetched from
+# the Oracle VM 2026-11-13; gamerxyt page saved 2026-11-12 as
+# /tmp/fslv2-gx-rx1co7nls9ct5zp.html). The R2 URLs carry the real account
+# hashes and key shapes from that trace (readable filename for FSLv2, hex
+# key for FSL) with a FAKE signature and credential — they are never
+# fetched live here; scripted_fetch answers them. X-Amz-Date is minted at
+# import time so expires_in stays positive while the test runs.
+HC_DRIVE_ID = "rn_37lnqqexentk"
+HC_DRIVE_URL = f"https://hubcloud.pw/drive/{HC_DRIVE_ID}"
+HC_TOKEN = "A" * 60
+HC_GAMERXYT_URL = ("https://gamerxyt.com/hubcloud.php?host=hubcloud"
+                   f"&id={HC_DRIVE_ID}&token={HC_TOKEN}")
+
+
+def _hc_r2_url(account, key, lifetime):
+    now = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    return (f"https://{account}.r2.cloudflarestorage.com/hub/{key}"
+            "?X-Amz-Algorithm=AWS4-HMAC-SHA256"
+            "&X-Amz-Credential=FAKECRED%2F20261113%2Fauto%2Fs3%2Faws4_request"
+            f"&X-Amz-Date={now}&X-Amz-Expires={lifetime}"
+            "&X-Amz-SignedHeaders=host&X-Amz-Signature=" + "0" * 64)
+
+
+HC_FSLV2_URL = _hc_r2_url("1c8e2ebb17c55ccc855414dc97ed1e80",
+                          "Ramayana.2026.720p.mkv", 18000)
+HC_FSL_URL = _hc_r2_url("b26be7ab2ca58cec9372503da5e7eb9a",
+                        "79cc21f44d8f883216a4e509f53a3a7e", 28800)
+HC_PIXEL_HREF = "https://pixeldrain.dev/u/negn6f"
+HC_PIXEL_URL = "https://pixeldrain.dev/api/file/negn6f?download"
+HC_10GBPS_URL = "https://pixel.hubcloud.pw/?id=deadbeef::cafef00d"
+HC_BUZZ_HREF = "https://buzz.example.com/9f8e7d"
+HC_BUZZ_URL = "https://buzzcdn.example.com/file.mkv?token=abc"
+HC_WATCH_URL = "https://hbplay.pages.dev/?u=aHR0cHM6Ly9leGFtcGxlLmNvbS9maWxlLm1rdg=="
+
+HC_DRIVE_PAGE = f"""<!DOCTYPE html><html><head><title>Maari.2015.1080p.WEB.DL.HIN.TAM.2.0.ESub.x264.moviesdrives.com.mkv - HubCloud</title></head><body>
+<div class="vd" style="display:none">
+<a id="download" href="{HC_GAMERXYT_URL}">Download</a>
+</div>
+</body></html>"""
+
+HC_GAMERXYT_PAGE = f"""<!DOCTYPE html><html><head><title>HubCloud</title></head><body>
+<h2><div class="main" id="section2"><div class="card h6">
+<div class="card-header text-white bg-primary mb-3"> Maari.2015.1080p.WEB.DL.HIN.TAM.2.0.ESub.x264.moviesdrives.com.mkv </div>
+<div class="card-body"><ul class="list-group">
+<li class="list-group-item d-flex justify-content-between align-items-center">File Size<i id="size">1.59 GB</i></li>
+<li class="list-group-item d-flex justify-content-between align-items-center">File Type<i>video/x-matroska</i></li>
+</ul></div></div></div></h2>
+<a href="{HC_FSLV2_URL}" id="s3" rel="noreferrer nofollow noopener" target="_blank" class="btn btn-success btn-lg h6">Download [FSLv2 Server]</a>
+<a href="{HC_PIXEL_HREF}" id="pxl-1" rel="noreferrer nofollow noopener" target="_blank" class="btn btn-success btn-lg h6">Download [PixelServer : 2]</a>
+<a href="{HC_FSL_URL}" id="fsl" rel="noreferrer nofollow noopener" target="_blank" class="btn btn-success btn-lg h6">Download [FSL Server]</a>
+<a href="{HC_10GBPS_URL}" rel="noreferrer nofollow noopener" target="_blank" class="btn btn-danger btn-lg h6">Download [Server : 10Gbps]</a>
+<a href="{HC_WATCH_URL}" target="_blank" rel="noopener noreferrer nofollow" class="btn btn-primary btn-lg h6" id="tgbtn">Watch Online</a>
+<script>
+var size = document.getElementById("size").innerHTML
+if(size == 'NAN '){{swal({{
+    title: "Token Expired!",
+    text: "Token Link has been expired Please Click on Ok Button To Generate New Link!",
+    type: "success"
+}}).then(function() {{
+    window.location = document.location.href = sharelink;
+}})}}
+</script>
+</body></html>"""
+
+HC_MKV_HEAD = GD_MKV_HEAD
+HC_R2_HEADERS = {"content-type": "application/octet-stream",
+                 "content-range": "bytes 0-511/1705388883"}
+HC_NOT_ENTITLED = (b'<?xml version="1.0" encoding="UTF-8"?><Error>'
+                   b'<Code>NotEntitled</Code><Message>Please enable R2 through '
+                   b'the Cloudflare Dashboard.</Message></Error>')
+
+
+def _hc_fetch(fslv2_probe, fsl_probe, pixel_probe=None, gbps_probe=None,
+              gx_page=HC_GAMERXYT_PAGE):
+    script = {
+        "hubcloud.pw/drive/rn_37lnqqexentk": (200, HC_DRIVE_PAGE, {}),
+        "gamerxyt.com/hubcloud.php": (200, gx_page, {}),
+        "1c8e2ebb17c55ccc855414dc97ed1e80": fslv2_probe,
+        "b26be7ab2ca58cec9372503da5e7eb9a": fsl_probe,
+    }
+    if pixel_probe is not None:
+        script["pixeldrain.dev/api/file/negn6f"] = pixel_probe
+    if gbps_probe is not None:
+        script["pixel.hubcloud.pw"] = gbps_probe
+    return scripted_fetch(script)
+
+
+class TestUnwrapHubcloud(unittest.TestCase):
+    def test_recognition(self):
+        self.assertTrue(hr.is_hubcloud_drive(HC_DRIVE_URL))
+        self.assertTrue(hr.is_hubcloud_drive(
+            "https://hubcloud.ist/drive/abc123_-XYZ"))
+        self.assertEqual(hr.hubcloud_drive_id(HC_DRIVE_URL), HC_DRIVE_ID)
+        self.assertFalse(hr.is_hubcloud_drive("https://hubcloud.pw/"))
+        self.assertFalse(hr.is_hubcloud_drive("https://hubcloud.pw/drive/"))
+        self.assertFalse(hr.is_hubcloud_drive("https://example.com/drive/abc"))
+        self.assertFalse(hr.is_hubcloud_drive(HC_GAMERXYT_URL))
+        self.assertTrue(hr.is_hubcloud_bridge(HC_GAMERXYT_URL))
+        self.assertFalse(hr.is_hubcloud_bridge("https://gamerxyt.com/"))
+        self.assertFalse(hr.is_hubcloud_bridge(
+            "https://gamerxyt.com/hubcloud.php?host=hubcloud"))
+        self.assertFalse(hr.is_hubcloud_bridge(HC_DRIVE_URL))
+
+    def test_r2_presigned_expiry(self):
+        _at, fslv2_in = hr.r2_presigned_expiry(HC_FSLV2_URL)
+        self.assertGreater(fslv2_in, 17000)
+        self.assertLessEqual(fslv2_in, 18000)
+        _at, fsl_in = hr.r2_presigned_expiry(HC_FSL_URL)
+        self.assertGreater(fsl_in, 27000)
+        self.assertLessEqual(fsl_in, 28800)
+        self.assertEqual(hr.r2_presigned_expiry(
+            "https://x.r2.cloudflarestorage.com/hub/f?X-Amz-Expires=18000"),
+            (None, None))
+        self.assertEqual(hr.r2_presigned_expiry(
+            "https://x.r2.cloudflarestorage.com/hub/f?X-Amz-Date=20261113T080000Z"),
+            (None, None))
+        self.assertEqual(hr.r2_presigned_expiry(
+            "https://x.r2.cloudflarestorage.com/hub/f?X-Amz-Date=not-a-date"
+            "&X-Amz-Expires=18000"), (None, None))
+        self.assertEqual(hr.r2_presigned_expiry("https://example.com/f.mp4"),
+                         (None, None))
+
+    def test_full_chain_active_via_fslv2(self):
+        fetch = _hc_fetch(
+            (206, HC_MKV_HEAD, HC_R2_HEADERS),
+            (206, HC_MKV_HEAD, HC_R2_HEADERS))
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "hubcloud")
+        self.assertTrue(verdict["is_temporary"])
+        self.assertEqual(verdict["final_url"], HC_FSLV2_URL)
+        self.assertEqual([s["label"] for s in verdict["sources"]],
+                         ["FSLv2", "FSL", "PixelServer", "10Gbps"])
+        self.assertEqual(verdict["quality"], "1080p")
+        self.assertGreater(verdict["expires_in"], 17000)
+        self.assertLessEqual(verdict["expires_in"], 18000)
+        self.assertEqual(verdict["http_status"], 206)
+        self.assertEqual(verdict["size_bytes"], 1705388883)
+        self.assertIn("Watch Online", json.dumps(verdict["notes"]))
+        # Exactly three requests: drive, gamerxyt, one probe. The fixture
+        # gamerxyt page carries the static "Token Expired!" swal script on
+        # every page, live or dead — it must never trigger a retry.
+        self.assertEqual(len(fetch.calls), 3)
+        gx_call = [c for c in fetch.calls if "gamerxyt.com" in c[0]][0]
+        self.assertEqual(gx_call[1].get("Referer"), HC_DRIVE_URL)
+        self.assertEqual(gx_call[1].get("Cookie"), "xla=s4t")
+
+    def test_fslv2_blocked_falls_back_to_fsl(self):
+        fetch = _hc_fetch(
+            (403, HC_NOT_ENTITLED, {"content-type": "application/xml"}),
+            (206, HC_MKV_HEAD, HC_R2_HEADERS))
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], HC_FSL_URL)
+        self.assertGreater(verdict["expires_in"], 27000)
+        self.assertLessEqual(verdict["expires_in"], 28800)
+        self.assertIn("FSLv2", json.dumps(verdict["notes"]))
+        self.assertIn("HTTP 403", json.dumps(verdict["notes"]))
+
+    def test_both_r2_blocked_falls_back_to_pixel(self):
+        fetch = _hc_fetch(
+            (403, HC_NOT_ENTITLED, {"content-type": "application/xml"}),
+            (403, HC_NOT_ENTITLED, {"content-type": "application/xml"}),
+            pixel_probe=(206, HC_MKV_HEAD, HC_R2_HEADERS))
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], HC_PIXEL_URL)
+        probed = [c[0] for c in fetch.calls]
+        self.assertTrue(any("pixeldrain.dev/api/file/negn6f?download" in u
+                            for u in probed))
+
+    def test_verify_off_returns_first_candidate_unverified(self):
+        fetch = _hc_fetch(
+            (206, HC_MKV_HEAD, HC_R2_HEADERS),
+            (206, HC_MKV_HEAD, HC_R2_HEADERS))
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch, verify=False)
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(verdict["final_url"], HC_FSLV2_URL)
+        self.assertEqual(len(fetch.calls), 2)
+        self.assertIn("not probed", json.dumps(verdict["notes"]))
+
+    def test_non_hubcloud_url_is_refused_before_any_request(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_hubcloud("https://www.example.com/drive/abc",
+                                     fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertEqual(fetch.calls, [])
+
+    def test_drive_page_failure_shapes(self):
+        for status, expected in ((404, "dead"), (410, "dead"), (403, "blocked"),
+                                 (429, "blocked"), (500, "unknown")):
+            fetch = scripted_fetch({
+                "hubcloud.pw/drive/rn_37lnqqexentk": (status, b"", {}),
+            })
+            verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+            self.assertEqual(verdict["status"], expected, status)
+            self.assertEqual(verdict["notes"],
+                             [f"hubcloud drive page HTTP {status}"])
+
+    def test_drive_page_without_download_link_is_unknown(self):
+        fetch = scripted_fetch({
+            "hubcloud.pw/drive/rn_37lnqqexentk":
+                (200, "<html><body>no download here</body></html>", {}),
+        })
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no download link", json.dumps(verdict["notes"]))
+
+    def test_gamerxyt_page_without_buttons_retries_once_then_unknown(self):
+        empty_page = ("<html><body><div class=\"card-header\">x 720p</div>"
+                      "no buttons</body></html>")
+        fetch = scripted_fetch({
+            "hubcloud.pw/drive/rn_37lnqqexentk": (200, HC_DRIVE_PAGE, {}),
+            "gamerxyt.com/hubcloud.php": (200, empty_page, {}),
+        })
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no server buttons", json.dumps(verdict["notes"]))
+        drive_calls = [c for c in fetch.calls if "hubcloud.pw/drive" in c[0]]
+        gx_calls = [c for c in fetch.calls if "gamerxyt.com" in c[0]]
+        self.assertEqual(len(drive_calls), 2)
+        self.assertEqual(len(gx_calls), 2)
+
+    def test_dead_token_first_page_then_fresh_token_succeeds(self):
+        empty_page = "<html><body>no buttons</body></html>"
+        calls = {"gx": 0}
+
+        def fetch(url, headers=None, timeout=None, method="GET",
+                  follow=True, data=None):
+            if "hubcloud.pw/drive" in url:
+                return 200, HC_DRIVE_PAGE, {"content-type": "text/html"}, url
+            if "gamerxyt.com" in url:
+                calls["gx"] += 1
+                page = empty_page if calls["gx"] == 1 else HC_GAMERXYT_PAGE
+                return 200, page, {"content-type": "text/html"}, url
+            if "1c8e2ebb17c55ccc855414dc97ed1e80" in url:
+                return 206, HC_MKV_HEAD, dict(HC_R2_HEADERS), url
+            return 404, b"", {"content-type": "text/html"}, url
+
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], HC_FSLV2_URL)
+        self.assertEqual(calls["gx"], 2)
+
+    def test_all_candidates_dead_is_dead(self):
+        fetch = _hc_fetch(
+            (404, b"", {"content-type": "text/html"}),
+            (404, b"", {"content-type": "text/html"}),
+            pixel_probe=(404, b"", {"content-type": "text/html"}),
+            gbps_probe=(404, b"", {"content-type": "text/html"}))
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+
+    def test_all_candidates_blocked_is_unknown_not_dead(self):
+        fetch = _hc_fetch(
+            (403, HC_NOT_ENTITLED, {"content-type": "application/xml"}),
+            (403, HC_NOT_ENTITLED, {"content-type": "application/xml"}),
+            pixel_probe=(403, b"", {"content-type": "text/html"}),
+            gbps_probe=(200, b"<html>download page</html>",
+                        {"content-type": "text/html"}))
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertEqual(verdict["final_url"], HC_FSLV2_URL)
+
+    def test_10gbps_only_page_is_not_served(self):
+        gx_page = ("<html><body><div class=\"card-header\">x 720p</div>"
+                   f"<a href=\"{HC_10GBPS_URL}\" class=\"btn btn-danger\">"
+                   "Download [Server : 10Gbps]</a></body></html>")
+        fetch = scripted_fetch({
+            "hubcloud.pw/drive/rn_37lnqqexentk": (200, HC_DRIVE_PAGE, {}),
+            "gamerxyt.com/hubcloud.php": (200, gx_page, {}),
+            "pixel.hubcloud.pw": (200, b"<html>download page</html>",
+                                  {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertEqual(verdict["final_url"], HC_10GBPS_URL)
+
+    def test_buzz_hx_redirect_is_followed(self):
+        gx_page = ("<html><body><div class=\"card-header\">x 720p</div>"
+                   f"<a href=\"{HC_BUZZ_HREF}\" class=\"btn btn-success\">"
+                   "BuzzServer</a></body></html>")
+        seen = []
+
+        def fetch(url, headers=None, timeout=None, method="GET",
+                  follow=True, data=None):
+            seen.append((url, dict(headers or {}), method, follow))
+            if "hubcloud.pw/drive" in url:
+                return 200, HC_DRIVE_PAGE, {"content-type": "text/html"}, url
+            if "gamerxyt.com" in url:
+                return 200, gx_page, {"content-type": "text/html"}, url
+            if "buzz.example.com/9f8e7d/download" in url:
+                return 200, b"", {"content-type": "text/html",
+                                  "hx-redirect": HC_BUZZ_URL}, url
+            if "buzzcdn.example.com" in url:
+                return 206, HC_MKV_HEAD, dict(HC_R2_HEADERS), url
+            return 404, b"", {"content-type": "text/html"}, url
+
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], HC_BUZZ_URL)
+        hop = [s for s in seen if "buzz.example.com/9f8e7d/download" in s[0]]
+        self.assertEqual(len(hop), 1)
+        self.assertFalse(hop[0][3])
+
+    def test_buzz_without_hx_redirect_is_skipped(self):
+        gx_page = ("<html><body><div class=\"card-header\">x 720p</div>"
+                   f"<a href=\"{HC_BUZZ_HREF}\" class=\"btn btn-success\">"
+                   "BuzzServer</a></body></html>")
+        fetch = scripted_fetch({
+            "hubcloud.pw/drive/rn_37lnqqexentk": (200, HC_DRIVE_PAGE, {}),
+            "gamerxyt.com/hubcloud.php": (200, gx_page, {}),
+            "buzz.example.com/9f8e7d/download": (200, b"", {}),
+        })
+        verdict = hr.unwrap_hubcloud(HC_DRIVE_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("BuzzServer", json.dumps(verdict["notes"]))
+
+    def test_bridge_url_starts_at_gamerxyt(self):
+        fetch = _hc_fetch(
+            (206, HC_MKV_HEAD, HC_R2_HEADERS),
+            (206, HC_MKV_HEAD, HC_R2_HEADERS))
+        verdict = hr.unwrap_hubcloud(HC_GAMERXYT_URL, fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["final_url"], HC_FSLV2_URL)
+        self.assertEqual([c for c in fetch.calls if "hubcloud.pw/drive" in c[0]],
+                         [])
+        gx_call = [c for c in fetch.calls if "gamerxyt.com" in c[0]][0]
+        self.assertEqual(gx_call[1].get("Referer"),
+                         f"https://hubcloud.ist/drive/{HC_DRIVE_ID}")
+
+    def test_pixel_url_rule(self):
+        self.assertEqual(
+            hr._hubcloud_pixel_url("https://pixeldrain.dev/u/negn6f"),
+            "https://pixeldrain.dev/api/file/negn6f?download")
+        self.assertEqual(
+            hr._hubcloud_pixel_url(
+                "https://pixel.example.com/api/file/abc?download"),
+            "https://pixel.example.com/api/file/abc?download")
+
+    def test_dispatch_prefers_id_over_text(self):
+        self.assertEqual(hr._hubcloud_dispatch({"id": "s3"}, "Something else"),
+                         "fslv2")
+        self.assertEqual(hr._hubcloud_dispatch({"id": "pxl-1"}, "Download"),
+                         "pixel")
+        self.assertEqual(hr._hubcloud_dispatch({}, "Download [FSL Server]"),
+                         "fsl")
+        self.assertEqual(hr._hubcloud_dispatch({}, "Download [FSLv2 Server]"),
+                         "fslv2")
+        self.assertEqual(hr._hubcloud_dispatch({}, "Watch Online"), "")
+        self.assertEqual(hr._hubcloud_dispatch({}, "Telegram"), "")
+
+
 if __name__ == "__main__":
     unittest.main()
