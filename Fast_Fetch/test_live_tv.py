@@ -283,7 +283,14 @@ class StreamRouteTests(LiveTvFixture):
 
     def test_tampered_handle_rejected(self):
         handle = self._tv_handle(1)
-        tampered = handle[:-2] + "AA"
+        # Tamper the second-to-last char: it carries the high 6 bits of
+        # the final tag byte, so any change alters the decoded tag. (The
+        # final char's low 4 bits are base64 padding bits the decoder
+        # ignores, so replacing the last two chars with "AA" is a 1-in-256
+        # no-op whenever the tag's last byte happens to be 0x00 — that
+        # flaked CI run 43445507410 with 302 instead of 400.)
+        flipped = "B" if handle[-2] != "B" else "C"
+        tampered = handle[:-2] + flipped + handle[-1]
         status, _headers, _body = self._get("/api/v1/stream?id=" + tampered)
         self.assertEqual(status, 400)
 
