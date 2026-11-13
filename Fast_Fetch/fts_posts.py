@@ -19,9 +19,16 @@ The two tables (§4.1 of the benchmark):
   2` folds `é` → `e` at index time; the query tokenizer here folds
   the same way, so `amelie` finds `Amélie`.
 * `fts_posts_tri` — trigram, external content over `posts`
-  (`clean_title` only). The typo-correction engine ONLY — trigram
-  as the main index is slower on common words and ranks worse, so
-  it never answers a search, only `did_you_mean` / fuzzy candidates.
+  (`clean_title`, `cast_names`). Two consumers: the typo-correction
+  engine (`did_you_mean` / fuzzy candidates) and the `/api/v1/posts`
+  substring search, whose four-column LIKE the trigram MATCH replaces
+  as a candidate pass — a row whose title, slug or cast contains the
+  query contains every 3-gram of it, so the MATCH is a superset and
+  the LIKE only verifies the candidates. Trigram as the main index is
+  slower on common words and ranks worse, so it never answers a
+  search on its own, only as the candidate pass above. The correction
+  engine still verifies against `clean_title` only, so a cast match
+  never becomes a suggested title.
 
 Freshness: the standard external-content triggers (`_ai`/`_ad`/`_au`
 per table) keep both tables in step on every `posts` write. The
@@ -61,10 +68,14 @@ import unicodedata
 
 #: The main search index: title + cast, one MATCH answers both.
 FTS_TABLE = "fts_posts"
-#: The typo-correction index: trigram over titles only.
+#: The trigram candidate index: titles + cast, for the typo-correction
+#: engine and the /posts substring search. `cast_names` joined the
+#: index with the /posts candidate pass (2026-11-13): without it the
+#: trigram MATCH is not a superset of the search's four-column LIKE,
+#: and a cast-only row would be dropped from the candidates.
 TRI_TABLE = "fts_posts_tri"
 FTS_COLUMNS = ("clean_title", "cast_names")
-TRI_COLUMNS = ("clean_title",)
+TRI_COLUMNS = ("clean_title", "cast_names")
 #: Sync triggers, one set per table (`_ai`/`_ad`/`_au`).
 TRIGGERS = (
     "fts_posts_ai", "fts_posts_ad", "fts_posts_au",
@@ -83,29 +94,39 @@ TRI_SQL = (
     f"{', '.join(TRI_COLUMNS)}, content='posts', content_rowid='id', "
     f"tokenize='trigram')")
 
+#: The `new.` / `old.` value lists the sync triggers insert — derived
+#: from the column tuples above, never hardcoded, so a column added to
+#: either index cannot leave a trigger inserting the wrong arity. A
+#: mismatch fails at fire time, not at creation, so a stale trigger
+#: breaks the next `posts` write, not the migration that made it.
+_FTS_NEW = ", ".join("new." + column for column in FTS_COLUMNS)
+_FTS_OLD = ", ".join("old." + column for column in FTS_COLUMNS)
+_TRI_NEW = ", ".join("new." + column for column in TRI_COLUMNS)
+_TRI_OLD = ", ".join("old." + column for column in TRI_COLUMNS)
+
 TRIGGER_SQL = (
     f"CREATE TRIGGER IF NOT EXISTS {TRIGGERS[0]} AFTER INSERT ON posts BEGIN"
     f"  INSERT INTO {FTS_TABLE}(rowid, {', '.join(FTS_COLUMNS)})"
-    f"  VALUES (new.id, new.clean_title, new.cast_names); END",
+    f"  VALUES (new.id, {_FTS_NEW}); END",
     f"CREATE TRIGGER IF NOT EXISTS {TRIGGERS[1]} AFTER DELETE ON posts BEGIN"
     f"  INSERT INTO {FTS_TABLE}({FTS_TABLE}, rowid, {', '.join(FTS_COLUMNS)})"
-    f"  VALUES ('delete', old.id, old.clean_title, old.cast_names); END",
+    f"  VALUES ('delete', old.id, {_FTS_OLD}); END",
     f"CREATE TRIGGER IF NOT EXISTS {TRIGGERS[2]} AFTER UPDATE ON posts BEGIN"
     f"  INSERT INTO {FTS_TABLE}({FTS_TABLE}, rowid, {', '.join(FTS_COLUMNS)})"
-    f"  VALUES ('delete', old.id, old.clean_title, old.cast_names);"
+    f"  VALUES ('delete', old.id, {_FTS_OLD});"
     f"  INSERT INTO {FTS_TABLE}(rowid, {', '.join(FTS_COLUMNS)})"
-    f"  VALUES (new.id, new.clean_title, new.cast_names); END",
+    f"  VALUES (new.id, {_FTS_NEW}); END",
     f"CREATE TRIGGER IF NOT EXISTS {TRIGGERS[3]} AFTER INSERT ON posts BEGIN"
     f"  INSERT INTO {TRI_TABLE}(rowid, {', '.join(TRI_COLUMNS)})"
-    f"  VALUES (new.id, new.clean_title); END",
+    f"  VALUES (new.id, {_TRI_NEW}); END",
     f"CREATE TRIGGER IF NOT EXISTS {TRIGGERS[4]} AFTER DELETE ON posts BEGIN"
     f"  INSERT INTO {TRI_TABLE}({TRI_TABLE}, rowid, {', '.join(TRI_COLUMNS)})"
-    f"  VALUES ('delete', old.id, old.clean_title); END",
+    f"  VALUES ('delete', old.id, {_TRI_OLD}); END",
     f"CREATE TRIGGER IF NOT EXISTS {TRIGGERS[5]} AFTER UPDATE ON posts BEGIN"
     f"  INSERT INTO {TRI_TABLE}({TRI_TABLE}, rowid, {', '.join(TRI_COLUMNS)})"
-    f"  VALUES ('delete', old.id, old.clean_title);"
+    f"  VALUES ('delete', old.id, {_TRI_OLD});"
     f"  INSERT INTO {TRI_TABLE}(rowid, {', '.join(TRI_COLUMNS)})"
-    f"  VALUES (new.id, new.clean_title); END",
+    f"  VALUES (new.id, {_TRI_NEW}); END",
 )
 
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
@@ -197,6 +218,41 @@ def trigram_available(conn) -> bool:
     return _has_table(conn, TRI_TABLE) and _index_has_rows(conn, TRI_TABLE)
 
 
+def _tri_columns(conn) -> set[str]:
+    """The trigram table's indexed columns, or empty when it is absent.
+
+    `PRAGMA table_info` on an FTS5 virtual table reports the columns
+    the table was created with — the shape the live index actually
+    has, which lags the code's `TRI_COLUMNS` until a rebuild.
+    """
+    try:
+        rows = conn.execute(
+            f"PRAGMA table_info({TRI_TABLE})").fetchall()
+    except sqlite3.Error:
+        return set()
+    return {str(row[1]) for row in rows}
+
+
+def trigram_covers_cast(conn) -> bool:
+    """True when the trigram index can answer a cast substring search.
+
+    The candidate pass for `/api/v1/posts` needs the trigram MATCH to
+    be a superset of the search's four-column LIKE — title, slug and
+    cast. A trigram table built before `cast_names` joined the index
+    (the live shape until a rebuild) covers titles only, so it must
+    not be trusted for the search: False means "fall back to the LIKE
+    scan", never an error.
+    """
+    return (trigram_available(conn)
+            and "cast_names" in _tri_columns(conn))
+
+
+def _tri_shape_stale(conn) -> bool:
+    """True when the trigram table exists but not with `TRI_COLUMNS`."""
+    return (_has_table(conn, TRI_TABLE)
+            and _tri_columns(conn) != set(TRI_COLUMNS))
+
+
 def search_candidate_ids(conn, query: str, *, whole_word: bool = False,
                          ) -> list[int] | None:
     """The post ids an FTS5 MATCH answers for `query`.
@@ -229,11 +285,12 @@ def search_candidate_ids(conn, query: str, *, whole_word: bool = False,
 def trigram_candidate_ids(conn, match: str, limit: int) -> list[int] | None:
     """The post ids a trigram MATCH answers, best first (bm25 `rank`).
 
-    The correction layer's candidate pass: rows sharing the most
-    query trigrams first, so the true title word survives a bounded
-    window (the LIKE-gram pass ordered by gram-score for the same
-    reason). Returns None when the trigram index cannot answer —
-    the caller falls back to the LIKE-gram scan.
+    The trigram candidate pass — the correction layer's and the
+    `/api/v1/posts` search's: rows sharing the most query trigrams
+    first, so the true title word survives a bounded window (the
+    LIKE-gram pass ordered by gram-score for the same reason).
+    Returns None when the trigram index cannot answer — the caller
+    falls back to the LIKE-gram scan.
     """
     if not match:
         return []
@@ -280,12 +337,26 @@ def rebuild_fts(conn) -> dict:
     the same order `migrate_search_indexes.py` uses for `posts_fts`.
     Returns the counts and the wall time so the caller can log them.
     Benchmark: 7.6 s (main) + 5.1 s (trigram) on 224,081 rows.
+
+    Shape migration: a trigram table built before `cast_names` joined
+    `TRI_COLUMNS` still indexes titles only, and its sync triggers
+    still insert one column. A trigger that inserts the wrong arity
+    fails at fire time, not at creation, so the stale tri triggers
+    are dropped FIRST — no `posts` write can fire one against a table
+    being reshaped — then the table is dropped and recreated with the
+    current columns, the indexes are rebuilt, and all six triggers
+    are reinstalled, all before the single commit below, so no writer
+    ever sees a half-migrated state.
     """
     ensure_fts(conn)
+    for trigger in TRIGGERS[3:]:
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+    if _tri_shape_stale(conn):
+        conn.execute(f"DROP TABLE IF EXISTS {TRI_TABLE}")
+        conn.execute(TRI_SQL)
     started = time.perf_counter()
     conn.execute(f"INSERT INTO {FTS_TABLE}({FTS_TABLE}) VALUES('rebuild')")
     conn.execute(f"INSERT INTO {TRI_TABLE}({TRI_TABLE}) VALUES('rebuild')")
-    conn.commit()
     for statement in TRIGGER_SQL:
         conn.execute(statement)
     conn.commit()
@@ -323,6 +394,10 @@ def verify_fts(conn) -> list[str]:
     if posts >= 0 and tri_rows >= 0 and posts != tri_rows:
         failures.append(
             f"{TRI_TABLE} holds {tri_rows} rows, posts holds {posts}")
+    if _tri_shape_stale(conn):
+        failures.append(
+            f"{TRI_TABLE} indexes {sorted(_tri_columns(conn))}, not "
+            f"{sorted(TRI_COLUMNS)} — rebuild")
     for trigger in TRIGGERS:
         present = conn.execute(
             "SELECT 1 FROM sqlite_master WHERE type='trigger' AND name = ?",

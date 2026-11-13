@@ -24,7 +24,8 @@ Two steps, deliberately separated because they are not the same kind of change:
    the search-performance benchmark's winner (2026-11-12): the works search
    (`viewer._works_search_candidate_ids`) answers from `fts_posts`
    (`clean_title`, `cast_names`), and `did_you_mean` / the fuzzy fallback
-   answer candidates from `fts_posts_tri` (trigram over `clean_title`).
+   answer candidates from `fts_posts_tri` (trigram over `clean_title`,
+   `cast_names`).
    Unlike step 2, code DOES read these tables — so a stale pair changes
    answers, and the step is not a pure capability. Its safety argument
    is the same triggers + `verify` (run at the end of every apply, and
@@ -275,7 +276,7 @@ def plan(conn, target: Path, with_fts: bool, with_fts_posts: bool = False) -> in
         print()
         print("STEP 3  FTS5 posts pair: the works search + correction indexes")
         print(f"        tables      : {fts_posts.FTS_TABLE} (clean_title, cast_names),"
-              f" {fts_posts.TRI_TABLE} (clean_title, trigram)")
+              f" {fts_posts.TRI_TABLE} (clean_title, cast_names, trigram)")
         print(f"        present now : {fts_posts.FTS_TABLE}="
               f"{'yes' if _has_table(conn, fts_posts.FTS_TABLE) else 'no'}, "
               f"{fts_posts.TRI_TABLE}="

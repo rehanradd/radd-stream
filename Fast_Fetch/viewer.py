@@ -3003,6 +3003,21 @@ def _subtitled_posts(conn, post_ids) -> dict:
 #: `COUNT(*)` for it; the product is what has to be bounded.
 POSTS_MAX_OFFSET = 10_000
 
+#: Cap on the `/api/v1/posts` trigram candidate set — the same 900 the
+#: detail group scan uses (`_WORKS_GROUP_TRIGRAM_LIMIT`): under
+#: SQLite's 999-variable cap with room for the query's other params.
+#: A candidate set that would be truncated at the cap is not used at
+#: all (the caller falls back to the LIKE scan) rather than risk
+#: dropping a member.
+_POSTS_TRIGRAM_LIMIT = 900
+#: Params the `/api/v1/posts` statements reserve alongside the
+#: candidate IN-list: 4 for the LIKE that verifies the candidates,
+#: 10 for the facet filters, 100 for the step-2 page ids (the page
+#: limit is clamped to 100), 10 of margin. The effective candidate
+#: limit is `999 - reserve - len(hidden)`, so the hides the operator
+#: set in the panel are counted before the list is sized.
+_POSTS_TRIGRAM_RESERVE = 124
+
 
 def _fuzzy_post_ids(conn, query):
     """Post ids whose title is one edit away from the query, token by token.
@@ -3048,6 +3063,45 @@ def _fuzzy_post_ids(conn, query):
         if len(matched) >= 20:
             break
     return matched
+
+
+def _posts_search_candidate_ids(conn, query, limit):
+    """Post ids that can match a `/api/v1/posts` substring search, or None.
+
+    The trigram candidate pass for the search's four-column LIKE
+    (`clean_title`, `title`, `slug`, `cast_names`): the query's 3-grams
+    are OR-matched against `fts_posts_tri`, which indexes
+    `clean_title` + `cast_names`. A row whose title, slug or cast
+    contains the query contains every gram of it, so the MATCH is a
+    superset — the same guarantee the detail group scan relies on
+    (`_works_title_candidate_ids`). The caller keeps the LIKE as the
+    verifier: a shared gram is not a substring match (`Salaar` shares
+    grams with `Salary Man`), so the candidates narrow the scan, they
+    do not replace the match.
+
+    None means "scan the whole table instead", and it is returned
+    whenever the pass cannot prove it is a superset: no grams (a
+    one-letter or punctuation-only query — `q=a` and `q=%` are
+    answered by the LIKE, as before), a non-positive limit, a missing
+    or empty trigram index, a trigram index that predates `cast_names`
+    (`fts_posts.trigram_covers_cast` — the live shape until a rebuild),
+    or a candidate set that would be truncated at the cap. The
+    truncation rule is the same as the detail scan's: a set that
+    fills the window might hold more, so it is not used at all rather
+    than risk dropping a member.
+    """
+    tokens = search_fuzzy.tokenize(query)
+    grams = sorted({gram for token in tokens
+                    for gram in search_fuzzy.candidate_grams(token)})
+    if not grams or limit <= 0:
+        return None
+    if not fts_posts.trigram_covers_cast(conn):
+        return None
+    ids = fts_posts.trigram_candidate_ids(
+        conn, fts_posts.trigram_match(grams), limit)
+    if ids is None or len(ids) >= limit:
+        return None
+    return ids
 
 
 def _resolve_work_ref(conn, work_ref: str):
@@ -3682,6 +3736,11 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # clause actually appended — 4 for the LIKE, 1 for a work_ref id,
         # 12 for a whole-word clause — never a hardcoded 4.
         search_param_count = 4
+        # The operator hides are read here, not below where the clause is
+        # appended, so the search branch can size the trigram candidate
+        # list against them: the candidate IN-list, the LIKE, the facets
+        # and the hides share SQLite's 999-variable budget.
+        hidden = panel_feed.hidden_work_ids()
         if work_ref:
             # A minted handle names one work: the title search is not consulted
             # at all, and a handle that resolves to nothing answers an empty
@@ -3718,9 +3777,38 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 # same way a title does. The fuzzy fallback below stays
                 # title-only — a mistyped actor name falls back to close titles,
                 # not to guessed names.
-                where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
+                #
+                # The LIKE below is the scan (see test_posts_query_plan.py):
+                # four leading-wildcard LIKEs over the whole table, paid
+                # twice per request (the COUNT, then the page's ids). When
+                # the trigram index covers cast, a trigram MATCH over the
+                # query's 3-grams is a superset of that LIKE, so the search
+                # seeks the candidates by rowid and LIKE-verifies only
+                # those, instead of scanning — the COUNT and the page both
+                # read the narrowed clause, because it is clause 1. The
+                # LIKE stays as the verifier: a shared gram is not a
+                # substring match (`Salaar` shares grams with `Salary
+                # Man`). When the index is absent, stale, or the candidate
+                # set would be truncated, the clause is exactly the old
+                # LIKE — same rows, same order, just slower.
+                candidate_limit = max(
+                    0, min(_POSTS_TRIGRAM_LIMIT,
+                           999 - _POSTS_TRIGRAM_RESERVE - len(hidden)))
+                candidate_ids = _posts_search_candidate_ids(
+                    conn, query, candidate_limit)
                 q_param = f"%{query}%"
-                params.extend([q_param, q_param, q_param, q_param])
+                if candidate_ids is not None:
+                    placeholders = ", ".join("?" for _ in candidate_ids)
+                    where_clauses.append(
+                        f"(p.id IN ({placeholders}) AND (p.clean_title LIKE ?"
+                        " OR p.title LIKE ? OR p.slug LIKE ?"
+                        " OR p.cast_names LIKE ?))")
+                    params.extend(candidate_ids)
+                    params.extend([q_param, q_param, q_param, q_param])
+                    search_param_count = len(candidate_ids) + 4
+                else:
+                    where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
+                    params.extend([q_param, q_param, q_param, q_param])
         # Facet filters, shared with /api/v1/works (see
         # `_facet_filter_clauses`). `region=` is the alias for
         # `industry=`; an explicit `industry=` wins.
@@ -3761,7 +3849,8 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # including to an old app that never learned about the panel feed: the
         # hide is enforced here, at serve time, not only in the section
         # resolver. Unwired (no panel database) means no hides, never an error.
-        hidden = panel_feed.hidden_work_ids()
+        # (`hidden` was read above, before the search branch, so the trigram
+        # candidate limit could count it.)
         if hidden:
             ids = sorted(hidden)[:panel_feed.HIDDEN_IDS_CAP]
             where_clauses.append(
@@ -3802,7 +3891,8 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
         # clause owns a different number of params than the LIKE it
         # replaced. The count is the search clause's own (see
         # `search_param_count` above): 4 for the LIKE, 1 for a work_ref
-        # id, 12 for a whole-word clause.
+        # id, 12 for a whole-word clause, or N+4 for the LIKE with a
+        # trigram candidate IN-list of N ids in front of it.
         title_param_count = search_param_count
         # The exact search missed: the fallbacks below run from this, and
         # the correction is offered whenever it did — even when the fuzzy

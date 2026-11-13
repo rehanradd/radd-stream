@@ -317,6 +317,149 @@ class WorksCandidateTests(Fixture):
         self.assertNotIn(self.undead, self.candidate_ids("dead"))
 
 
+class PostsTrigramTests(Fixture):
+    """The `/api/v1/posts` trigram candidate pass.
+
+    The search's four-column LIKE (title, slug, cast) is replaced by a
+    trigram MATCH over `fts_posts_tri` plus the LIKE as verifier — but
+    only when the MATCH is a superset of the LIKE, which needs the
+    index to cover `cast_names` too. These tests pin the superset, the
+    stale-shape fallback, the trigger step, and the end-to-end
+    equivalence with the LIKE-only path.
+    """
+    FTS = True
+
+    def _like_ids(self, query):
+        q_param = f"%{query}%"
+        rows = self.conn.execute(
+            f"SELECT p.id FROM posts p WHERE {redact.adult_clause('p')}"
+            " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?"
+            " OR p.cast_names LIKE ?)",
+            [q_param] * 4).fetchall()
+        return {int(row[0]) for row in rows}
+
+    def test_trigram_index_covers_cast_names(self):
+        # "Khan" is in Jawan's cast, not in its title: a title-only
+        # trigram index would never return it.
+        grams = sorted({g for t in search_fuzzy.tokenize("khan")
+                        for g in search_fuzzy.candidate_grams(t)})
+        ids = fts_posts.trigram_candidate_ids(
+            self.conn, fts_posts.trigram_match(grams), 900)
+        self.assertIn(self.jawan, ids)
+        self.assertTrue(fts_posts.trigram_covers_cast(self.conn))
+
+    def test_posts_search_candidates_are_a_superset_of_the_like(self):
+        for query in ("salaar", "khan", "shah rukh khan", "prabhas",
+                      "inception", "salary", "xyzzy"):
+            candidates = viewer._posts_search_candidate_ids(
+                self.conn, query, 875)
+            self.assertIsNotNone(
+                candidates, f"{query!r} should take the candidate pass")
+            self.assertTrue(self._like_ids(query) <= set(candidates),
+                            query)
+        # No grams: a one-letter query and a punctuation-only query
+        # cannot take the pass, and must fall back to the LIKE.
+        self.assertIsNone(
+            viewer._posts_search_candidate_ids(self.conn, "a", 875))
+        self.assertIsNone(
+            viewer._posts_search_candidate_ids(self.conn, "%", 875))
+
+    def test_rebuild_migrates_a_stale_trigram_shape(self):
+        # A live database built before `cast_names` joined the index:
+        # the old table, the old one-column triggers, and rows.
+        conn = sqlite3.connect(":memory:")
+        conn.execute("CREATE TABLE posts (id INTEGER PRIMARY KEY,"
+                     " clean_title TEXT, cast_names TEXT)")
+        # The live pair: the main index in its current shape, the
+        # trigram table in the old one-column shape.
+        conn.execute("CREATE VIRTUAL TABLE fts_posts USING fts5("
+                     "clean_title, cast_names, content='posts',"
+                     " content_rowid='id',"
+                     " tokenize='unicode61 remove_diacritics 2')")
+        conn.execute("INSERT INTO fts_posts(fts_posts) VALUES('rebuild')")
+        conn.execute("CREATE VIRTUAL TABLE fts_posts_tri USING fts5("
+                     "clean_title, content='posts', content_rowid='id',"
+                     " tokenize='trigram')")
+        conn.execute("CREATE TRIGGER fts_posts_tri_ai AFTER INSERT ON posts"
+                     " BEGIN INSERT INTO fts_posts_tri(rowid, clean_title)"
+                     " VALUES (new.id, new.clean_title); END")
+        conn.execute("CREATE TRIGGER fts_posts_tri_ad AFTER DELETE ON posts"
+                     " BEGIN INSERT INTO fts_posts_tri(fts_posts_tri, rowid,"
+                     " clean_title) VALUES ('delete', old.id,"
+                     " old.clean_title); END")
+        conn.execute("CREATE TRIGGER fts_posts_tri_au AFTER UPDATE ON posts"
+                     " BEGIN INSERT INTO fts_posts_tri(fts_posts_tri, rowid,"
+                     " clean_title) VALUES ('delete', old.id,"
+                     " old.clean_title);"
+                     " INSERT INTO fts_posts_tri(rowid, clean_title)"
+                     " VALUES (new.id, new.clean_title); END")
+        conn.execute("INSERT INTO posts VALUES (1, 'Jawan',"
+                     " '[\"Shah Rukh Khan\"]')")
+        conn.execute("INSERT INTO fts_posts_tri(fts_posts_tri)"
+                     " VALUES('rebuild')")
+        self.assertFalse(fts_posts.trigram_covers_cast(conn))
+        self.assertIsNone(
+            viewer._posts_search_candidate_ids(conn, "khan", 875))
+        self.assertTrue(any("fts_posts_tri" in f and "rebuild" in f
+                            for f in fts_posts.verify_fts(conn)),
+                        str(fts_posts.verify_fts(conn)))
+        result = fts_posts.rebuild_fts(conn)
+        self.assertEqual(result["tri_rows"], 1)
+        self.assertTrue(fts_posts.trigram_covers_cast(conn))
+        self.assertEqual(fts_posts.verify_fts(conn), [])
+        grams = sorted({g for t in search_fuzzy.tokenize("khan")
+                        for g in search_fuzzy.candidate_grams(t)})
+        ids = fts_posts.trigram_candidate_ids(
+            conn, fts_posts.trigram_match(grams), 900)
+        self.assertEqual(ids, [1])
+        conn.close()
+
+    def test_trigram_triggers_keep_cast_in_step(self):
+        def find_cast(token):
+            grams = sorted({g for t in search_fuzzy.tokenize(token)
+                            for g in search_fuzzy.candidate_grams(t)})
+            return fts_posts.trigram_candidate_ids(
+                self.conn, fts_posts.trigram_match(grams), 900)
+
+        self.conn.execute(
+            "INSERT INTO posts (url, slug, title, clean_title, year,"
+            " content_type, source_site, is_18_plus, canonical_key,"
+            " cast_names)"
+            " VALUES ('https://seed.test/new', 'new', 'New Film (2024)',"
+            " 'New Film', 2024, 'movie', 'seed.test', 0, 'newfilm_2024',"
+            " '[\"Shah Rukh Khan\"]')")
+        self.assertIn(self.jawan, find_cast("khan"))
+        new_id = self.conn.execute(
+            "SELECT id FROM posts WHERE slug = 'new'").fetchone()[0]
+        self.assertIn(int(new_id), find_cast("khan"),
+                      "AFTER INSERT trigger is not indexing cast_names")
+        self.conn.execute("UPDATE posts SET cast_names = '[\"Someone\"]'"
+                          " WHERE slug = 'new'")
+        self.assertNotIn(int(new_id), find_cast("khan"),
+                         "AFTER UPDATE trigger did not reindex cast_names")
+        self.conn.execute("DELETE FROM posts WHERE slug = 'new'")
+        self.assertEqual(fts_posts.verify_fts(self.conn), [])
+
+    def test_api_v1_get_posts_matches_the_like_fallback(self):
+        def answer(query):
+            result = viewer.api_v1_get_posts(query=query)
+            return (result["total"],
+                    [int(r["id"]) for r in result["results"]],
+                    result["fuzzy"])
+
+        for query in ("salaar", "khan", "shah rukh khan", "prabhas",
+                      "inception", "a", "%", "xyzzy"):
+            with_tri = answer(query)
+            self.conn.execute("DROP TABLE IF EXISTS fts_posts_tri")
+            for trigger in ("fts_posts_tri_ai", "fts_posts_tri_ad",
+                            "fts_posts_tri_au"):
+                self.conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+            self.conn.commit()
+            like_only = answer(query)
+            self.assertEqual(with_tri, like_only, query)
+            fts_posts.rebuild_fts(self.conn)
+
+
 class FallbackAgreesTests(Fixture):
     """The same fixture WITHOUT the index: the LIKE fallback must
     answer the same candidate sets as FTS5 for the queries both
