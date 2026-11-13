@@ -115,12 +115,14 @@ jobs:
 
       - name: "🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)"
         working-directory: App
-        # --continue: report every task's failures in one run.
-        # --no-daemon/--stacktrace per project standard.
-        # --console=plain: unadorned file:line Kotlin errors, no ANSI noise.
+        # TEMP-DIAG (revert before merge): full suite with --info to capture
+        # which test class the executor is processing when it dies (run 473:
+        # executor exit 1, 0.8 s in, no test XMLs, only a Firebase transport
+        # warning in output.bin). Full suite command is in git history
+        # (this commit's parent).
         run: |
           ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug \
-            --no-daemon --stacktrace --continue --console=plain
+            --no-daemon --stacktrace --info --continue --console=plain
 
       - name: 📤 Upload debug APK
         if: always()   # assembleDebug may succeed while tests/lint fail — the APK is the most useful output
