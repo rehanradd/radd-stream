@@ -154,4 +154,81 @@ class RenditionFailoverStartTest {
         assertTrue(second is FailoverDecision.AdvanceBackup)
         assertEquals("b-a2", (second as FailoverDecision.AdvanceBackup).streamId)
     }
+
+    // ── Session 159 (S5): the failed attempt was the kept copy ─────────────
+    //
+    // handleLoad prefers a kept/partial file on disk over the live link, so
+    // the first load may never touch the redirector at all (S5: the player
+    // never received a 302 on its first load, while S4's identical title
+    // did). A pre-frame failure of that copy must fall back to the live
+    // link — RetrySame here reloads the bundle's own address, not the
+    // failed copy — instead of handing off with "nothing playable" while
+    // the live link was never tried.
+
+    @Test
+    fun `a pre-frame failure of a kept copy retries the live link instead of handing off`() {
+        val subject = machine(rung(1, "h-a"))
+        assertEquals(0, subject.selectInitial())
+
+        val decision = subject.onFailure(
+            "ERROR_CODE_IO_BAD_HTTP_STATUS Response code: 416",
+            beforeFirstFrame = true,
+            isLocalCopyAttempt = true,
+        )
+        decision as FailoverDecision.RetrySame
+        assertEquals(0, decision.index)
+        assertEquals("kept copy failed — trying the live link", decision.record.action)
+    }
+
+    @Test
+    fun `the live-link fallback is spent after one use, a second pre-frame failure hands off`() {
+        val subject = machine(rung(1, "h-a"))
+        assertEquals(0, subject.selectInitial())
+
+        val first = subject.onFailure(
+            "ERROR_CODE_IO_BAD_HTTP_STATUS Response code: 416",
+            beforeFirstFrame = true,
+            isLocalCopyAttempt = true,
+        )
+        assertTrue(first is FailoverDecision.RetrySame)
+
+        // The live link then fails before a frame too: the retry_same
+        // budget is spent, so this hands off exactly as a live start
+        // failure always did — no second bite at the same rung.
+        val second = subject.onFailure(
+            "ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT ...",
+            beforeFirstFrame = true,
+        )
+        second as FailoverDecision.Handoff
+        assertEquals(HandoffWhy.NO_CANDIDATE_LEFT, second.why)
+    }
+
+    @Test
+    fun `a local-copy failure prefers the live link over hopping to another handle`() {
+        val subject = machine(
+            rung(1, "h-a", backups = listOf("b-a1")),
+            rung(2, "h-b"),
+        )
+        assertEquals(0, subject.selectInitial())
+
+        // The same handle's live URL is tried before any backup handle is
+        // burned: same quality, same source, no downgrade.
+        val decision = subject.onFailure(
+            "ERROR_CODE_IO_BAD_HTTP_STATUS Response code: 416",
+            beforeFirstFrame = true,
+            isLocalCopyAttempt = true,
+        )
+        assertTrue(decision is FailoverDecision.RetrySame)
+    }
+
+    @Test
+    fun `a mid-playback local failure still retries the same rendition`() {
+        val subject = machine(rung(1, "h-a", backups = listOf("b-a1")), rung(2, "h-b"))
+        assertEquals(0, subject.selectInitial())
+
+        assertTrue(
+            subject.onFailure("HTTP 403", beforeFirstFrame = false, isLocalCopyAttempt = true)
+                is FailoverDecision.RetrySame,
+        )
+    }
 }

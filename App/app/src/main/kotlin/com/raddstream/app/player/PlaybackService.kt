@@ -89,6 +89,17 @@ class PlaybackService : MediaSessionService() {
     private var lastKnownPositionMs: Long = 0
     private var titleHint: String = Brand.name
 
+    /**
+     * Session 159 (S5): whether the load now in the player is the loopback
+     * kept copy rather than the rendition's own redirector address. Set by
+     * [loadRenditionOf] from its [isLocalCopy] argument — [handleLoad] is the
+     * only caller that ever passes true — and read by the two failover
+     * entries ([onPlayerError], the start watchdog) so the failover machine
+     * knows the failed attempt was the kept copy, not the live link. Every
+     * load rewrites it, so a hop or a retry can never inherit a stale true.
+     */
+    private var lastLoadedWasLocalCopy = false
+
     /** Thermal listener (API 29+), removed in onDestroy; null on older phones. */
     private var thermalListener: PowerManager.OnThermalStatusChangedListener? = null
 
@@ -302,6 +313,11 @@ class PlaybackService : MediaSessionService() {
                         ephemeral = false,
                     ),
                 ),
+                // Session 159 (S5): this load is the kept copy, not the
+                // rendition's own address — a pre-frame failure of it must
+                // fall back to the live link (see the failover machine),
+                // not hand off as if the live link had been tried.
+                isLocalCopy = true,
             )
         } else {
             // Session 126 start-low, part 3 of 3: the director already armed on the
@@ -397,6 +413,7 @@ class PlaybackService : MediaSessionService() {
         bundle: PlaybackBundle,
         rendition: PlaybackRendition?,
         countAsAttempt: Boolean = true,
+        isLocalCopy: Boolean = false,
     ) {
         disarmStartWatchdog()
         val exo = player ?: return
@@ -424,6 +441,12 @@ class PlaybackService : MediaSessionService() {
             rendition, bundle.target, titleHint,
             externalSubtitles = PlaybackMediaItemFactory.externalsFromTracks(rendition.tracks),
         )
+        // Session 159 (S5): remember what this load actually is — the
+        // failover entries below need to know whether the attempt that
+        // failed was the kept copy or the live link. Set here, after the
+        // early returns, so a load that never reached Media3 leaves the
+        // previous load's answer untouched.
+        lastLoadedWasLocalCopy = isLocalCopy
         exo.setMediaItem(item)
         exo.prepare()
         exo.playWhenReady = true
@@ -460,6 +483,9 @@ class PlaybackService : MediaSessionService() {
             val machine = failover ?: return@launch
             val decision = machine.onFailure(
                 "start timed out after ${StartDeadline.START_WATCHDOG_MS / 1_000} s with no first frame",
+                // Session 159 (S5): a stalled kept copy falls back to the
+                // live link through the same rule as a failed one.
+                isLocalCopyAttempt = lastLoadedWasLocalCopy,
             )
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
         }
@@ -847,11 +873,15 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
             }
+            // Session 159 (S5): the attempt that just failed may have been
+            // the kept copy, not the live link — the machine's RetrySame
+            // then loads the redirector, not the failed copy.
             val decision = machine.onFailure(
                 rawSummary,
                 isGateRefusal = gateRefusal,
                 beforeFirstFrame = beforeFirstFrame,
                 isDeadHandle = deadHandle,
+                isLocalCopyAttempt = lastLoadedWasLocalCopy,
             )
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
         }

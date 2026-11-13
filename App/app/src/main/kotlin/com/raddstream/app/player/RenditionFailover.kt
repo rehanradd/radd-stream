@@ -269,6 +269,21 @@ class FailoverStateMachine(
      * the S5 log shows the player pressing dead handles ~1/sec until the
      * server's per-minute bucket 429'd the session. A dead handle hops to a
      * backup / the next rank at once, whenever it fails.
+     *
+     * [isLocalCopyAttempt] is the Session 159 (S5) exception to that rule: the
+     * attempt that just failed was NOT the rendition's own address but the
+     * loopback copy of it (`PlaybackService.handleLoad` prefers a kept/partial
+     * file on disk over the live link). Retrying "the same rendition" here does
+     * NOT re-press the failed source — the failover machine only ever holds the
+     * bundle's own addresses, so the retry loads the redirector URL the local
+     * copy stood in for. A kept copy that cannot play (a partial prefix of an
+     * mp4 whose moov sits at the tail: the extractor seeks past the prefix,
+     * the proxy answers 416, no frame ever lands) must fall back to the live
+     * link at once, not hand off with "nothing playable" while the live link
+     * was never tried — which is exactly what S5 showed (the player never
+     * received a 302 on its first load; S4's identical title did). The
+     * retry_same budget still bounds it: one local failure buys one live
+     * attempt, and a second pre-frame failure hands off as before.
      */
     fun onFailure(
         errorSummary: String,
@@ -276,6 +291,7 @@ class FailoverStateMachine(
         isGateRefusal: Boolean = false,
         beforeFirstFrame: Boolean = false,
         isDeadHandle: Boolean = false,
+        isLocalCopyAttempt: Boolean = false,
     ): FailoverDecision {
         // Session 121 (P-6): the summary may be a raw ExoPlayer code; the machine is the
         // single funnel every failure passes through, so translate it here — the Handoff
@@ -314,10 +330,19 @@ class FailoverStateMachine(
             // for a dead handle (see [isDeadHandle] above): a 404 means
             // "no playable source for that handle", and re-pressing the
             // same address can only re-pay the resolve and trip the
-            // server's rate bucket.
-            !beforeFirstFrame && !isDeadHandle && usedSoFar <= policy.retrySame -> {
+            // server's rate bucket. Except when the failed attempt was the
+            // loopback copy, not the rendition's own address (see
+            // [isLocalCopyAttempt] above): then the retry loads the live
+            // link, not the failed copy.
+            (!beforeFirstFrame || isLocalCopyAttempt) && !isDeadHandle && usedSoFar <= policy.retrySame -> {
                 _log.add(record.copy(action = "retried (same rank)"))
-                FailoverDecision.RetrySame(index, policy.backoffMs, record.copy(action = "retry"))
+                FailoverDecision.RetrySame(
+                    index,
+                    policy.backoffMs,
+                    record.copy(
+                        action = if (isLocalCopyAttempt) "kept copy failed — trying the live link" else "retry",
+                    ),
+                )
             }
 
             !policy.thenNextRank -> {
