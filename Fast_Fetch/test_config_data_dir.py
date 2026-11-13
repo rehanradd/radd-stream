@@ -88,7 +88,14 @@ class DataDirProbeTests(unittest.TestCase):
         """
         if "RADD_DATA_DIR" in os.environ:
             self.skipTest("RADD_DATA_DIR is set here, so DATA_DIR is not this probe's decision")
-        if not _REAL_EXISTS(_ORACLE):
+        try:
+            oracle_exists = _REAL_EXISTS(_ORACLE)
+        except OSError:
+            # The guard must be total like the probe it tests: on a runner where
+            # /home/ubuntu exists but is unreadable, exists() raises PermissionError
+            # instead of answering False, and the skip check itself would fail the run.
+            self.skipTest("%s cannot be stat'ed on this machine; nothing to re-measure" % _ORACLE)
+        if not oracle_exists:
             self.skipTest("%s does not exist on this machine; nothing to re-measure" % _ORACLE)
         self.assertEqual(config.DATA_DIR, _ORACLE)
         self.assertEqual(sys.modules["config"], config)
