@@ -1632,10 +1632,12 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
 
         if head in ("browse", "search"):
             for_search = head == "search"
-            if for_search and not _q(query, "q"):
-                problem(handler, code="invalid_params", rid=rid, instance=path,
-                        detail="`q` is required on /search.")
-                return True
+            # An empty `q` is not a malformed search: `catalog_api.search`
+            # answers it with an empty page by design, and the app search
+            # screen sends a blank query whenever filters are active with
+            # no text — a 400 there surfaced as an app error (Firebase Robo,
+            # 2026-11-13). `/suggest` below still requires `q`: suggestions
+            # genuinely need text.
             kwargs = listing_kwargs(query, operator=operator, for_search=for_search)
             if for_search:
                 kwargs["fields"] = _q_list(query, "fields") or None

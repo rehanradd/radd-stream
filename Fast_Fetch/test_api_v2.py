@@ -1979,9 +1979,28 @@ class V2ErrorTests(V2WireFixture):
         self.assert_problem(reply, code="cursor_invalid", status=400,
                             instance="/api/v2/browse")
 
+    def test_empty_search_is_an_empty_page_not_a_400(self):
+        """A missing or blank `q` on /search answers 200 with no items.
+
+        `catalog_api.search` defines an empty query as an empty page by
+        design, and the app search screen sends a blank query whenever
+        filters are active with no text — the route's old 400 surfaced as
+        an app error (Firebase Robo, 2026-11-13). `/suggest` still requires
+        `q`: suggestions genuinely need text.
+        """
+        for query in ({}, {"q": ""}, {"q": "   "}):
+            with self.subTest(query=query):
+                reply = self.get("/api/v2/search", query)
+                self.assertEqual(reply.status, 200)
+                self.assertFalse(reply.is_problem)
+                self.assertEqual(reply.json["items"], [])
+                self.assertEqual(reply.json["count"], 0)
+        self.assert_problem(self.get("/api/v2/suggest", {}),
+                            code="invalid_params", status=400,
+                            instance="/api/v2/suggest")
+
     def test_bad_parameters_are_named_without_being_echoed(self):
         for path, query, code in (
-                ("/api/v2/search", {}, "invalid_params"),
                 ("/api/v2/suggest", {}, "invalid_params"),
                 ("/api/v2/sync", {"scope": "everything"}, "invalid_params"),
                 (f"/api/v2/works/{self.public_work_id}/seasons/one", {}, "invalid_params"),
