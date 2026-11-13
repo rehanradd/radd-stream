@@ -93,6 +93,21 @@ object StartDeadline {
         playbackState == Player.STATE_READY
 
     /**
+     * The start notice's elapsed line — whole seconds, shown only once the wait has
+     * passed ten seconds, so a normal 2–3 s start never grows a counter. "Trying HD
+     * 720p · 12s" with a rung, "12s" without one; null below the threshold, and the
+     * card hides the line then. Counts from the request (Play press), not from the
+     * URL — the resolve wait is the wait, and the stage clock starts only once
+     * Media3 holds a URL.
+     */
+    fun formatWaitElapsed(rungLabel: String?, elapsedMs: Long): String? {
+        val seconds = elapsedMs / 1_000L
+        if (seconds < 10L) return null
+        return if (rungLabel.isNullOrBlank()) "${seconds}s"
+        else "Trying $rungLabel · ${seconds}s"
+    }
+
+    /**
      * The print sheet's proof of the budget — "1.4 s", one decimal, never negative. The
      * owner reads the real start off his own phone from this line.
      */

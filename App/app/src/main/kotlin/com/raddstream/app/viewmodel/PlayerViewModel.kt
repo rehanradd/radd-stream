@@ -665,6 +665,15 @@ class PlayerViewModel @Inject constructor(
                             positionMs = c.currentPosition,
                             bufferedMs = bufferedOf(c),
                             durationMs = if (c.duration > 0) c.duration else it.durationMs,
+                            // P-3: the notice card's elapsed line counts from
+                            // the request (Play press), so the resolve wait is
+                            // counted too — published on every tick, whatever
+                            // the start clock (which arms only once Media3
+                            // holds a URL) says. Zero until a load is
+                            // requested, and zero again after a first frame.
+                            startRequestElapsedMs = loadRequestedAtMs?.let { requestedAt ->
+                                (SystemClock.elapsedRealtime() - requestedAt).coerceAtLeast(0)
+                            } ?: 0,
                         )
                     }
                     // A-B repeat (§5 P14): the ticker already visits every 200 ms, so
@@ -726,9 +735,15 @@ class PlayerViewModel @Inject constructor(
                         val firstFrame = StartDeadline.hasFirstFrame(c.playbackState)
                         if (firstFrame) {
                             startAttemptAtMs = null
+                            // P-3: the request instant is spent — a stale one
+                            // would keep the notice's elapsed line growing
+                            // after playback starts, and the backdate fallback
+                            // only reads it while the clock is still pending.
+                            loadRequestedAtMs = null
                             _ui.update {
                                 it.copy(
                                     startElapsedMs = 0,
+                                    startRequestElapsedMs = 0,
                                     lastFirstFrameMs = if (wasStarting) elapsed else it.lastFirstFrameMs,
                                     deadlineGiveUp = false,
                                 )
@@ -1260,6 +1275,9 @@ class PlayerViewModel @Inject constructor(
                 giveUp = null,
                 pendingTitle = title,
                 startElapsedMs = 0,
+                // P-3: same reset as the stage clock — the notice's elapsed
+                // line counts from the new request, not the last attempt.
+                startRequestElapsedMs = 0,
                 deadlineGiveUp = false,
                 isOffline = offlineNow,
             )
@@ -1526,7 +1544,9 @@ class PlayerViewModel @Inject constructor(
         startAttemptAtMs = null
         startClockPending = true
         playedReportHandle = null // a new attempt may play a handle that already failed
-        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
+        // P-3: same reset as the stage clock — the notice's elapsed line
+        // counts from the new request, not the attempt being retried.
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0, startRequestElapsedMs = 0) }
         store.requestLoad(title = title, resumePositionMs = _ui.value.positionMs)
     }
 
@@ -1567,7 +1587,9 @@ class PlayerViewModel @Inject constructor(
         startAttemptAtMs = null
         startClockPending = true
         playedReportHandle = null // a new attempt may play a handle that already failed
-        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0) }
+        // P-3: same reset as the stage clock — the notice's elapsed line
+        // counts from the new request, not the attempt being dismissed.
+        _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0, startRequestElapsedMs = 0) }
     }
 
     /** Manual "next episode" button — same event path as auto-advance at media end. */

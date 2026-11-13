@@ -207,6 +207,16 @@ data class LadderForScope(
         get() = options.firstOrNull { it.band == autoBand } ?: options.firstOrNull { it.playsHere }
             ?: options.firstOrNull()
 
+    /**
+     * The band the "Auto" pill and the Auto selection mark — even when the server's auto
+     * pointer is gone. [VipQualityGate.gate] nulls [autoBand] when it gates the server's
+     * auto rung out (Salaar, free user: the server points at 2160p, the gate keeps 720p),
+     * but [autoOption] already falls back to the first playable rung, so the effective
+     * auto band is its band. The gate's nulling is NOT changed here: other code depends
+     * on [autoBand] being null when gated.
+     */
+    val effectiveAutoBand: String? get() = autoOption?.band
+
     fun optionFor(band: String?): QualityOption? =
         if (band == null || band == AUTO) autoOption else options.firstOrNull { it.band == band }
 

@@ -806,6 +806,9 @@ private fun PlayerScreenContent(
                 } else {
                     null
                 },
+                // P-3: the elapsed line counts from the request, so the
+                // resolve wait is counted too (see StartDeadline).
+                waitElapsedMs = state.startRequestElapsedMs,
                 onRetry = if (actions) {
                     { vm.retryCurrentCandidates() }
                 } else {
@@ -2542,6 +2545,9 @@ private fun StartNoticeCard(
     slowHint: Boolean = false,
     rungLabel: String? = null,
     attemptLabel: String? = null,
+    // P-3: milliseconds since the load was requested (Play press) — the
+    // elapsed line counts from here, so the resolve wait is counted too.
+    waitElapsedMs: Long = 0,
     // 26: the three-step progress story — the viewer always knows what the wait
     // is for: finding the best version, then finding the video, then buffering. When the
     // caller passes a step label it replaces the phase's generic label.
@@ -2642,6 +2648,23 @@ private fun StartNoticeCard(
                         textAlign = TextAlign.Center,
                     )
                 }
+            }
+            // P-3: the 20 s wait is narrated but showed no elapsed time. The
+            // line counts from the request (Play press), so the resolve wait
+            // is counted too — and it stands on its own threshold (past ten
+            // seconds), not inside the slow-hint block, because the stage
+            // clock starts at the URL and the resolve runs before it.
+            val elapsedLine = StartDeadline.formatWaitElapsed(rungLabel, waitElapsedMs)
+            if (elapsedLine != null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    elapsedLine,
+                    // Robo run 7: same as the attempt line above — 60%
+                    // white was under the floor over a bright frame.
+                    color = Color.White.copy(alpha = 0.85f),
+                    style = MaterialTheme.typography.bodySmall,
+                    textAlign = TextAlign.Center,
+                )
             }
             // The actions (§5 P5, past eight seconds): retry the same attempt, or jump to
             // the next version now instead of waiting for the silent failover to get there.

@@ -142,4 +142,19 @@ class StartDeadlineTest {
         assertEquals("0.0 s", StartDeadline.formatSeconds(0))
         assertEquals("30.0 s", StartDeadline.formatSeconds(30_000))
     }
+
+    @Test
+    fun `the notice elapsed line appears only past ten seconds`() {
+        // P-3: a normal 2–3 s start never grows a counter; the line counts
+        // from the request, so a 12 s wait reads "Trying HD 720p · 12s".
+        assertNull(StartDeadline.formatWaitElapsed("HD 720p", 0))
+        assertNull(StartDeadline.formatWaitElapsed("HD 720p", 9_999))
+        assertNull(StartDeadline.formatWaitElapsed("HD 720p", -500))
+        assertEquals("Trying HD 720p · 10s", StartDeadline.formatWaitElapsed("HD 720p", 10_000))
+        assertEquals("Trying HD 720p · 12s", StartDeadline.formatWaitElapsed("HD 720p", 12_499))
+        assertEquals("Trying HD 720p · 12s", StartDeadline.formatWaitElapsed("HD 720p", 12_999))
+        assertEquals("Trying HD 720p · 20s", StartDeadline.formatWaitElapsed("HD 720p", 20_000))
+        assertEquals("12s", StartDeadline.formatWaitElapsed(null, 12_000))
+        assertEquals("12s", StartDeadline.formatWaitElapsed("  ", 12_000))
+    }
 }

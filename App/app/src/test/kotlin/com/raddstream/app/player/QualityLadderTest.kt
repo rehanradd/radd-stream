@@ -111,6 +111,46 @@ class QualityLadderTest {
     }
 
     @Test
+    fun `the effective auto band survives the gate nulling the server pointer`() {
+        // D-1: Salaar, free user — the server points at 2160p, the gate keeps
+        // 720p and nulls autoBand, but the card must still mark the 720p row
+        // Auto. The effective band is the fallback rung's band.
+        val gated = LadderForScope(
+            options = listOf(option("720p", emptyList()), option("480p", emptyList())),
+            autoBand = null,
+            downloadOnlyBands = emptyList(),
+        )
+        assertEquals("720p", gated.effectiveAutoBand)
+        assertEquals("720p", gated.autoOption?.band)
+    }
+
+    @Test
+    fun `the effective auto band is the server pointer when nothing is gated`() {
+        val scope = QualityLadder.from(ladder)
+        assertEquals("1080p", scope.effectiveAutoBand)
+    }
+
+    @Test
+    fun `an empty ladder has no effective auto band`() {
+        assertNull(LadderForScope.EMPTY.effectiveAutoBand)
+    }
+
+    @Test
+    fun `when nothing plays the effective auto band is still the first rung`() {
+        // autoOption's own fallback: the best rung available, even when no rung
+        // plays — the card marks it, and the row itself says Download only.
+        val dead = LadderForScope(
+            options = listOf(
+                option("720p", emptyList()).copy(playsHere = false),
+                option("480p", emptyList()).copy(playsHere = false),
+            ),
+            autoBand = null,
+            downloadOnlyBands = emptyList(),
+        )
+        assertEquals("720p", dead.effectiveAutoBand)
+    }
+
+    @Test
     fun `sizes are ours to read and absent when the server never measured one`() {
         val hd = QualityLadder.from(ladder).options.first { it.band == "1080p" }
         assertEquals("≈ 1.3 GB", hd.detailLine.substringBefore(" · "))
