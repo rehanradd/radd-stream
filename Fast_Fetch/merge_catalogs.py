@@ -378,6 +378,17 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
 
             releases = post_data["releases"]
 
+            # The create/merge distinction lives inside save_scraped_data;
+            # the returned id is the only witness. A new post always takes
+            # an id above every id that existed before the save (INTEGER
+            # PRIMARY KEY assigns max+1), while a merge returns an existing
+            # id — so the high-water mark read here is what makes
+            # posts_created honest (gate caveat 2, 2026-11-13: the summary
+            # said 0 while the DB held 999 new MoviesDrive posts).
+            with fast_fetch.get_db() as conn:
+                max_post_id_before = conn.execute(
+                    "SELECT COALESCE(MAX(id), 0) FROM posts").fetchone()[0]
+
             try:
                 target_post_id = fast_fetch.save_scraped_data(
                     post_data,
@@ -409,6 +420,8 @@ def merge_site_db(source_db_path: Path, target_db_path: Path, verbose: bool = Tr
                 conn.commit()
 
             stats["posts_merged"] += 1
+            if target_post_id > max_post_id_before:
+                stats["posts_created"] += 1
             stats["releases_merged"] += len(releases)
             stats["sources_merged"] += sum(len(r["sources"]) for r in releases)
 

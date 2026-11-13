@@ -487,11 +487,25 @@ class LinkTruthTests(ProjectionTestCase):
             ("stream", "https://watch-online.mom/e/abc123"),
             ("streamwish", "https://streamwish.com/e/abc123"),
             ("vidout", "https://vidout.pages.dev/movie/tt12683756"),
+            ("mxdrop", "https://mxdrop.to/e/abc123"),
         ]
         for service, url in cases:
             links = self.one_work_with([self.src(service, url)])
             self.assertEqual(links[0]["kind"], "embed", service)
             self.assertEqual(links[0]["playability"], "resolve_required", service)
+
+    def test_animahd_player_row_is_server_resolvable(self):
+        # Gate follow-up 2026-11-13: animahd-player carries a server-side
+        # unwrapper (unwrap_animahd — Phase C items 5-7), so its rows are
+        # server-resolvable. The stored shape is the site's own watch URL
+        # (playback_type='url', is_temporary=1 — see import_animahd.py):
+        # a cloud page the resolver runs first, never webview.
+        links = self.one_work_with([self.src(
+            "animahd-player",
+            "https://animahd.com/player/?file_id=abc123&show_id=1&ep=1",
+            playback_type="url", is_temporary=1)])
+        self.assertEqual(links[0]["kind"], "cloud_page")
+        self.assertEqual(links[0]["playability"], "resolve_required")
 
     def test_vidhide_url_is_already_resolve_required_by_shape(self):
         # vidhide and uploadflix were never embed-kind services

@@ -53,19 +53,29 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import catalog_v2  # noqa: E402
 
+#: The four-column LIKE the route builds (`viewer._search_like_clause()`):
+#: each column is folded through replace() so a curly apostrophe in a
+#: stored title matches the straight one a user types. The plan is a
+#: property of the SQL text, so the transcription keeps the fold —
+#: replace() on a column can use no index, exactly like the bare LIKE.
+_LIKE = ("(replace(replace(p.clean_title, '’', ''''), '‘', '''') LIKE ?"
+         " OR replace(replace(p.title, '’', ''''), '‘', '''') LIKE ?"
+         " OR replace(replace(p.slug, '’', ''''), '‘', '''') LIKE ?"
+         " OR replace(replace(p.cast_names, '’', ''''), '‘', '''') LIKE ?)")
+
 #: The statement `viewer.api_v1_get_posts` builds for `q=…` with the default sort,
 #: transcribed from `Fast_Fetch/viewer.py` (`api_v1_get_posts`, the `total` read and
 #: the paged read). Kept as data so the plan is asserted, not remembered.
 TOTAL_SQL = ("SELECT COUNT(*) FROM posts p"
              " WHERE COALESCE(p.is_18_plus,0)=0"
-             " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
+             " AND " + _LIKE)
 
 #: Step 1 of the default (`newest`, Session 115) path: the page's ids from
 #: `posts` alone, ordered by the clamped year. The clamp is transcribed from
 #: `viewer._NEWEST_YEAR_SQL`.
 NEWEST_IDS_SQL = ("SELECT p.id FROM posts p"
                   " WHERE COALESCE(p.is_18_plus,0)=0"
-                  " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)"
+                  " AND " + _LIKE +
                   " ORDER BY CASE WHEN p.year BETWEEN 1900"
                   " AND CAST(strftime('%Y', 'now') AS INTEGER) + 1"
                   " THEN p.year ELSE 0 END DESC, p.id DESC LIMIT ? OFFSET ?")
@@ -76,7 +86,7 @@ NEWEST_IDS_SQL = ("SELECT p.id FROM posts p"
 #: for every match before sorting.
 TITLE_IDS_SQL = ("SELECT p.id FROM posts p"
                  " WHERE COALESCE(p.is_18_plus,0)=0"
-                 " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)"
+                 " AND " + _LIKE +
                  " ORDER BY lower(COALESCE(NULLIF(TRIM(p.clean_title), ''), p.title)) ASC,"
                  " p.id DESC LIMIT ? OFFSET ?")
 
@@ -85,7 +95,7 @@ TITLE_IDS_SQL = ("SELECT p.id FROM posts p"
 #: (`sort=rating`).
 RATING_IDS_SQL = ("SELECT p.id FROM posts p"
                   " WHERE COALESCE(p.is_18_plus,0)=0"
-                  " AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)"
+                  " AND " + _LIKE +
                   " ORDER BY (p.imdb_rating IS NULL OR TRIM(p.imdb_rating) = '') ASC,"
                   " CAST(p.imdb_rating AS REAL) DESC, p.id DESC LIMIT ? OFFSET ?")
 
@@ -102,7 +112,10 @@ PAGED_NEWEST_SQL = """
     LEFT JOIN releases r ON r.post_id = p.id
     LEFT JOIN download_sources s ON s.release_id = r.id
     WHERE COALESCE(p.is_18_plus,0)=0
-      AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)
+      AND (replace(replace(p.clean_title, '’', ''''), '‘', '''') LIKE ?
+           OR replace(replace(p.title, '’', ''''), '‘', '''') LIKE ?
+           OR replace(replace(p.slug, '’', ''''), '‘', '''') LIKE ?
+           OR replace(replace(p.cast_names, '’', ''''), '‘', '''') LIKE ?)
       AND p.id IN (?,?,?)
     GROUP BY p.id
 """
@@ -117,7 +130,10 @@ PAGED_SQL = """
     LEFT JOIN releases r ON r.post_id = p.id
     LEFT JOIN download_sources s ON s.release_id = r.id
     WHERE COALESCE(p.is_18_plus,0)=0
-      AND (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)
+      AND (replace(replace(p.clean_title, '’', ''''), '‘', '''') LIKE ?
+           OR replace(replace(p.title, '’', ''''), '‘', '''') LIKE ?
+           OR replace(replace(p.slug, '’', ''''), '‘', '''') LIKE ?
+           OR replace(replace(p.cast_names, '’', ''''), '‘', '''') LIKE ?)
     GROUP BY p.id
     ORDER BY {order}
     LIMIT ? OFFSET ?

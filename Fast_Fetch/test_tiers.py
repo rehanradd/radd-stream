@@ -267,7 +267,8 @@ class PublicShapeTests(unittest.TestCase):
         # reaches the response; only the kind changes.
         for service in ("vidrift", "vidbolt", "filmu", "iqsmart", "cineverse",
                         "streamtape", "stream", "streamwish", "mixdrop", "voe",
-                        "vidhide", "1xplayer", "uploadflix", "vidout"):
+                        "vidhide", "1xplayer", "uploadflix", "vidout",
+                        "mxdrop", "animahd-player"):
             view = viewer.link_view(link(playback_type="iframe", service=service),
                                     "http://our.box")
             self.assertEqual(view["kind"], "resolve", service)

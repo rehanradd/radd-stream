@@ -3019,6 +3019,44 @@ _POSTS_TRIGRAM_LIMIT = 900
 _POSTS_TRIGRAM_RESERVE = 124
 
 
+# A curly apostrophe (U+2019 ’ / U+2018 ‘) in a stored title is the same
+# character a user types as a straight apostrophe (U+0027 '): q="Devil's
+# Plan" must find "The Devil’s Plan (2026)". The trigram/FTS/fuzzy paths
+# tokenize on [a-z0-9]+, so the apostrophe never reaches them — but the
+# LIKE verifier compares raw text, and '%Devil's Plan%' is not a substring
+# of a title carrying ’. Fold both sides: the query in Python (before it
+# reaches the whole-word check, the trigram pass, the LIKE verifier or
+# the fuzzy fallback), the columns in SQL via replace() — no index change,
+# the trigram tokenizer already splits on the apostrophe as a separator.
+_CURLY_APOSTROPHES = ("’", "‘")
+
+#: The columns the /posts (and /works) search LIKE-verifies over.
+_SEARCH_LIKE_COLUMNS = ("p.clean_title", "p.title", "p.slug", "p.cast_names")
+
+
+def _normalize_apostrophes(text: str) -> str:
+    """Fold curly apostrophes to the straight one users type."""
+    if not text:
+        return text or ""
+    for curly in _CURLY_APOSTROPHES:
+        text = text.replace(curly, "'")
+    return text
+
+
+def _apos_fold_sql(col: str) -> str:
+    """`col` with curly apostrophes folded to straight ones, in SQL."""
+    expr = col
+    for curly in _CURLY_APOSTROPHES:
+        expr = f"replace({expr}, '{curly}', '''')"
+    return expr
+
+
+def _search_like_clause() -> str:
+    """The four-column substring clause, apostrophe-insensitive."""
+    return " OR ".join(
+        f"{_apos_fold_sql(col)} LIKE ?" for col in _SEARCH_LIKE_COLUMNS)
+
+
 def _fuzzy_post_ids(conn, query):
     """Post ids whose title is one edit away from the query, token by token.
 
@@ -3761,6 +3799,10 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
             params.append(post_id)
             search_param_count = 1
         elif query:
+            # A curly apostrophe in the query is the straight one the user
+            # typed: fold before the whole-word check, the trigram pass,
+            # the LIKE verifier and the fuzzy fallback — they all read `query`.
+            query = _normalize_apostrophes(query)
             if works.is_whole_word_query(query):
                 # A single stopword ("the") or a 1–2 letter token matches
                 # whole words only: `the` as a substring matches `other`,
@@ -3800,14 +3842,12 @@ def api_v1_get_posts(query: str = "", content_type: str = "", page: int = 1,
                 if candidate_ids is not None:
                     placeholders = ", ".join("?" for _ in candidate_ids)
                     where_clauses.append(
-                        f"(p.id IN ({placeholders}) AND (p.clean_title LIKE ?"
-                        " OR p.title LIKE ? OR p.slug LIKE ?"
-                        " OR p.cast_names LIKE ?))")
+                        f"(p.id IN ({placeholders}) AND ({_search_like_clause()}))")
                     params.extend(candidate_ids)
                     params.extend([q_param, q_param, q_param, q_param])
                     search_param_count = len(candidate_ids) + 4
                 else:
-                    where_clauses.append("(p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ? OR p.cast_names LIKE ?)")
+                    where_clauses.append(f"({_search_like_clause()})")
                     params.extend([q_param, q_param, q_param, q_param])
         # Facet filters, shared with /api/v1/works (see
         # `_facet_filter_clauses`). `region=` is the alias for
@@ -4459,6 +4499,11 @@ def _works_search_candidate_ids(conn, query: str) -> list[int]:
     title/slug/cast — so a pre-migration database answers exactly
     as it did before, only slower.
     """
+    # Same fold as /api/v1/posts: a curly apostrophe in the query is the
+    # straight one the user typed, and the LIKE fallback below folds the
+    # columns — so the works search answers "Devil's Plan" against a
+    # curly-apostrophe title exactly the way /posts does.
+    query = _normalize_apostrophes(query)
     whole_word = works.is_whole_word_query(query)
     ids = fts_posts.search_candidate_ids(
         conn, query, whole_word=whole_word)
@@ -4472,8 +4517,7 @@ def _works_search_candidate_ids(conn, query: str) -> list[int]:
     else:
         rows = conn.execute(
             "SELECT p.id FROM posts p WHERE"
-            " (p.clean_title LIKE ? OR p.title LIKE ? OR p.slug LIKE ?"
-            " OR p.cast_names LIKE ?)",
+            f" ({_search_like_clause()})",
             [f"%{query}%"] * 4).fetchall()
     return [int(r["id"]) for r in rows]
 

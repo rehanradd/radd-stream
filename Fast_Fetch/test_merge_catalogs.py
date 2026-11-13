@@ -75,6 +75,68 @@ class MergeCatalogsTests(unittest.TestCase):
                 self.assertEqual(row["playback_type"], "iframe")
                 self.assertEqual(row["source_url"], "https://embed.example/movie/pushpa2")
 
+    def test_posts_created_counts_only_genuinely_new_posts(self):
+        # Gate caveat 2 (2026-11-13): the merge summary said
+        # posts_created 0 while the DB held 999 new MoviesDrive posts —
+        # the counter was initialized and never incremented. A merge of
+        # one genuinely new post plus one that already exists in the
+        # target must report exactly 1 created and 2 merged.
+        def payload(slug, title, year):
+            return {
+                "url": f"https://m1.multimovies.courses/movie/{slug}",
+                "slug": slug,
+                "title": f"{title} ({year})",
+                "clean_title": title,
+                "year": year,
+                "content_type": "movie",
+                "source_site": "multimovies",
+                "releases": [{
+                    "release_title": f"{title} 720p",
+                    "quality": "720p",
+                    "source_site": "multimovies",
+                    "sources": [{
+                        "source_name": "Direct",
+                        "service": "cdn",
+                        "resource_id": slug,
+                        "source_url": f"https://cdn.example/{slug}.mp4",
+                        "final_url": f"https://cdn.example/{slug}.mp4",
+                        "playback_type": "direct",
+                    }],
+                }],
+            }
+
+        with tempfile.TemporaryDirectory() as td:
+            src_db = Path(td) / "source_multimovies.db"
+            tgt_db = Path(td) / "unified_catalog.db"
+
+            # The staging DB holds two posts: one already in the target,
+            # one brand new.
+            fast_fetch.DB_PATH = src_db
+            fast_fetch.init_db()
+            fast_fetch.save_scraped_data(
+                payload("existing-film", "Existing Film", 2023),
+                enrich_metadata=False, ensure_db=False)
+            fast_fetch.save_scraped_data(
+                payload("brand-new-film", "Brand New Film", 2024),
+                enrich_metadata=False, ensure_db=False)
+
+            # Pre-seed the target with the existing film — same URL and
+            # title/year — so the merge folds into it instead of creating.
+            fast_fetch.DB_PATH = tgt_db
+            fast_fetch.init_db()
+            fast_fetch.save_scraped_data(
+                payload("existing-film", "Existing Film", 2023),
+                enrich_metadata=False, ensure_db=False)
+
+            stats = merge_catalogs.merge_site_db(src_db, tgt_db, verbose=False)
+            self.assertEqual(stats["posts_merged"], 2)
+            self.assertEqual(stats["posts_created"], 1)
+
+            # And the target holds exactly two posts, not three.
+            with sqlite3.connect(tgt_db) as conn:
+                count = conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+            self.assertEqual(count, 2)
+
 
 class StagingFamilyMergeTests(unittest.TestCase):
     """The hdhub4u-family staging schema (posts/releases/sources) must merge too."""

@@ -124,22 +124,30 @@ _EMBED_SERVICES = {
 # vidrift, vidbolt, vidly, streamhg — cineverse rows on the live copy sit on
 # *.modiplay.xyz hosts, 70,050 of them); streamtape/stream/streamwish/mixdrop/
 # voe/vidhide/1xplayer/uploadflix carry a Stage-2 `elif` keyed on the service
-# name (Sessions 103/104b). Two of them never classify as embed — vidhide and
+# name (Sessions 103/104b). mxdrop and animahd-player joined in the 2026-11-13
+# gate follow-ups (unwrap_mxdrop / unwrap_animahd — Phase C items 5-7, main
+# e44560dc): mxdrop's /e/ pages were classifying embed/webview until this;
+# animahd-player rows are url-typed and already resolve_required by shape,
+# but membership here is what flips an iframe-typed row from external to
+# resolve in `viewer.link_view`, and keeps this set the complete resolver
+# registry. Two of them never classify as embed — vidhide and
 # uploadflix are not in `_EMBED_SERVICES`, so their URLs fall through to
 # `cloud_page`/`resolve_required` by shape — and their membership here only
 # changes the v1 iframe mapping (`viewer.link_view`). Deliberately absent:
-# vidoza/doodstream/filemoon (host down / TCP reset / stdlib-blocked crypto),
+# vidoza/filemoon (host down / TCP reset / stdlib-blocked crypto),
 # and every other embed service, which has no server-side unwrapper — those
 # stay `webview`, honestly unplayable in the app player. `mobilejsr` is a
 # download family (`_DOWNLOAD_ONLY_SERVICES`), not an embed, and stays out.
 # vidout IS present: it resolves through the Phase C item 3 chain (wecollege
 # -> GitHub API -> rotating HLS CDN, unwrap_vidout, main 9cf61b3f), NOT
 # through the old vidmmo.com page scrape — the m3u8 there is a
-# same-for-every-title stub on a DNS-dead host.
+# same-for-every-title stub on a DNS-dead host. doodstream IS present since
+# Phase C item 6 (unwrap_doodstream — fixture-tested only, not live-verified).
 _SERVER_RESOLVABLE_SERVICES = frozenset({
     "cineverse", "vidrift", "vidbolt", "filmu", "iqsmart",
     "streamtape", "stream", "streamwish", "mixdrop", "voe", "vidhide",
     "1xplayer", "uploadflix", "vidout", "doodstream",
+    "mxdrop", "animahd-player",
 })
 _BRIDGE_SERVICES = {
     "shortink", "shortlink", "linkvertise", "ezylink", "vlink", "shrinkme", "urlshort",

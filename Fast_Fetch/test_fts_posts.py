@@ -459,6 +459,33 @@ class PostsTrigramTests(Fixture):
             self.assertEqual(with_tri, like_only, query)
             fts_posts.rebuild_fts(self.conn)
 
+    def test_curly_apostrophe_title_found_by_straight_apostrophe_query(self):
+        # Gate caveat 4 (2026-11-13): q="Devil's Plan" (straight U+0027)
+        # returned only the 2023 post; the 2026 post's title carries a
+        # curly ’ (U+2019), and the LIKE verifier compared raw text, so
+        # the trigram candidates were filtered back out. Both spellings
+        # of the query must find both posts, on the trigram path and on
+        # the LIKE-only path.
+        straight = self.ingest("Devil's Plan", 2023)
+        curly = self.ingest("The Devil\u2019s Plan", 2026)
+        for q in ("Devil's Plan", "Devil\u2019s Plan"):
+            result = viewer.api_v1_get_posts(query=q)
+            ids = {int(r["id"]) for r in result["results"]}
+            self.assertIn(straight, ids, q)
+            self.assertIn(curly, ids, q)
+        # LIKE-only path: drop the trigram table and its triggers, the
+        # way test_api_v1_get_posts_matches_the_like_fallback does.
+        self.conn.execute("DROP TABLE IF EXISTS fts_posts_tri")
+        for trigger in ("fts_posts_tri_ai", "fts_posts_tri_ad",
+                        "fts_posts_tri_au"):
+            self.conn.execute(f"DROP TRIGGER IF EXISTS {trigger}")
+        self.conn.commit()
+        result = viewer.api_v1_get_posts(query="Devil's Plan")
+        ids = {int(r["id"]) for r in result["results"]}
+        self.assertIn(straight, ids)
+        self.assertIn(curly, ids)
+        fts_posts.rebuild_fts(self.conn)
+
 
 class FallbackAgreesTests(Fixture):
     """The same fixture WITHOUT the index: the LIKE fallback must
