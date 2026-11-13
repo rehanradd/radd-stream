@@ -403,10 +403,14 @@ fun ErrorState(
         modifier = modifier,
         message = message,
         icon = {
+            // F9 (Batch A): the icon wears the brand tint, not the error red.
+            // Every caller of this state is a retryable load failure — a dead
+            // server, a failed page — not a destructive mistake, and red says
+            // "you did something wrong" where nothing the viewer did was wrong.
             Icon(
                 Icons.Default.Info,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
+                tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(40.dp),
             )
         },

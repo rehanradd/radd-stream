@@ -164,7 +164,11 @@ fun SettingsScreen(
             // buried in Playback & Display: it is the one row the viewer needs
             // after every region change, and it must be findable without
             // scrolling past a dozen cards (Session 114).
-            SettingsCard(title = "Watching region") {
+            // F5b (Batch A): the old title "Watching region" named a setting the
+            // card does not hold — the card picks the viewer's content
+            // preference (which region's catalog defaults apply), not a region
+            // to watch. The title now says what the card is.
+            SettingsCard(title = "Content preference") {
                 val region = RegionChoices.byId(state.userRegion)
                 Text(
                     region.title,
@@ -188,8 +192,12 @@ fun SettingsScreen(
             // same keys, and this card shows the effective values, so a
             // viewer never has to guess which one won.
             SettingsCard(title = "Languages") {
+                // F5a (Batch A): same effective values and provenance as the
+                // Languages screen's top line, so the two can never disagree
+                // without saying why.
                 Text(
-                    "Audio: ${state.prefs.audioLanguage}. Subtitles: ${state.prefs.subtitleLang}.",
+                    "Audio: ${state.prefs.audioLanguage} (${state.prefs.audioProvenance}). " +
+                        "Subtitles: ${state.prefs.subtitleLang} (${state.prefs.subtitleProvenance}).",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

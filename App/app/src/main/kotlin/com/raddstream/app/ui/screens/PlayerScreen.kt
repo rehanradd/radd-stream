@@ -912,17 +912,23 @@ private fun PlayerScreenContent(
         if (state.qualitySheetVisible) QualitySheet(state, vm)
         if (state.moreSheetVisible) MoreSheet(state, vm, onEnterPip = launchPip)
 
-        // 8 — lightweight snackbar
-        snackbar?.let { msg ->
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
-                Surface(
-                    color = RaddPlayerSnackbarPlate,
-                    shape = MaterialTheme.shapes.small,
-                    modifier = Modifier
-                        .padding(horizontal = 24.dp)
-                        .padding(bottom = 100.dp),
-                ) {
-                    Text(msg, color = Color.White, fontSize = brandSp(14), modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+        // 8 — lightweight snackbar. F4 (Batch A): suppressed while a start card is
+        // showing — in landscape (~360dp tall) the card's bottom edge sits where
+        // this bar lands, so the two overlapped and neither was readable. The
+        // message is not lost: it reappears on the next start-phase-free frame
+        // because the snackbar state lives in the ViewModel, not in this Box.
+        if (state.startPhase == StartPhase.NONE) {
+            snackbar?.let { msg ->
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.BottomCenter) {
+                    Surface(
+                        color = RaddPlayerSnackbarPlate,
+                        shape = MaterialTheme.shapes.small,
+                        modifier = Modifier
+                            .padding(horizontal = 24.dp)
+                            .padding(bottom = 100.dp),
+                    ) {
+                        Text(msg, color = Color.White, fontSize = brandSp(14), modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                    }
                 }
             }
         }
@@ -1792,49 +1798,58 @@ private fun BottomControls(
                     KeepChip(state, vm)
                 }
             }
-            Scrubber(
-                chrome = chrome,
-                positionMs = state.positionMs,
-                bufferedMs = state.bufferedMs,
-                durationMs = state.durationMs,
-                enabled = state.seekEnabled,
-                onSeek = { vm.seekTo(it) },
-                onActivity = onActivity,
-                episodes = state.activeRendition?.coverage?.episodes.orEmpty(),
-            )
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                // App-design audit #3/#4: current time and total duration are
-                // always beside the scrubber — "--:--" until the total is
-                // known — plus one status word, so the viewer can tell
-                // loading, paused and buffering apart at a glance.
-                val statusWord = when (
-                    playerStatusWord(state.startPhase, state.isBuffering, state.isPlaying)
+            // F19b (Batch A): the seek bar and its time row only exist once the
+            // player knows a duration. A live stream never reports one
+            // (ExoPlayer's duration stays TIME_UNSET, so durationMs stays 0),
+            // which used to leave a dead scrubber reading "0:00 / --:--" under a
+            // live picture. A VOD's duration is known at prepare, so the bar
+            // appears as soon as playback can start; while the start card is up
+            // the card itself narrates the phase, so nothing is lost.
+            if (state.durationMs > 0) {
+                Scrubber(
+                    chrome = chrome,
+                    positionMs = state.positionMs,
+                    bufferedMs = state.bufferedMs,
+                    durationMs = state.durationMs,
+                    enabled = state.seekEnabled,
+                    onSeek = { vm.seekTo(it) },
+                    onActivity = onActivity,
+                    episodes = state.activeRendition?.coverage?.episodes.orEmpty(),
+                )
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    PlayerStatusWord.LOADING -> stringResource(R.string.app_loading)
-                    PlayerStatusWord.BUFFERING -> stringResource(R.string.player_buffering)
-                    PlayerStatusWord.PAUSED -> stringResource(R.string.player_paused)
-                    PlayerStatusWord.NONE -> null
+                    // App-design audit #3/#4: current time and total duration are
+                    // always beside the scrubber — "--:--" until the total is
+                    // known — plus one status word, so the viewer can tell
+                    // loading, paused and buffering apart at a glance.
+                    val statusWord = when (
+                        playerStatusWord(state.startPhase, state.isBuffering, state.isPlaying)
+                    ) {
+                        PlayerStatusWord.LOADING -> stringResource(R.string.app_loading)
+                        PlayerStatusWord.BUFFERING -> stringResource(R.string.player_buffering)
+                        PlayerStatusWord.PAUSED -> stringResource(R.string.player_paused)
+                        PlayerStatusWord.NONE -> null
+                    }
+                    Text(
+                        text = state.positionMs.formatTime(),
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
+                    if (statusWord != null) {
+                        Spacer(Modifier.width(8.dp))
+                        Text(statusWord, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
+                    }
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        state.durationMs.takeIf { it > 0 }?.formatTime() ?: "--:--",
+                        color = Color.White,
+                        style = MaterialTheme.typography.labelMedium,
+                    )
                 }
-                Text(
-                    text = state.positionMs.formatTime(),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-                if (statusWord != null) {
-                    Spacer(Modifier.width(8.dp))
-                    Text(statusWord, color = Color.White.copy(alpha = 0.85f), style = MaterialTheme.typography.labelMedium)
-                }
-                Spacer(Modifier.weight(1f))
-                Text(
-                    state.durationMs.takeIf { it > 0 }?.formatTime() ?: "--:--",
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                )
             }
             Row(
                 Modifier

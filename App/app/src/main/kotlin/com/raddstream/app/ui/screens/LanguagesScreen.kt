@@ -9,10 +9,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
@@ -27,9 +29,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.R
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.LanguagesViewModel
 import com.raddstream.app.viewmodel.UserPreferences
 
@@ -74,8 +79,12 @@ fun LanguagesScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
+            // F5a (Batch A): each value names where it came from — "your choice"
+            // or "<Region> default" — so this screen and the Settings card can
+            // never disagree without saying why.
             Text(
-                "Audio: ${state.audioLanguage}. Subtitles: ${state.subtitleLanguage}. " +
+                "Audio: ${state.audioLanguage} (${state.audioProvenance}). " +
+                    "Subtitles: ${state.subtitleLanguage} (${state.subtitleProvenance}). " +
                     "Subtitle size: ${state.subtitleSizePercent}%.",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -90,10 +99,11 @@ fun LanguagesScreen(
                         .indexOf(state.audioLanguage).coerceAtLeast(0),
                     onSelect = { idx -> viewModel.setAudioLanguage(UserPreferences.AUDIO_LANGUAGE_OPTIONS[idx]) },
                 )
+                // F1 (Batch A): the old paragraph explained the track-picking rule in
+                // implementation words ("dual audio", "the player picks the track that
+                // says so"). What the viewer needs is one plain sentence.
                 Text(
-                    "Half this catalog is dual audio. The player picks the track that says so; " +
-                        "when nothing matches, its own choice is left alone rather than guessing. " +
-                        "Saved on this device.",
+                    stringResource(R.string.languages_audio_help),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -139,10 +149,11 @@ fun LanguagesScreen(
                 )
             }
 
+            // F1 (Batch A): the old paragraph explained the shared-storage plumbing
+            // ("one stored value underneath them") — an implementation detail no
+            // viewer needs. The behaviour is one plain sentence now.
             Text(
-                "The Region card, this screen and the player sheet write these same " +
-                    "choices — change one place and the others follow, because there is only " +
-                    "one stored value underneath them.",
+                stringResource(R.string.languages_sync_help),
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -187,6 +198,23 @@ private fun LanguageChipRow(
                 selected = idx == selectedIndex,
                 onClick = { onSelect(idx) },
                 label = { Text(label) },
+                // F3 (Batch A): this was the one bare FilterChip in the app — no
+                // emerald selected treatment. It now uses the shared token, and
+                // the selected chip also carries a check, so the choice is not
+                // colour-only (a viewer who cannot tell the greens apart can
+                // still see which language is picked).
+                colors = raddFilterChipColors(),
+                leadingIcon = if (idx == selectedIndex) {
+                    {
+                        Icon(
+                            imageVector = Icons.Filled.Check,
+                            contentDescription = null, // the chip label already says which language
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                } else {
+                    null
+                },
                 // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
                 modifier = Modifier.heightIn(min = 48.dp),
             )

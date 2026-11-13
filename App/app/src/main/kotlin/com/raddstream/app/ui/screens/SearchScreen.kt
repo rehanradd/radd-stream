@@ -59,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
@@ -69,6 +70,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.R
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.player.PastedText
 import com.raddstream.app.player.classifyPastedText
@@ -87,6 +89,7 @@ import com.raddstream.app.viewmodel.QualityFilter
 import com.raddstream.app.viewmodel.SearchSort
 import com.raddstream.app.viewmodel.SearchUiState
 import com.raddstream.app.viewmodel.SearchViewModel
+import com.raddstream.app.viewmodel.filteredPillLabel
 import com.raddstream.app.viewmodel.resultsSummary
 
 private val typeChips = listOf(
@@ -158,8 +161,8 @@ fun SearchScreen(
                 title = { Text("Search", modifier = Modifier.clearAndSetSemantics { }) },
                 actions = {
                     if (state.hasFacetFilters) {
-                        // The pill names the facets, never the sort — and it
-                        // opens the sheet, so a viewer can see which filters
+                        // F5c (Batch A): the pill names the facets, never the sort —
+                        // and it opens the sheet, so a viewer can see which filters
                         // are actually on instead of taking the pill's word.
                         Box(
                             // Robo run 2 class: a raw clickable wrapping a
@@ -173,7 +176,7 @@ fun SearchScreen(
                                     onClickLabel = "Open filters",
                                 ) { showSheet = true },
                         ) {
-                            Pill(text = "Filtered", backgroundColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
+                            Pill(text = filteredPillLabel(state.filters), backgroundColor = MaterialTheme.colorScheme.primaryContainer, contentColor = MaterialTheme.colorScheme.onPrimaryContainer)
                         }
                         Spacer(Modifier.width(8.dp))
                     }
@@ -727,9 +730,10 @@ private fun FilterSheetContent(
         }
 
         Text("Sort results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+        // F1 (Batch A): the old copy explained the paging model in implementation
+        // words ("facets", "run on the server before paging"). One plain sentence.
         Text(
-            "Facets and sort run on the server before paging, so they narrow the whole catalog. " +
-                "Only the year range applies to the loaded pages.",
+            stringResource(R.string.search_filters_help),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

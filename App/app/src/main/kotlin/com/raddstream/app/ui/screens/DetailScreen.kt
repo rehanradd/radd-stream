@@ -107,6 +107,7 @@ import com.raddstream.app.ui.components.ErrorState
 import com.raddstream.app.ui.components.HdrBadge
 import com.raddstream.app.ui.components.ImageFallbackCard
 import com.raddstream.app.ui.components.InlineLoadFailure
+import com.raddstream.app.ui.components.isKnownLanguage
 import com.raddstream.app.ui.components.Pill
 import com.raddstream.app.ui.components.UserWords
 import com.raddstream.app.ui.components.PrintQualityBadge
@@ -295,6 +296,13 @@ fun DetailScreen(
                 title = "Couldn't load this title",
                 message = state.error ?: "Unable to load title.",
                 onRetry = viewModel::loadDetail,
+                // F9 (Batch A): a failed title needs a way out that is not
+                // "retry forever" — back to browse. The message itself is
+                // already specific by error type (see friendlyNetworkError in
+                // the ViewModel: offline, timeout, 429, 404 and 5xx each get
+                // their own words); this branch only adds the exit.
+                secondaryLabel = "Back to browse",
+                onSecondary = onBackClick,
                 modifier = Modifier.padding(detailPadding),
             )
             post != null -> DetailContent(
@@ -739,13 +747,14 @@ private fun PosterHeader(
                     url = post.posterUrl,
                     contentDescription = "${post.cleanTitle ?: post.title} poster",
                     modifier = Modifier.fillMaxSize(),
-                    fallbackLabel = (post.cleanTitle ?: post.title).take(2).uppercase(),
+                    // F6 (Batch A): the full title, not initials.
+                    fallbackLabel = post.cleanTitle ?: post.title,
                     onBitmap = { posterBitmap = it },
                 )
             } else {
                 ImageFallbackCard(
                     modifier = Modifier.fillMaxSize(),
-                    label = (post.cleanTitle ?: post.title).take(2).uppercase(),
+                    label = post.cleanTitle ?: post.title,
                 )
             }
         }
@@ -769,7 +778,10 @@ private fun PosterHeader(
                 // P-5 (Session 121): normalize again at the render site — a language that
                 // arrives as a raw JSON array string ("[\"Tamil\", \"English\"]") reads
                 // "Tamil, English". Idempotent with the mapper-side normalization.
-                WireText.listOf(post.language).joinToString(", ").takeIf { it.isNotBlank() },
+                // F2 (Batch A): "Unknown"/"N/A" are dropped — the server sends those
+                // when nothing was recorded, and a meta line must never read "Unknown".
+                WireText.listOf(post.language).map { it.trim() }.filter(::isKnownLanguage)
+                    .joinToString(", ").takeIf { it.isNotBlank() },
                 formatRuntimeMinutes(post.runtimeMinutes),
                 if (seasonCount > 0) "$seasonCount ${if (seasonCount == 1) "season" else "seasons"}" else null,
             )

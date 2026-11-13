@@ -3,6 +3,7 @@ package com.raddstream.app.ui
 import com.raddstream.app.ui.components.HERO_INDICATOR_TOP_DP
 import com.raddstream.app.ui.components.heroIndicatorOverlapsActionRow
 import com.raddstream.app.ui.components.heroLanguagePills
+import com.raddstream.app.ui.components.isKnownLanguage
 import com.raddstream.app.ui.components.nextHeroPage
 import com.raddstream.app.ui.components.shouldAdvanceHero
 import org.junit.Assert.assertEquals
@@ -48,6 +49,29 @@ class HeroCarouselTest {
     @Test
     fun dropsDuplicates() {
         assertEquals(listOf("English"), heroLanguagePills("English, English, English"))
+    }
+
+    // F2 (Batch A): the server sends the literal words "Unknown" and "N/A" for
+    // titles whose language was never recorded — a missing value, not a
+    // language. No pill ever reads "Unknown" at a viewer.
+    @Test
+    fun dropsUnknownAndNotApplicable() {
+        assertTrue(heroLanguagePills("Unknown").isEmpty())
+        assertTrue(heroLanguagePills("N/A").isEmpty())
+        assertEquals(listOf("Hindi"), heroLanguagePills("Hindi, Unknown"))
+        assertEquals(listOf("English"), heroLanguagePills("N/A, English"))
+        assertEquals(listOf("Hindi", "English"), heroLanguagePills("Hindi, UNKNOWN, English, n/a"))
+    }
+
+    @Test
+    fun knownLanguageKnowsWhatCounts() {
+        assertTrue(isKnownLanguage("Hindi"))
+        assertFalse(isKnownLanguage("Unknown"))
+        assertFalse(isKnownLanguage("UNKNOWN"))
+        assertFalse(isKnownLanguage("N/A"))
+        assertFalse(isKnownLanguage("n/a"))
+        assertFalse(isKnownLanguage(""))
+        assertFalse(isKnownLanguage("   "))
     }
 
     // The auto-advance step: forward one page, wrapping from the last back to 0.

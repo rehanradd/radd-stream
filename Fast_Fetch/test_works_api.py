@@ -31,6 +31,11 @@ then pins:
 5. **The edge.** The two routes answer 200 with the works shape over
    real HTTP, a missing or non-integer work id is a 404/400, and no
    `Origin` is ever reflected (CORS stays closed).
+6. **The bounded browse.** An empty `q` is the unfiltered browse, and
+   the browse groups only the newest `_WORKS_BROWSE_SCAN_LIMIT`
+   posts: on a 225k-post catalog the unbounded scan ran 11–13 s into
+   the `interrupted` error (503 live, 2026-11-13), the window answers
+   in ~2 s.
 
     python3 -S Fast_Fetch/test_works_api.py
 """
@@ -570,6 +575,52 @@ class WorksListTests(Fixture):
         self.assertEqual(resp["total"], 14)
         self.assertEqual(len(resp["results"]), 14)
 
+    def test_empty_query_is_the_unfiltered_browse(self):
+        # The 503 (2026-11-13): `/api/v1/works?q=` ran the
+        # whole-catalog grouping scan. An empty q is no query — the
+        # browse — not a search for nothing, and a whitespace-only q
+        # is the same shape.
+        plain = viewer.api_v1_get_works(limit=50)
+        for query in ("", "   "):
+            resp = viewer.api_v1_get_works(query=query, limit=50)
+            self.assertEqual(resp["total"], plain["total"], query)
+            self.assertEqual([i["id"] for i in resp["results"]],
+                             [i["id"] for i in plain["results"]], query)
+
+    def test_unfiltered_browse_is_bounded(self):
+        # Past the scan limit the browse answers from its window
+        # (newest posts by id), not from the whole catalog: the
+        # window is what keeps a 225k-post catalog under the deadline
+        # (reproduced on a synthetic catalog: 11–13 s to the
+        # `interrupted` error before the bound, ~2 s after it).
+        limit = viewer._WORKS_BROWSE_SCAN_LIMIT
+        # Fixed-width numbers: "Film 1" is a token-prefix of "Film 10"
+        # and the grouping would legitimately fold them — the bound
+        # test needs one work per post, so no title may prefix another.
+        rows = [("https://bench.example/movie/film-%05d/" % i,
+                 "film-%05d" % i, "Film %05d (2020)" % i,
+                 "Film %05d" % i,
+                 2020, "movie", "bench.example", 0, "film-%05d" % i,
+                 "Hollywood", "India", "English")
+                for i in range(limit + 500)]
+        self.conn.executemany(
+            "INSERT INTO posts (url, slug, title, clean_title, year,"
+            " content_type, source_site, is_18_plus, canonical_key,"
+            " industry, country, language)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        self.conn.commit()
+        viewer._WORKS_LIST_CACHE.clear()
+        resp = viewer.api_v1_get_works(limit=20)
+        self.assertEqual(resp["total"], limit)
+        self.assertEqual(len(resp["results"]), 20)
+        self.assertEqual(resp["total_pages"], (limit + 19) // 20)
+        last = viewer.api_v1_get_works(limit=20, page=(limit + 19) // 20)
+        self.assertEqual(len(last["results"]), 20)
+        past = viewer.api_v1_get_works(
+            limit=20, page=(limit + 19) // 20 + 1)
+        self.assertEqual(past["results"], [])
+        self.assertEqual(past["total"], limit)
+
     def test_sequel_stays_its_own_work(self):
         resp = viewer.api_v1_get_works(query="salaar", limit=20)
         # Both answer, as two works — the sequel is not folded into
@@ -844,6 +895,14 @@ class WorksHttpTests(Fixture):
         self.assertEqual(data["total"], 2)
         salaar = self.work_by_id(data, self.salaar_a)
         self.assertEqual(salaar["post_count"], 3)
+
+    def test_empty_query_route_answers_the_browse_page(self):
+        # The 503 (2026-11-13): `/api/v1/works?q=` timed out the
+        # whole-catalog grouping. It now answers the browse page.
+        status, _headers, data = self.get("/api/v1/works?q=&limit=20")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["total"], 14)
+        self.assertEqual(len(data["results"]), 14)
 
     def test_works_detail_route(self):
         status, _headers, data = self.get(

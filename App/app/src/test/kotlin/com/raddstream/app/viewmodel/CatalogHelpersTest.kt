@@ -72,8 +72,11 @@ class CatalogHelpersTest {
     fun `a partial page never claims to be the whole answer`() {
         // The old header said "37 results" for a query the server reported as 4,112 strong,
         // because it counted only the page this device had paged in.
-        assertEquals("Showing 37 of 4112", resultsSummary(loaded = 37, serverTotal = 4112, hasMore = true))
-        assertEquals("Showing 37 of 4112", resultsSummary(loaded = 37, serverTotal = 4112, hasMore = false))
+        // F5d (Batch A): the partial line now says "results" like the complete
+        // line — the two numbers still count different populations (loaded posts
+        // vs the server's total), and are not forced to agree.
+        assertEquals("Showing 37 of 4112 results", resultsSummary(loaded = 37, serverTotal = 4112, hasMore = true))
+        assertEquals("Showing 37 of 4112 results", resultsSummary(loaded = 37, serverTotal = 4112, hasMore = false))
     }
 
     @Test
@@ -81,5 +84,64 @@ class CatalogHelpersTest {
         assertEquals("1 result", resultsSummary(loaded = 1, serverTotal = 1, hasMore = false))
         assertEquals("12 results", resultsSummary(loaded = 12, serverTotal = 12, hasMore = false))
         assertEquals("0 results", resultsSummary(loaded = 0, serverTotal = 0, hasMore = false))
+    }
+
+    // F5c (Batch A): the "Filtered" pill names the filters that are on — the old
+    // pill read the bare word "Filtered" while its comment claimed it named
+    // them, so a viewer could not tell which filter was active.
+    @Test
+    fun `an empty filter set names nothing`() {
+        assertTrue(activeFilterSummary(SearchFilters()).isEmpty())
+        assertEquals("Filtered", filteredPillLabel(SearchFilters()))
+    }
+
+    @Test
+    fun `the pill names the type and language in sheet order`() {
+        val filters = SearchFilters(type = "movie", language = LanguageFilter.HINDI)
+        assertEquals(listOf("Movies", "Hindi"), activeFilterSummary(filters))
+        assertEquals("Filtered: Movies · Hindi", filteredPillLabel(filters))
+    }
+
+    @Test
+    fun `three filters name two and count the rest`() {
+        val filters = SearchFilters(
+            type = "movie",
+            language = LanguageFilter.HINDI,
+            genre = GenreFilter.ACTION,
+        )
+        assertEquals(listOf("Movies", "Action", "Hindi"), activeFilterSummary(filters))
+        assertEquals("Filtered: Movies · Action +1 more", filteredPillLabel(filters))
+    }
+
+    @Test
+    fun `the year range reads as a range not two filters`() {
+        assertEquals(
+            listOf("2020–2024"),
+            activeFilterSummary(SearchFilters(yearFrom = 2020, yearTo = 2024)),
+        )
+        assertEquals(
+            listOf("From 2020"),
+            activeFilterSummary(SearchFilters(yearFrom = 2020)),
+        )
+        assertEquals(
+            listOf("To 2024"),
+            activeFilterSummary(SearchFilters(yearTo = 2024)),
+        )
+    }
+
+    @Test
+    fun `included only and the type names survive`() {
+        assertEquals(
+            listOf("Complete series", "Included in my plan"),
+            activeFilterSummary(SearchFilters(type = "complete_season", includedOnly = true)),
+        )
+        assertEquals(
+            listOf("Series", "1080p"),
+            activeFilterSummary(SearchFilters(type = "series", quality = QualityFilter.FULL_HD)),
+        )
+        assertEquals(
+            listOf("Anime", "Bollywood"),
+            activeFilterSummary(SearchFilters(type = "anime", industry = IndustryFilter.BOLLYWOOD)),
+        )
     }
 }

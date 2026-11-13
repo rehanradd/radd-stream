@@ -2,6 +2,7 @@ package com.raddstream.app.viewmodel
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.raddstream.app.data.RegionChoices
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.player.LanguageDefaults
 import com.raddstream.app.player.SubtitleUiSettings
@@ -18,11 +19,20 @@ import kotlinx.coroutines.launch
  * The Languages screen's state: the three values in force — the audio language, the
  * subtitle language, and the subtitle size — each one already resolved to what the
  * player will actually use, not what the store happens to hold.
+ *
+ * F5a (Batch A): each language row also carries its provenance — "your choice" when
+ * the viewer picked it, "<Region> default" when the region supplied it. The two
+ * screens that show these values used to disagree ("Hindi" here, "Player default"
+ * there) because one showed the effective language and the other the stored word;
+ * now both show the effective value AND where it came from, so they can never look
+ * contradictory without saying why.
  */
 data class LanguagesUiState(
     val audioLanguage: String = UserPreferences.AUDIO_LANGUAGE_DEFAULT,
     val subtitleLanguage: String = UserPreferences.SUBTITLE_DEFAULT,
     val subtitleSizePercent: Int = 100,
+    val audioProvenance: String = "Desi default",
+    val subtitleProvenance: String = "Desi default",
 )
 
 /**
@@ -46,7 +56,16 @@ internal fun languagesStateOf(
     subtitleLanguage = LanguageDefaults.effectiveSubtitleLanguage(subtitle, region)
         ?: UserPreferences.SUBTITLE_DEFAULT,
     subtitleSizePercent = style.sizePercent,
+    // F5a: provenance is decided by the same stored-vs-blank rule the effective
+    // value uses — a stored word (even "Player default" or "Off") is the viewer's
+    // own pick; a blank means the region's default is speaking.
+    audioProvenance = provenanceOf(audio, region),
+    subtitleProvenance = provenanceOf(subtitle, region),
 )
+
+/** "your choice" for a stored pick, "<Region> default" when the region supplied it. */
+internal fun provenanceOf(stored: String?, region: String): String =
+    if (stored.isNullOrBlank()) "${RegionChoices.byId(region).title} default" else "your choice"
 
 /**
  * One Languages screen, one source of truth. The Region card, the Settings chips,
@@ -91,13 +110,16 @@ class LanguagesViewModel @Inject constructor(
      * at once, the way the Settings chips do, and the store confirms it.
      */
     fun setAudioLanguage(value: String) {
-        _uiState.update { it.copy(audioLanguage = value) }
+        // F5a: a tap IS a stored pick, so the provenance flips to "your choice" at
+        // once — waiting for the store round-trip would show the new language
+        // under the old region-default label for a frame.
+        _uiState.update { it.copy(audioLanguage = value, audioProvenance = "your choice") }
         viewModelScope.launch { settingsRepository.savePreferredAudioLanguage(value) }
     }
 
     /** [UserPreferences.SUBTITLE_DEFAULT] is stored as the word itself, like the audio row. */
     fun setSubtitleLanguage(value: String) {
-        _uiState.update { it.copy(subtitleLanguage = value) }
+        _uiState.update { it.copy(subtitleLanguage = value, subtitleProvenance = "your choice") }
         viewModelScope.launch { settingsRepository.savePreferredSubtitleLanguage(value) }
     }
 
