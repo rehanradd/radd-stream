@@ -20,6 +20,14 @@ robolectric         = "4.14.1"
 androidx-test       = "1.6.1"
 workmanager         = "2.9.0"
 play-app-update     = "2.1.0"
+# Firebase Crashlytics (2026-11-14): BOM 33.7.0 pins firebase-crashlytics
+# 19.3.0 + firebase-analytics 22.1.2 — both declare minSdk 21 in their
+# manifests (verified against the published AARs), exactly this app's
+# minSdk, so no manifest-merger conflict. google-services 4.4.2 and the
+# Crashlytics Gradle plugin 3.0.2 are the versions that pair with AGP 8.5.2.
+firebase-bom        = "33.7.0"
+google-services     = "4.4.2"
+crashlytics-plugin  = "3.0.2"
 
 [libraries]
 # Compose
@@ -84,6 +92,12 @@ hilt-work-compiler      = { group = "androidx.hilt", name = "hilt-compiler",   v
 # Core
 core-ktx                = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
 
+# Firebase (Crashlytics crash reporting + Analytics; versions managed by the
+# BOM — no version.ref on the libraries themselves)
+firebase-bom            = { group = "com.google.firebase", name = "firebase-bom",         version.ref = "firebase-bom" }
+firebase-analytics      = { group = "com.google.firebase", name = "firebase-analytics" }
+firebase-crashlytics    = { group = "com.google.firebase", name = "firebase-crashlytics" }
+
 # Play Core in-app updates (force-update card: flexible for soft, immediate
 # for forced; the download page is the fallback when Play has no update for
 # this install — always, for a sideloaded build)
@@ -104,3 +118,5 @@ kotlin-android      = { id = "org.jetbrains.kotlin.android",   version.ref = "ko
 kotlin-compose      = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 hilt                = { id = "com.google.dagger.hilt.android", version.ref = "hilt" }
 kotlin-kapt         = { id = "org.jetbrains.kotlin.kapt",      version.ref = "kotlin" }
+google-services     = { id = "com.google.gms.google-services", version.ref = "google-services" }
+crashlytics         = { id = "com.google.firebase.crashlytics", version.ref = "crashlytics-plugin" }

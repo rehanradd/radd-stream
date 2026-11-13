@@ -11,6 +11,13 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt)
     alias(libs.plugins.kotlin.kapt)
+    // Order matters: google-services after the Android plugin (it reads the
+    // application id), crashlytics after google-services (it reads the
+    // Firebase config the google-services plugin generates from
+    // google-services.json). Both are apply-only here; versions live in the
+    // catalog (libs.versions.toml).
+    alias(libs.plugins.google.services)
+    alias(libs.plugins.crashlytics)
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -316,13 +323,14 @@ tasks.withType<Test>().configureEach {
             excludeTestsMatching("com.raddstream.app.data.local.AppDatabaseMigrationTest")
             excludeTestsMatching("com.raddstream.app.data.cache.AheadFetcherFinalizeTest")
             excludeTestsMatching("com.raddstream.app.data.cache.CacheSweepWorkerTest")
+            excludeTestsMatching("com.raddstream.app.data.CrashReportingTest")
         }
         doFirst {
             // Name every excluded class: this line is the only signal a reader of a local gate
             // gets that the suite count below is not the whole suite count.
             logger.lifecycle(
                 "Skipping PosterCardProvenanceTest, ScreenSnapshotTest, AppDatabaseMigrationTest, " +
-                    "AheadFetcherFinalizeTest and CacheSweepWorkerTest: Robolectric has no native runtime for " +
+                    "AheadFetcherFinalizeTest, CacheSweepWorkerTest and CrashReportingTest: Robolectric has no native runtime for " +
                     "${System.getProperty("os.arch")}. Run these classes on an x86_64 CI runner."
             )
         }
@@ -476,6 +484,15 @@ dependencies {
 
     // ── Core ──────────────────────────────────────────────────────────────────
     implementation(libs.core.ktx)
+
+    // ── Firebase (Crashlytics crash reporting + Analytics) ─────────────────
+    // The BOM pins every Firebase library to one tested set (33.7.0:
+    // crashlytics 19.3.0, analytics 22.1.2 — both minSdk 21). Crashlytics
+    // uploads the release mapping file automatically via its Gradle plugin,
+    // so release stack traces de-obfuscate without a manual step.
+    implementation(platform(libs.firebase.bom))
+    implementation(libs.firebase.analytics)
+    implementation(libs.firebase.crashlytics)
 
     // ── Play Core in-app updates ──────────────────────────────────────────
     // The force-update card tries Play first (flexible for a soft update,
