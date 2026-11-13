@@ -346,6 +346,12 @@ internal fun isTransientDetailError(ex: Exception): Boolean {
     // This guard matters because CancellationException extends
     // IllegalStateException, which the branch below treats as transient.
     if (ex is CancellationException) return false
+    // Parent fixup (Session 156): java.util.concurrent.CancellationException
+    // is a sibling, not a subclass, of the coroutines one — it extends
+    // IllegalStateException too, so without this line it would fall through
+    // to the transient branch and a cancelled load would retry instead of
+    // aborting. Both cancellation signals abort at once.
+    if (ex is java.util.concurrent.CancellationException) return false
     if (ex is IOException) return true
     // Session 156 (2026-11-13): the provider throws IllegalStateException
     // when the catalog client has no server URL yet — a first-call-only
