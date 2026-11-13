@@ -2,8 +2,8 @@ package com.raddstream.app.player
 
 import androidx.media3.common.C
 import androidx.media3.datasource.HttpDataSource
-import androidx.media3.exoplayer.source.DefaultLoadErrorHandlingPolicy
-import androidx.media3.exoplayer.source.LoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
+import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
 import java.io.IOException
 
 /**

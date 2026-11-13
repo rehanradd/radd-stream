@@ -615,7 +615,7 @@ private fun SearchBody(
                 // press in flight. A content key keeps the row — and the
                 // press on it — alive across the re-emission.
                 group.items.chunked(2).forEach { pair ->
-                    item(key = "${group.typeKey}-${pair.joinToString(separator = ",") { it.id }}") {
+                    item(key = "${group.typeKey}-${pair.joinToString(separator = ",") { it.id.toString() }}") {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
