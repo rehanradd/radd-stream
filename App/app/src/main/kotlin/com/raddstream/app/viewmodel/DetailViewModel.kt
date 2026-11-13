@@ -534,12 +534,16 @@ class DetailViewModel @Inject constructor(
         }
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true, error = null) }
-            // Session 153: warm the connection once before the first detail
-            // call — a cold pool can fail the first tap before any byte
-            // leaves the device. Bounded and silent: a slow warm must never
-            // hold the detail back, it only ever helps it.
-            withTimeoutOrNull(3_000) { catalogRepository.warmConnectionIfNeeded() }
             try {
+                // Session 153: warm the connection once before the first detail
+                // call — a cold pool can fail the first tap before any byte
+                // leaves the device. Bounded and silent: a slow warm must never
+                // hold the detail back, it only ever helps it. Session 155:
+                // the warm sits inside the try now, so a warm that ever throws
+                // (it is runCatching-guarded and should not) lands on the same
+                // error path as the detail call instead of escaping the
+                // coroutine and leaving the screen loading with no error.
+                withTimeoutOrNull(3_000) { catalogRepository.warmConnectionIfNeeded() }
                 val detail = fetchDetailWithRetry()
                 if (detail != null) {
                     // Wide art only: a portrait poster cropped into a 16:9 still looks broken,

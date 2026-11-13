@@ -51,6 +51,28 @@ class PlayerSessionStore(
     private val _giveUp = MutableStateFlow<Pair<String, HandoffWhy>?>(null)
     val giveUp: StateFlow<Pair<String, HandoffWhy>?> = _giveUp.asStateFlow()
 
+    /**
+     * Session 155 (S2): the last Media3 error recorded before a first frame
+     * landed, if any — the exact code + first line the service's
+     * `summarize` produced (e.g. "ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+     * ..."). Null once playback starts or a new load begins, so a give-up
+     * never reports a stale failure. The player ViewModel reads this when
+     * its start deadline gives up, so the server's `failed` report names
+     * the cause instead of only the timeout — the device test returns no
+     * logcat, so this is the only copy of the error that leaves the phone.
+     */
+    private val _lastStartError = MutableStateFlow<String?>(null)
+    val lastStartError: StateFlow<String?> = _lastStartError.asStateFlow()
+
+    /** Keep one start error for the give-up report; blank clears. */
+    fun recordStartError(summary: String?) {
+        _lastStartError.value = summary?.takeIf { it.isNotBlank() }
+    }
+
+    fun clearStartError() {
+        _lastStartError.value = null
+    }
+
     /** The active file ended and continuing needs UI/app involvement (next episode flow). */
     private val _nextEpisode = MutableStateFlow<NextEpisodeAction?>(null)
     val nextEpisode: StateFlow<NextEpisodeAction?> = _nextEpisode.asStateFlow()

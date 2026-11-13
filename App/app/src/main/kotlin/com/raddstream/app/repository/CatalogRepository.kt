@@ -164,11 +164,22 @@ class CatalogRepository @Inject constructor(
      * compliance probe and the player-side re-read send the old request.
      */
     suspend fun getPostDetail(postId: Int, warm: Boolean = false, audio: String? = null): PostDetail? {
-        val response = apiProvider.current().getPostDetail(
-            postId,
-            warm = if (warm) "1" else null,
-            audio = audio?.takeIf { it.isNotBlank() },
-        )
+        val response = try {
+            apiProvider.current().getPostDetail(
+                postId,
+                warm = if (warm) "1" else null,
+                audio = audio?.takeIf { it.isNotBlank() },
+            )
+        } catch (_: IllegalStateException) {
+            // Session 155 (S2): the provider throwing "Connect to a catalog
+            // server first" is a first-call readiness failure, not a server
+            // refusal — the server IS configured (the brand default), and a
+            // re-call succeeds. Null so the caller's retry re-asks instead
+            // of hard-failing the first tap. Only the provider-not-ready
+            // error is caught here: a dead socket still throws, so the
+            // caller can tell a refusal from a failure to ask.
+            return null
+        }
         if (response.success && response.data != null) {
             return response.data
         }
@@ -261,6 +272,13 @@ class CatalogRepository @Inject constructor(
         } catch (_: HttpException) {
             return null
         } catch (_: IOException) {
+            return null
+        } catch (_: IllegalStateException) {
+            // Session 155 (S2): the provider throwing "Connect to a catalog
+            // server first" is a first-call readiness failure, not a server
+            // refusal — the server IS configured (the brand default), and a
+            // re-call succeeds. Null so the caller's null-retry re-asks
+            // instead of hard-failing the first tap.
             return null
         }
         if (!response.ok) return null

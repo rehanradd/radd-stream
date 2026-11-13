@@ -225,11 +225,21 @@ class FailoverStateMachine(
      * are both futile — each hop re-pays Media3's ~3 s of loader retries before it
      * 402s again — so a refusal skips straight to the next rank (or the handoff when
      * no rank remains), instead of burning the start budget on copies that cannot play.
+     *
+     * [beforeFirstFrame] is true while no first frame has landed (Session 155, S2).
+     * A start failure must never retry the SAME rendition: re-pressing it re-pays
+     * our redirector's 6-12 s live resolve for a file that just failed to start
+     * (the S2 log shows 22 such presses in 2.5 min and no frame), burning the 30 s
+     * start budget on the same unplayable copy instead of trying a different one.
+     * So a start failure skips straight to a backup handle / the next rank. After
+     * the first frame the policy's retry_same still applies — a mid-playback blip
+     * is worth one same-file retry.
      */
     fun onFailure(
         errorSummary: String,
         isExpiry: Boolean = false,
         isGateRefusal: Boolean = false,
+        beforeFirstFrame: Boolean = false,
     ): FailoverDecision {
         // Session 121 (P-6): the summary may be a raw ExoPlayer code; the machine is the
         // single funnel every failure passes through, so translate it here — the Handoff
@@ -262,8 +272,10 @@ class FailoverStateMachine(
         val record = FailoverRecord(current.rank, current.releaseId, current.displayLabel(), displaySummary, "")
 
         return when {
-            // retry_same budget still available for THIS candidate
-            usedSoFar <= policy.retrySame -> {
+            // retry_same budget still available for THIS candidate — but
+            // never before the first frame (see [beforeFirstFrame] above):
+            // a start failure hops to a different file at once.
+            !beforeFirstFrame && usedSoFar <= policy.retrySame -> {
                 _log.add(record.copy(action = "retried (same rank)"))
                 FailoverDecision.RetrySame(index, policy.backoffMs, record.copy(action = "retry"))
             }

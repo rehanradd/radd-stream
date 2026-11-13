@@ -828,12 +828,17 @@ class PlayerViewModel @Inject constructor(
      */
     private fun reportLinkFailedOnce(elapsedMs: Long) {
         val handle = currentReportHandle() ?: return
+        // Session 155 (S2): the give-up report carries the exact Media3
+        // start error when the service recorded one, so the server names
+        // why the file never produced a frame. Without it the report only
+        // says the start timed out, which is the symptom, not the cause.
+        val startError = store.lastStartError.value?.takeIf { it.isNotBlank() }
         viewModelScope.launch {
             catalogRepository.reportLink(
                 handle = handle,
                 event = "failed",
                 latencyMs = elapsedMs.toInt().coerceAtLeast(0),
-                error = "Playback did not start",
+                error = startError ?: "Playback did not start",
             )
         }
     }
@@ -1264,6 +1269,9 @@ class PlayerViewModel @Inject constructor(
         startAttemptAtMs = null
         startClockPending = true
         playedReportHandle = null // a new attempt may play a handle that already failed
+        // Session 155: a new attempt starts with no start error — a stale
+        // one from the last attempt must not ride into its give-up report.
+        store.clearStartError()
         // PL-3: ask the probe at the moment of the load — offline at start shows the
         // offline card with Retry at once, not the 30-second deadline card. A retry
         // re-asks, so the card clears the moment the network is back.
@@ -1544,6 +1552,9 @@ class PlayerViewModel @Inject constructor(
         startAttemptAtMs = null
         startClockPending = true
         playedReportHandle = null // a new attempt may play a handle that already failed
+        // Session 155: a retry is a new attempt — the old start error must
+        // not ride into this attempt's give-up report.
+        store.clearStartError()
         // P-3: same reset as the stage clock — the notice's elapsed line
         // counts from the new request, not the attempt being retried.
         _ui.update { it.copy(deadlineGiveUp = false, startElapsedMs = 0, startRequestElapsedMs = 0) }

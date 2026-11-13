@@ -748,6 +748,9 @@ class PlaybackService : MediaSessionService() {
                     // landed, and a later rebuffer is the buffering spinner's
                     // job, not a failed start.
                     disarmStartWatchdog()
+                    // Session 155: the start error (if any) is spent — a
+                    // later give-up must not report a stale start failure.
+                    store.clearStartError()
                     pendingResumeMs?.let { pos ->
                         player?.seekTo(pos)
                         pendingResumeMs = null
@@ -794,6 +797,14 @@ class PlaybackService : MediaSessionService() {
             // any user-visible surface shows it, so diagnosis loses nothing.
             val rawSummary = summarize(error)
             Log.d("PlaybackService", "player error: $rawSummary")
+            // Session 155 (S2): whether a first frame has landed decides
+            // the failover shape (see FailoverStateMachine.onFailure) and
+            // whether this error is a start error. The exact Media3 error
+            // is kept for the give-up report, because the device test
+            // returns no logcat — without it the report only says the
+            // start timed out, which is the symptom, not the cause.
+            val beforeFirstFrame = player?.let { !StartDeadline.hasFirstFrame(it.playbackState) } ?: true
+            if (beforeFirstFrame) store.recordStartError(rawSummary)
             val gateRefusal = isGateRefusalError(error)
             if (gateRefusal) {
                 // Salaar (2026-11-12): the gate refused the rung now opening, and
@@ -818,7 +829,7 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
             }
-            val decision = machine.onFailure(rawSummary, isGateRefusal = gateRefusal)
+            val decision = machine.onFailure(rawSummary, isGateRefusal = gateRefusal, beforeFirstFrame = beforeFirstFrame)
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
         }
 
