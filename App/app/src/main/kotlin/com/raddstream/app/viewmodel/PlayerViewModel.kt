@@ -515,6 +515,12 @@ class PlayerViewModel @Inject constructor(
                 // sync; a fresh ViewModel starts at 0, so publish that before playback starts.
                 store.subtitleOffsetMs = _ui.value.subtitle.delayMs
                 c.addListener(playerListener)
+                // P-1: the service is a process singleton and never resets
+                // speed, so a fresh ViewModel can inherit a previous
+                // screen's 2x from the service player. A new player session
+                // always starts at 1.0 (the ui default too) — the speed
+                // sheet never shows a speed the player is not using.
+                if (c.playbackParameters.speed != 1f) c.playbackParameters = PlaybackParameters(1f)
                 _ui.update { it.copy(connected = true) }
                 startTicker()
             } catch (t: Throwable) {
@@ -1260,6 +1266,16 @@ class PlayerViewModel @Inject constructor(
     }
 
     private fun loadNow(title: String, resumeKey: String, resumePosition: Long, override: Long?) {
+        // P-1 (emulator audit): speed is per-title, not per-session. The
+        // controller outlives the title, so a 2x choice on one title rode
+        // into the next with no indication. A new title resets to 1.0; a
+        // retry or a quality switch (same title) keeps the viewer's choice.
+        // onPlaybackParametersChanged mirrors the reset into ui.speed.
+        if (title != _ui.value.pendingTitle) {
+            controller?.let { c ->
+                if (c.playbackParameters.speed != 1f) c.playbackParameters = PlaybackParameters(1f)
+            }
+        }
         store.requestLoad(title = title, resumePositionMs = resumePosition, startOverrideMs = override)
         // Salaar (2026-11-13): the start clock arms in the ticker when
         // Media3 holds a URL, not here — the tap is not the load. Record

@@ -20,6 +20,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -191,6 +192,7 @@ import com.raddstream.app.player.qualityCostPerHour
 import com.raddstream.app.ui.components.CatalogImage
 import com.raddstream.app.ui.components.RaddDialogTitle
 import com.raddstream.app.ui.components.raddFilterChipColors
+import com.raddstream.app.ui.components.rememberReduceMotion
 import com.raddstream.app.ui.theme.RaddCaptionPlate
 import com.raddstream.app.ui.theme.RaddCaptionPlateArgb
 import com.raddstream.app.ui.theme.RaddCoral400
@@ -1279,14 +1281,18 @@ private fun DoubleTapRipple(state: PlayerUiState) {
         ScreenZone.CENTER -> Alignment.Center
     }
     Box(Modifier.fillMaxSize(), contentAlignment = alignment) {
-        // The acknowledgement appears rather than arrives: a pill that snaps onto the screen and
-        // then vanishes reads as a glitch in the picture, and this one is meant to read as an
-        // answer to the tap. Quick in, slow out, so a double-tap over a dark scene is never a
-        // flash.
+        // P-3 (emulator audit): the HUD itself is a plain conditional in
+        // main now, so this ripple pill is the last fade in the player —
+        // and it ignored Reduce Motion. Under reduced motion it crossfades
+        // in 30 ms (the NavGraph pattern) instead of riding the effects
+        // springs. The acknowledgement still appears rather than arrives:
+        // quick in, slow out, so a double-tap over a dark scene is never
+        // a flash.
+        val reduceMotion = rememberReduceMotion()
         AnimatedVisibility(
             visible = state.ripple != null,
-            enter = fadeIn(RaddMotion.fastEffects()),
-            exit = fadeOut(RaddMotion.defaultEffects()),
+            enter = fadeIn(if (reduceMotion) tween(RaddMotion.FadeWhenReduced) else RaddMotion.fastEffects()),
+            exit = fadeOut(if (reduceMotion) tween(RaddMotion.FadeWhenReduced) else RaddMotion.defaultEffects()),
         ) {
             Surface(
                 color = chrome.card,
