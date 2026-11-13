@@ -143,7 +143,11 @@ class PlaybackService : MediaSessionService() {
 
         val exo = ExoPlayer.Builder(this)
             .setRenderersFactory(renderersFactory)
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataFactory))
+            // Session 156: the extractors factory carries FLAG_DISABLE_SEEK_FOR_CUES
+            // (see PlayerExtractors.kt) — without it a tail-cued MKV makes the
+            // extractor seek ~973 MB in while preparing, which a Range-ignoring
+            // host answers by making the player download the whole file first.
+            .setMediaSourceFactory(DefaultMediaSourceFactory(dataFactory, buildPlayerExtractorsFactory()))
             .setLoadControl(loadControl())
             .setSeekBackIncrementMs(MX_SKIP_MS)
             .setSeekForwardIncrementMs(MX_SKIP_MS)

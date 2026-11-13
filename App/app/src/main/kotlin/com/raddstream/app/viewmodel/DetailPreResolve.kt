@@ -4,6 +4,7 @@ import com.raddstream.app.data.RegionChoices
 import com.raddstream.app.player.LadderForScope
 import com.raddstream.app.player.QualityOption
 import java.io.IOException
+import kotlinx.coroutines.CancellationException
 import retrofit2.HttpException
 
 /**
@@ -302,9 +303,12 @@ internal fun siblingBackupHandles(
  * The policy is deliberately narrow, and it is pure so a test can pin it:
  *
  *  - [isTransientDetailError]: only transport failures (`IOException`,
- *    including timeouts) and retryable HTTP statuses (429, 5xx) retry. A
+ *    including timeouts), a catalog client that is not ready yet
+ *    (`IllegalStateException` — no server URL on the first call, which
+ *    heals on re-call), and retryable HTTP statuses (429, 5xx) retry. A
  *    parse/mapping error, a 400/403/404, or a bad address is deterministic
  *    — retrying it would fail identically and burn the server's budget.
+ *    Cancellation is never transient: a cancelled load aborts at once.
  *  - [detailLoadBackoffMs]: 600 ms after the first failure, 1.5 s after the
  *    second — short enough to feel instant, long enough for the server's
  *    per-minute bucket to breathe.
@@ -313,7 +317,13 @@ internal fun siblingBackupHandles(
  *    is the only shape a 429/503 takes there. A title that genuinely is
  *    not on the server answers null twice and stays "not available".
  */
-internal const val DETAIL_LOAD_MAX_ATTEMPTS: Int = 3
+// Session 156 (2026-11-13): four attempts, not three — the Sauce Labs S3
+// re-test showed a first tap dying with no request reaching the server and
+// the retry window closing before the connection recovered. The fourth
+// attempt costs one more 1.5 s backoff, and only when all three before it
+// failed; a server that is genuinely down still answers with an error,
+// just 1.5 s later.
+internal const val DETAIL_LOAD_MAX_ATTEMPTS: Int = 4
 /**
  * Session 153: a null after a swallowed timeout deserves two more chances,
  * not one — the first tap on a cold connection can die before any byte
@@ -332,7 +342,18 @@ internal fun detailLoadBackoffMs(attempt: Int): Long =
     }
 
 internal fun isTransientDetailError(ex: Exception): Boolean {
+    // Cancellation aborts the load at once — it must never be retried.
+    // This guard matters because CancellationException extends
+    // IllegalStateException, which the branch below treats as transient.
+    if (ex is CancellationException) return false
     if (ex is IOException) return true
+    // Session 156 (2026-11-13): the provider throws IllegalStateException
+    // when the catalog client has no server URL yet — a first-call-only
+    // failure that heals on re-call. S3 showed a first tap dying with no
+    // request on the wire and the "Failed to load details" screen; that
+    // error must retry like any other first-call failure, never fail the
+    // tap outright.
+    if (ex is IllegalStateException) return true
     if (ex is HttpException) return ex.code() == 429 || ex.code() >= 500
     return false
 }

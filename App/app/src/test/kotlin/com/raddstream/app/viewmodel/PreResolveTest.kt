@@ -293,6 +293,15 @@ class PreResolveTest {
         assertTrue(isTransientDetailError(httpError(429)))
         assertTrue(isTransientDetailError(httpError(500)))
         assertTrue(isTransientDetailError(httpError(503)))
+        // Session 156 (2026-11-13): the provider throws IllegalStateException
+        // when the catalog client has no server URL yet — a first-call-only
+        // failure that heals on re-call, so it retries like any other
+        // first-call failure instead of failing the tap outright.
+        assertTrue(
+            isTransientDetailError(
+                IllegalStateException("Connect to a catalog server first."),
+            ),
+        )
     }
 
     @Test
@@ -300,7 +309,6 @@ class PreResolveTest {
         assertFalse(isTransientDetailError(httpError(400)))
         assertFalse(isTransientDetailError(httpError(403)))
         assertFalse(isTransientDetailError(httpError(404)))
-        assertFalse(isTransientDetailError(IllegalStateException("bad state")))
     }
 
     @Test
@@ -311,8 +319,11 @@ class PreResolveTest {
     }
 
     @Test
-    fun `detail load retries at most three times with two null retries`() {
-        assertEquals(3, DETAIL_LOAD_MAX_ATTEMPTS)
+    fun `detail load retries at most four times with two null retries`() {
+        // Session 156 (2026-11-13): four attempts, not three — S3 showed a
+        // first tap dying with no request on the wire and the retry window
+        // closing before the connection recovered.
+        assertEquals(4, DETAIL_LOAD_MAX_ATTEMPTS)
         assertEquals(2, DETAIL_LOAD_NULL_RETRIES)
     }
 
