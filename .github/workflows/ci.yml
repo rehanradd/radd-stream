@@ -115,12 +115,19 @@ jobs:
 
       - name: "🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)"
         working-directory: App
-        # --continue: report every task's failures in one run.
-        # --no-daemon/--stacktrace per project standard.
-        # --console=plain: unadorned file:line Kotlin errors, no ANSI noise.
+        # TEMP-DIAG 3 (revert before merge): run ONLY SkeletonPlaceholderTest
+        # with --info. Run 475 proved the 2g heap does NOT fix the suite
+        # (executor exit 1 again, no XMLs). The run-474 --info log showed
+        # exactly one test event before death: this class SKIPPED, then the
+        # worker died 0.1 s later — so either this class alone kills the
+        # worker (Application.onCreate + Firebase init under Robolectric) or
+        # the death needs the full-suite context. This run also verifies the
+        # -Xmx2048m worker heap actually applied (worker command line is
+        # only logged with --info). Full suite command is in git history
+        # (this commit's parent).
         run: |
-          ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug \
-            --no-daemon --stacktrace --continue --console=plain
+          ./gradlew :app:testDebugUnitTest --tests "com.raddstream.app.ui.components.SkeletonPlaceholderTest" \
+            --no-daemon --stacktrace --info --console=plain
 
       - name: 📤 Upload debug APK
         if: always()   # assembleDebug may succeed while tests/lint fail — the APK is the most useful output
