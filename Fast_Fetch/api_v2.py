@@ -35,6 +35,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 import time
 import urllib.parse
 import uuid
@@ -327,6 +328,33 @@ def clean_diagnostic_text(obj):
     return obj
 
 
+def scrub_public(obj):
+    """One pass over a public payload: drop flag keys, drop raw-URL keys, and
+    scrub diagnostic strings — the three walks `json_response` used to make.
+
+    Identical output to
+    `clean_diagnostic_text(deny_raw_urls(deny_flag_keys(obj)))`: a key dropped
+    by either deny-list is gone before its value is ever examined, and only a
+    string value under a diagnostic key is scrubbed; anything else is recursed
+    into. One walk instead of three, and one fresh tree instead of three — the
+    difference that matters on a ~1.3 MB detail payload, where each walk was a
+    full deep copy.
+    """
+    if isinstance(obj, dict):
+        out = {}
+        for key, value in obj.items():
+            if _FLAG_KEY_RE.search(str(key)) or _RAW_URL_KEY_RE.search(str(key)):
+                continue
+            if isinstance(value, str) and _DIAGNOSTIC_KEY_RE.match(str(key)):
+                out[key] = _flag_value_deny(redact.scrub_text(value))
+            else:
+                out[key] = scrub_public(value)
+        return out
+    if isinstance(obj, (list, tuple)):
+        return [scrub_public(value) for value in obj]
+    return obj
+
+
 # ── parameter parsing ────────────────────────────────────────────────────────
 
 def _q(query: dict, name: str, default: str = "") -> str:
@@ -520,8 +548,7 @@ def json_response(handler, payload, *, rid: str, status: int = 200,
                   cache: str = CACHE_BROWSE, etag: str = "", last_modified=None,
                   operator: bool = False, headers: list[tuple[str, str]] | None = None
                   ) -> None:
-    body = payload if operator else clean_diagnostic_text(
-        deny_raw_urls(deny_flag_keys(payload)))
+    body = payload if operator else scrub_public(payload)
     extra = list(_cache_headers(cache=cache, etag=etag, rid=rid,
                                 last_modified=last_modified))
     extra.extend(headers or [])
@@ -540,6 +567,165 @@ def _from_layer2(result: dict) -> tuple[bool, str, str]:
     return False, code, str(error.get("message") or "")
 
 
+# ── detail-body memo (one process, many threads) ─────────────────────────────
+#
+# GET /api/v2/works/{id} used to pay five full passes over its ~1.3 MB payload
+# on every hit (build + two serializations + three scrub walks). The nginx 60 s
+# micro-cache hides the second hit inside its window, but the first hit after
+# expiry paid the whole cost again — a cold 2.25 s for the biggest work, on a
+# 1-vCPU box. The payload is a pure function of (database, work, revision
+# vector, fields), so the wire bytes are memoized here: a repeat hit at the
+# same revision sends the stored bytes without rebuilding, re-scrubbing or
+# re-serializing. The revision vector is part of the key, so a projection, a
+# health sweep or an entitlement change invalidates exactly the entries whose
+# rows moved; the database path is part of the key too, so two fixtures (or a
+# swapped database) can never share an entry. Operator answers are never
+# memoized — they carry provenance the public vector does not cover.
+#
+# One bound the vector cannot give: every `stream_id` in the body is minted
+# with `redact.mint_token`'s 24 h expiry, stamped to the second — two builds
+# a second apart already mint different tokens, which is why a revalidation
+# can answer 200 with nothing else changed. An entry that outlived its
+# tokens would serve handles the play route refuses, so entries also die by
+# age: one hour, a 23 h margin inside the token life, and long enough to
+# cover the repeat taps the 60 s nginx window misses (retry loop, back and
+# re-open). A tap past the hour pays the reduced cold build again — never a
+# stale handle.
+
+_DETAIL_BODY_CACHE_MAX_ENTRIES = 16
+_DETAIL_BODY_CACHE_MAX_BYTES = 8 * 1024 * 1024
+_DETAIL_BODY_CACHE_TTL_SECONDS = 3600.0
+_DETAIL_BODY_CACHE: dict = {}
+_DETAIL_BODY_CACHE_BYTES = 0
+_DETAIL_BODY_CACHE_LOCK = threading.Lock()
+
+
+def _detail_body_get(key):
+    global _DETAIL_BODY_CACHE_BYTES
+    with _DETAIL_BODY_CACHE_LOCK:
+        hit = _DETAIL_BODY_CACHE.get(key)
+        if hit is None:
+            return None
+        body, etag, stored_at = hit
+        if time.monotonic() - stored_at > _DETAIL_BODY_CACHE_TTL_SECONDS:
+            del _DETAIL_BODY_CACHE[key]
+            _DETAIL_BODY_CACHE_BYTES -= len(body)
+            return None
+        return body, etag
+
+
+def _detail_body_put(key, body: bytes, etag: str) -> None:
+    """Store wire bytes under `key`, FIFO-evicting past the caps.
+
+    A body bigger than the whole byte cap is not stored at all — it still gets
+    the single-serialization path, just no memo entry.
+    """
+    global _DETAIL_BODY_CACHE_BYTES
+    if len(body) > _DETAIL_BODY_CACHE_MAX_BYTES:
+        return
+    now = time.monotonic()
+    with _DETAIL_BODY_CACHE_LOCK:
+        old = _DETAIL_BODY_CACHE.pop(key, None)
+        if old is not None:
+            _DETAIL_BODY_CACHE_BYTES -= len(old[0])
+        for stale_key in [k for k, (_, _, at) in _DETAIL_BODY_CACHE.items()
+                          if now - at > _DETAIL_BODY_CACHE_TTL_SECONDS]:
+            _DETAIL_BODY_CACHE_BYTES -= len(_DETAIL_BODY_CACHE.pop(stale_key)[0])
+        while (_DETAIL_BODY_CACHE
+               and (len(_DETAIL_BODY_CACHE) >= _DETAIL_BODY_CACHE_MAX_ENTRIES
+                    or _DETAIL_BODY_CACHE_BYTES + len(body)
+                    > _DETAIL_BODY_CACHE_MAX_BYTES)):
+            oldest_key = next(iter(_DETAIL_BODY_CACHE))
+            oldest_body, _, _ = _DETAIL_BODY_CACHE.pop(oldest_key)
+            _DETAIL_BODY_CACHE_BYTES -= len(oldest_body)
+        _DETAIL_BODY_CACHE[key] = (body, etag, now)
+        _DETAIL_BODY_CACHE_BYTES += len(body)
+
+
+def _send_json_bytes(handler, body: bytes, *, rid: str, cache: str, etag: str,
+                     last_modified=None) -> None:
+    """Send already-serialized JSON, honouring a conditional request.
+
+    The same headers `json_response` + `send_json` would have written — the
+    cache validators, then the CORS headers the allow-list grants (none today) —
+    so a memoized body is indistinguishable on the wire from a fresh one.
+    """
+    if etag and etag_matches(str(handler.headers.get("If-None-Match") or ""), etag):
+        not_modified(handler, cache=cache, etag=etag, rid=rid,
+                     last_modified=last_modified)
+        return
+    headers = list(redact.cors_headers_for(str(handler.headers.get("Origin") or "")))
+    headers.extend(_cache_headers(cache=cache, etag=etag, rid=rid,
+                                  last_modified=last_modified))
+    handler.send_bytes(body, content_type="application/json; charset=utf-8",
+                       status=200, extra_headers=headers)
+
+
+def _layer2_problem(handler, result: dict, *, rid: str, path: str,
+                    not_found_detail: str = "") -> bool:
+    """Answer a not-ok Layer-2 envelope as a §16.4 problem. True if answered."""
+    ok, code, message = _from_layer2(result)
+    if ok:
+        return False
+    detail = (not_found_detail or message) if code == "not_found" else message
+    problem(handler, code=code, rid=rid, instance=path, detail=detail)
+    return True
+
+
+def _send_ok_layer2(handler, result: dict, *, rid: str, cache: str,
+                    etag_seed: str, rev, last_modified=None,
+                    operator: bool = False) -> tuple[bytes, str]:
+    """Serialize an ok Layer-2 result once and send it.
+
+    The validator is hashed from the exact wire bytes (one `sha1`, C speed),
+    not from a second full serialization: the same body always yields the same
+    validator, a different body a different one, and the revision vector still
+    moves it when the catalog moves. Returns the (body, etag) it sent, so a
+    detail route can memoize them.
+    """
+    clean = result if operator else scrub_public(result)
+    body = json.dumps(clean, ensure_ascii=False).encode("utf-8")
+    etag = etag_for(f"{etag_seed}|{hashlib.sha1(body).hexdigest()}", rev)
+    _send_json_bytes(handler, body, rid=rid, cache=cache, etag=etag,
+                     last_modified=last_modified)
+    return body, etag
+
+
+def send_detail(handler, *, build, rid: str, path: str, cache: str,
+                etag_seed: str, rev, last_modified=None, operator: bool = False,
+                not_found_detail: str = "", db_key: str = "") -> None:
+    """A detail route (works / seasons / episodes / releases) with a body memo.
+
+    `build` is a zero-arg callable returning the Layer-2 result; it runs only
+    on a memo miss, so a repeat detail hit at the same revision never rebuilds,
+    re-scrubs or re-serializes. The key is (database, route, seed, revision
+    vector): the seed already carries the work id and any `fields` projection,
+    and the vector moves when any group the answer could depend on moves.
+    """
+    key = None
+    if cache == CACHE_DETAIL and not operator:
+        key = (db_key, path, etag_seed, rev_token(rev))
+        hit = _detail_body_get(key)
+        if hit is not None:
+            body, etag = hit
+            _send_json_bytes(handler, body, rid=rid, cache=cache, etag=etag,
+                             last_modified=last_modified)
+            return
+    result = build()
+    if _layer2_problem(handler, result, rid=rid, path=path,
+                       not_found_detail=not_found_detail):
+        return
+    if cache == CACHE_NO_STORE:
+        json_response(handler, result, rid=rid, cache=cache, etag="",
+                      last_modified=last_modified, operator=operator)
+        return
+    body, etag = _send_ok_layer2(handler, result, rid=rid, cache=cache,
+                                 etag_seed=etag_seed, rev=rev,
+                                 last_modified=last_modified, operator=operator)
+    if key is not None:
+        _detail_body_put(key, body, etag)
+
+
 def send_layer2(handler, result: dict, *, rid: str, path: str, cache: str,
                 etag_seed: str, rev, last_modified=None, operator: bool = False,
                 not_found_detail: str = "") -> None:
@@ -547,22 +733,15 @@ def send_layer2(handler, result: dict, *, rid: str, path: str, cache: str,
 
     `rev` is the whole `version_vector()` (§16.2), so the validator a client reuses
     moves whenever any group that this reply could depend on moved."""
-    ok, code, message = _from_layer2(result)
-    if not ok:
-        detail = (not_found_detail or message) if code == "not_found" else message
-        problem(handler, code=code, rid=rid, instance=path, detail=detail)
+    if _layer2_problem(handler, result, rid=rid, path=path,
+                       not_found_detail=not_found_detail):
         return
-    if cache != CACHE_NO_STORE:
-        etag = etag_for(f"{etag_seed}|{json.dumps(result, sort_keys=True, default=str)}",
-                        rev)
-        if etag_matches(str(handler.headers.get("If-None-Match") or ""), etag):
-            not_modified(handler, cache=cache, etag=etag, rid=rid,
-                         last_modified=last_modified)
-            return
-    else:
-        etag = ""
-    json_response(handler, result, rid=rid, cache=cache, etag=etag,
-                  last_modified=last_modified, operator=operator)
+    if cache == CACHE_NO_STORE:
+        json_response(handler, result, rid=rid, cache=cache, etag="",
+                      last_modified=last_modified, operator=operator)
+        return
+    _send_ok_layer2(handler, result, rid=rid, cache=cache, etag_seed=etag_seed,
+                    rev=rev, last_modified=last_modified, operator=operator)
 
 
 # ── catalog revision / readiness ─────────────────────────────────────────────
@@ -1491,33 +1670,43 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
                     problem(handler, code="invalid_params", rid=rid, instance=path,
                             detail="Season number must be an integer.")
                     return True
-                result = catalog_api.season_detail(conn, work_id=ident,
-                                                   season_number=number,
-                                                   include_adult=bool(operator))
-                seed, detail = f"season|{ident}|{number}", "No such season in the catalog."
-            else:
-                if len(segments) not in (2,):
-                    problem(handler, code="not_found", rid=rid, instance=path,
-                            detail="No such v2 route.")
-                    return True
-                result = catalog_api.work_detail(
-                    conn, work_id=ident, include_adult=bool(operator),
-                    fields=_q_list(query, "fields") or None,
-                    include_provenance=bool(operator))
-                seed, detail = f"work|{ident}|{_q(query, 'fields')}", \
-                    "No such work in the catalog."
-            send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
-                        etag_seed=seed, rev=versions, last_modified=stamp,
-                        operator=operator, not_found_detail=detail)
+                send_detail(handler,
+                            build=lambda: catalog_api.season_detail(
+                                conn, work_id=ident, season_number=number,
+                                include_adult=bool(operator)),
+                            rid=rid, path=path, cache=CACHE_DETAIL,
+                            etag_seed=f"season|{ident}|{number}", rev=versions,
+                            last_modified=stamp, operator=operator,
+                            not_found_detail="No such season in the catalog.",
+                            db_key=str(db_path))
+                return True
+            if len(segments) not in (2,):
+                problem(handler, code="not_found", rid=rid, instance=path,
+                        detail="No such v2 route.")
+                return True
+            send_detail(handler,
+                        build=lambda: catalog_api.work_detail(
+                            conn, work_id=ident, include_adult=bool(operator),
+                            fields=_q_list(query, "fields") or None,
+                            include_provenance=bool(operator)),
+                        rid=rid, path=path, cache=CACHE_DETAIL,
+                        etag_seed=f"work|{ident}|{_q(query, 'fields')}",
+                        rev=versions, last_modified=stamp,
+                        operator=operator,
+                        not_found_detail="No such work in the catalog.",
+                        db_key=str(db_path))
             return True
 
         if head == "episodes" and len(segments) == 2:
-            result = catalog_api.episode_detail(conn, episode_id=segments[1],
-                                                include_adult=bool(operator))
-            send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
+            send_detail(handler,
+                        build=lambda: catalog_api.episode_detail(
+                            conn, episode_id=segments[1],
+                            include_adult=bool(operator)),
+                        rid=rid, path=path, cache=CACHE_DETAIL,
                         etag_seed=f"episode|{segments[1]}", rev=versions,
                         last_modified=stamp, operator=operator,
-                        not_found_detail="No such episode in the catalog.")
+                        not_found_detail="No such episode in the catalog.",
+                        db_key=str(db_path))
             return True
 
         if head == "releases" and len(segments) == 2:
@@ -1527,13 +1716,15 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
             # legacy id here (the app never calls this route; its detail
             # comes from v1). Translating would redirect a genuine cat
             # id that also exists as a legacy id to a different print.
-            result = catalog_api.release_detail(
-                conn, release_id=segments[1],
-                include_adult=bool(operator))
-            send_layer2(handler, result, rid=rid, path=path, cache=CACHE_DETAIL,
+            send_detail(handler,
+                        build=lambda: catalog_api.release_detail(
+                            conn, release_id=segments[1],
+                            include_adult=bool(operator)),
+                        rid=rid, path=path, cache=CACHE_DETAIL,
                         etag_seed=f"release|{segments[1]}", rev=versions,
                         last_modified=stamp, operator=operator,
-                        not_found_detail="No such print in the catalog.")
+                        not_found_detail="No such print in the catalog.",
+                        db_key=str(db_path))
             return True
 
         if head == "resolve" and len(segments) == 2:
