@@ -263,6 +263,12 @@ PROBE_READ_BYTES = 200_000
 # `unwrap_mxdrop` once the resolver rewrites `/f/` to `/e/`.
 MXDROP_HOST_RE = re.compile(r"(?:^|\.)(?:mxdrop|mixdrop)\.(?:to|top|click|ag)$", re.I)
 MXDROP_CONTENT_RE = re.compile(r"^/(?:e|embed)/[A-Za-z0-9_-]+/?$", re.I)
+# The page mxdrop serves for a deleted file: HTTP 200, MDCore present, no
+# packer, and its own words are "WE ARE SORRY / We can't find the video you
+# are looking for" (measured 2026-11-13 on 4/4 failing embed pages). A page
+# that says that is a dead file, not an unpacking failure.
+MXDROP_NOT_FOUND_RE = re.compile(
+    r"We can'?t find the video you are looking for|WE ARE SORRY", re.I)
 
 # pkembed serves the same page under two paths: `/embed-<filecode>.html` and the
 # bare `<filecode>.html`. Both were verified live on 2026-10-28 — the bare form
@@ -353,6 +359,7 @@ SERVICE_IQSMART = "iqsmart"
 SERVICE_FILMU = "filmu"
 SERVICE_CINEVERSE = "cineverse"
 SERVICE_VIDOUT = "vidout"
+SERVICE_DOODSTREAM = "doodstream"
 
 VIDBOLT_HOST_RE = re.compile(r"(?:^|\.)vidbolt\.(?:xyz|pro)$", re.I)
 VIDBOLT_CONTENT_RE = re.compile(
@@ -383,6 +390,33 @@ FILMU_CONTENT_RE = re.compile(
 CINEVERSE_HOST_RE = re.compile(r"(?:^|\.)(?:modiplay\.xyz|cineverse\.[a-z]+)$", re.I)
 CINEVERSE_CONTENT_RE = re.compile(
     r"^/embed/tmdb/(?:movie|tv)/?$",
+    re.I)
+# The proxy's current shape (measured 2026-11-13): a wrapper page carrying an
+# <iframe> to the vidrift embed instead of a directSrc. Only a vidrift iframe
+# chains through unwrap_vidrift; any other iframe is not a stream offer.
+CINEVERSE_VIDRIFT_IFRAME_RE = re.compile(
+    r"""<iframe\b[^>]*\bsrc\s*=\s*["'](https?://embed\.vidrift\.net/embed/(?:movie|tv)/[^"'\s<>]+)["']""",
+    re.I)
+# Doodstream (dood): the stored rows are doodstream.com/d/<id>; the chain runs
+# from the /e/<id> embed page, which the host itself redirects to its current
+# brand host (playmogo.com, measured 2026-11-13). The mirror set is the hosts
+# the service has published under; the pass_md5 step always runs against the
+# host the embed fetch actually landed on, so a future rename needs no edit.
+DOODSTREAM_HOST_RE = re.compile(
+    r"(?:^|\.)(?:doodstream\.com|dood\.(?:watch|pm|to|la|so|li|sh)|playmogo\.com)$",
+    re.I)
+DOODSTREAM_CONTENT_RE = re.compile(r"^/(?:e|d)/([A-Za-z0-9]+)/?$", re.I)
+# The host's own words for a deleted file, served with HTTP 200 (measured
+# 2026-11-13): a page that says this is a dead file, not an unpacking failure.
+DOODSTREAM_REMOVED_RE = re.compile(
+    r"The resource you are looking for has been removed", re.I)
+# The embed page's hand-off to the direct URL, in either published form: a
+# `pass_md5` assignment or a literal /pass_md5/<token> URL. The token is a
+# bare alphanumeric string (no shorter than 16 characters, measured against
+# the documented CloudStream/JDownloader chain — no live file was found in
+# the 2026-11-13 sample to read the literal shape from, so both forms match).
+DOODSTREAM_PASS_MD5_RE = re.compile(
+    r"""pass_md5["']?\s*[:=]\s*["']([A-Za-z0-9]{16,})["']|/pass_md5/([A-Za-z0-9]{16,})""",
     re.I)
 VIDOUT_HOST_RE = re.compile(r"(?:^|\.)vidout\.pages\.dev$", re.I)
 # Two page shapes live in the catalog: /movie/<imdb> and /tv/<imdb>/<s>/<e>
@@ -1267,8 +1301,14 @@ def _withheld_referrer(result: dict, referer: str | None) -> None:
             "referrer withheld: this host 403s on the catalog site's referer")
 
 
-def _unpack_embed_page(fetch, result: dict) -> str:
-    """The packed script text of the embed page; failures are recorded in `result`."""
+def _unpack_embed_page(fetch, result: dict, not_found_re=None) -> str:
+    """The packed script text of the embed page; failures are recorded in `result`.
+
+    `not_found_re` is a host's own "this file is gone" wording, matched against
+    the page text: when it hits, the verdict is "dead" — a page that says the
+    video cannot be found is a dead file, not an unpacking failure. Callers
+    that pass none keep the old "unknown" for a page with no packed config.
+    """
     status, body, _headers, _final = fetch(result["embed_url"])
     if status != 200:
         result["status"] = "dead" if status in (404, 410) else (
@@ -1278,8 +1318,12 @@ def _unpack_embed_page(fetch, result: dict) -> str:
     page = body if isinstance(body, str) else (body or b"").decode("utf-8", "replace")
     config = find_packed_config(page)
     if not config:
-        result["status"] = "unknown"
-        result["notes"].append("embed page carries no recognisable packed config")
+        if not_found_re is not None and not_found_re.search(page):
+            result["status"] = "dead"
+            result["notes"].append("embed page says the video cannot be found")
+        else:
+            result["status"] = "unknown"
+            result["notes"].append("embed page carries no recognisable packed config")
     return config
 
 
@@ -1337,7 +1381,7 @@ def unwrap_mxdrop(embed_url: str, fetch=None, verify: bool = True,
         result["notes"].append("not an mxdrop embed URL")
         return result
 
-    config = _unpack_embed_page(fetch, result)
+    config = _unpack_embed_page(fetch, result, not_found_re=MXDROP_NOT_FOUND_RE)
     if not config:
         return result
     fields = parse_mdcore(config)
@@ -1720,11 +1764,13 @@ def unwrap_animahd(url: str, fetch=None, verify: bool = True,
     — the catalog already holds everything that lasts. `verify=True` spends three
     requests and never more: player page, secure page, one Range probe.
 
-    Every request here must carry a User-Agent. The secure host was measured
-    answering 403 to a request that had none and 200 to the same request with a
-    normal browser UA and no Referer at all; `http_request` supplies the UA header
-    and this module never attaches a Referer to a media request, so both halves
-    of that measurement are satisfied by the seam rather than by caller care.
+    Every request here must carry a User-Agent, which `http_request` supplies.
+    The secure host is Referer-gated: measured 2026-11-13 on four live targets,
+    the same request answers 403 with a browser UA alone and 200 with the
+    player page as Referer, so the secure-page fetch carries
+    `Referer: <player URL>` — the page the browser would have come from. An
+    earlier note blamed the 403 on a missing User-Agent; that was wrong (the UA
+    was always sent) and the note is corrected here, not just the code.
     """
     fetch = fetch or http_request
     result = _new_result(SERVICE_ANIMAHD, url)
@@ -1758,14 +1804,15 @@ def unwrap_animahd(url: str, fetch=None, verify: bool = True,
                                f"not the {result['file_id']} the row named")
     result["bridge_url"] = target
 
-    status, body, _headers, _final = fetch(target)
+    status, body, _headers, _final = fetch(target, headers={"Referer": result["embed_url"]})
     secure = _page_text(body)
     if status != 200:
         result["status"] = ("dead" if status in (404, 410)
                             else "blocked" if status in (401, 403, 429) else "unknown")
         result["notes"].append(
             f"secure page HTTP {status}"
-            + (" — this host answers 403 to a request that carries no User-Agent"
+            + (" — this host answers 403 unless the request carries the player "
+               "page as Referer"
                if status in (401, 403) else ""))
         return result
 
@@ -2024,6 +2071,97 @@ def unwrap_vidrift(url: str, fetch=None, verify: bool = True,
     _expires_at, result["expires_in"] = duration_expiry_from_url(result["final_url"])
     result["signed_params"] = sorted(signature_params(result["final_url"]))
     return _finish_media(result, fetch, verify, req_headers={"Referer": "https://embed.vidrift.net/"})
+
+
+def doodstream_parse_url(url: str) -> dict | None:
+    """
+    Parse a Doodstream URL: returns {"id": str} or None.
+
+    Both published shapes name the same file: /d/<id> (the file page) and
+    /e/<id> (the embed page). The chain runs from the embed page either way.
+    """
+    clean = (url or "").strip()
+    parts = urllib.parse.urlsplit(clean if "://" in clean else f"https:{clean}")
+    host = (parts.hostname or "").lower()
+    if not host or not DOODSTREAM_HOST_RE.search(host):
+        return None
+    match = DOODSTREAM_CONTENT_RE.match(parts.path or "/")
+    if not match:
+        return None
+    return {"id": match.group(1)}
+
+
+def is_doodstream_url(url: str) -> bool:
+    return doodstream_parse_url(url) is not None
+
+
+def unwrap_doodstream(url: str, fetch=None, verify: bool = True,
+                      referer: str | None = None) -> dict:
+    """
+    Doodstream URL -> {final_url, service, is_temporary, expires_in, status, notes, …}.
+
+    Chain (the documented CloudStream/JDownloader chain; NO live file was found
+    in the 2026-11-13 sample to read the literal page shape from, so the two
+    published `pass_md5` forms both match and the live yield below is the
+    honest check): /d/<id> or /e/<id> -> the embed page (the host redirects to
+    its current brand host, playmogo.com as measured) -> the page's `pass_md5`
+    token -> GET /pass_md5/<token> on the host the embed fetch landed on,
+    with the embed page as Referer -> the response body is the direct video
+    URL, which is then Range-probed like every other byte endpoint. The
+    direct URL carries its own token/expiry query, so it is re-resolved per
+    play and never served from storage. `verify=False` stops after the
+    pass_md5 answer (status `unverified`).
+    """
+    fetch = fetch or http_request
+    clean_url = (url or "").strip()
+    result = _new_result(SERVICE_DOODSTREAM, clean_url)
+    _withheld_referrer(result, referer)
+    parsed = doodstream_parse_url(clean_url)
+    if not parsed:
+        result["status"] = "unknown"
+        result["notes"].append("not a doodstream URL")
+        return result
+
+    host = (urllib.parse.urlsplit(
+        clean_url if "://" in clean_url else f"https:{clean_url}").hostname or "")
+    embed_url = f"https://{host}/e/{parsed['id']}"
+    status, body, _headers, final_url = fetch(embed_url)
+    if status != 200:
+        result["status"] = ("dead" if status in (404, 410)
+                            else "blocked" if status in (401, 403, 429) else "unknown")
+        result["notes"].append(f"doodstream embed page HTTP {status}")
+        return result
+    page = _page_text(body)
+    if DOODSTREAM_REMOVED_RE.search(page):
+        result["status"] = "dead"
+        result["notes"].append("doodstream says the resource has been removed")
+        return result
+
+    m = DOODSTREAM_PASS_MD5_RE.search(page)
+    if not m:
+        result["status"] = "unknown"
+        result["notes"].append("doodstream embed page publishes no pass_md5")
+        return result
+    md5 = m.group(1) or m.group(2)
+    # The pass_md5 endpoint lives on the host the embed fetch landed on (the
+    # redirect target), not the host the catalog row named.
+    landed = final_url or embed_url
+    pass_url = urllib.parse.urljoin(landed, f"/pass_md5/{md5}")
+    status, body, _headers, _final = fetch(pass_url, headers={"Referer": landed})
+    direct = _page_text(body).strip()
+    if status != 200 or not direct.startswith("http"):
+        result["status"] = "unknown"
+        result["notes"].append(
+            f"doodstream pass_md5 HTTP {status}"
+            + (" — the answer was not a direct URL" if status == 200 else ""))
+        return result
+
+    result["final_url"] = direct
+    result["sources"] = [{"url": direct, "mime": "video/mp4", "label": ""}]
+    _expires_at, result["expires_in"] = duration_expiry_from_url(direct)
+    result["signed_params"] = sorted(signature_params(direct))
+    return _finish_media(result, fetch, verify,
+                         req_headers={"Referer": landed})
 
 
 def unwrap_vidout(url: str, fetch=None, verify: bool = True,
@@ -2458,6 +2596,18 @@ def unwrap_cineverse(url: str, fetch=None, verify: bool = True,
             result["signed_params"] = sorted(signature_params(result["final_url"]))
             return _finish_media(result, fetch, verify, req_headers={"Referer": "https://embed.vidrift.net/"})
 
+    # The proxy's current shape (measured 2026-11-13): a wrapper page with an
+    # <iframe> to the vidrift embed instead of a directSrc or EMBED_URL. The
+    # iframe is the player the page actually shows, so it is tried before the
+    # older EMBED_URL fallback. Chain through the vidrift unwrapper and keep
+    # the cineverse service label.
+    m_iframe = CINEVERSE_VIDRIFT_IFRAME_RE.search(page)
+    if m_iframe and is_vidrift_embed(m_iframe.group(1)):
+        vr_verdict = unwrap_vidrift(m_iframe.group(1), fetch=fetch, verify=verify)
+        vr_verdict["service"] = SERVICE_CINEVERSE
+        vr_verdict["notes"].insert(0, f"cineverse chained through vidrift: {m_iframe.group(1)}")
+        return vr_verdict
+
     # Check fallback EMBED_URL (e.g. vidbolt)
     m_embed = re.search(r"""var\s+EMBED_URL\s*=\s*['"]([^'"]+)['"]""", page)
     if m_embed:
@@ -2468,8 +2618,11 @@ def unwrap_cineverse(url: str, fetch=None, verify: bool = True,
             vb_verdict["notes"].insert(0, f"cineverse chained through vidbolt: {embed_target}")
             return vb_verdict
 
-    result["status"] = "dead"
-    result["notes"].append("cineverse proxy returned neither active vidrift stream nor supported embed")
+    # A proxy page that carries none of the three known offers is a shape that
+    # moved again, not a dead file: the title may still be on the backend.
+    result["status"] = "unknown"
+    result["notes"].append("cineverse proxy page carries no vidrift stream, vidrift "
+                           "embed, or supported fallback embed")
     return result
 
 
@@ -4228,6 +4381,7 @@ SERVICE_RESOLVERS = (
     (SERVICE_IQSMART, is_iqsmart_embed, unwrap_iqsmart),
     (SERVICE_FILMU, is_filmu_embed, unwrap_filmu),
     (SERVICE_CINEVERSE, is_cineverse_embed, unwrap_cineverse),
+    (SERVICE_DOODSTREAM, is_doodstream_url, unwrap_doodstream),
     (SERVICE_GDRIVE, is_gdrive_link, unwrap_gdrive),
     (SERVICE_ANIMAHD, is_animahd_player, unwrap_animahd),
     (SERVICE_CASTLE, is_castle_page, unwrap_castle),
@@ -4265,6 +4419,7 @@ RESOLVER_BY_SERVICE = {
     SERVICE_IQSMART: unwrap_iqsmart,
     SERVICE_FILMU: unwrap_filmu,
     SERVICE_CINEVERSE: unwrap_cineverse,
+    SERVICE_DOODSTREAM: unwrap_doodstream,
     SERVICE_VIDOUT: unwrap_vidout,
 }
 

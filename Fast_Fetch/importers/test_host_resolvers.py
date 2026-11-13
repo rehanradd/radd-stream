@@ -674,6 +674,26 @@ class TestUnwrapMxdrop(unittest.TestCase):
         self.assertEqual(verdict["status"], "unknown")
         self.assertIn("no recognisable packed config", verdict["notes"][0])
 
+    def test_a_deleted_file_page_is_dead_not_unknown(self):
+        # Measured 2026-11-13: mxdrop serves HTTP 200 + MDCore + no packer for
+        # a deleted file, with its own "WE ARE SORRY" words. That is a dead
+        # file, not an unpacking failure.
+        page = ('<html><head></head><body>'
+                '<script>MDCore.ref = "9nlmvvemfxe1gr";</script>'
+                '<div class="tb error"><h2>WE ARE SORRY</h2>'
+                "<p>We can't find the video you are looking for.</p></div>"
+                '</body></html>')
+        fetch = scripted_fetch({EMBED: (200, page, {})})
+        verdict = hr.unwrap_mxdrop(EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+        self.assertIn("cannot be found", json.dumps(verdict["notes"]))
+
+    def test_the_mxdrop_click_domain_is_recognised(self):
+        # The pages moved mxdrop.to -> mxdrop.click (measured 2026-11-13: the
+        # old host 301s to the new one); the recogniser already covers it.
+        self.assertTrue(hr.is_mxdrop_embed("https://mxdrop.click/e/abc123"))
+        self.assertTrue(hr.is_mxdrop_embed("https://mxdrop.to/e/abc123"))
+
     def test_missing_wurl_is_unknown(self):
         page = PACKED_PAGE.replace(
             '1.21="//2.5.4/20/19.3?18=17&16=15&14=13"', '1.21=""')
@@ -1878,6 +1898,200 @@ class TestCineverseUnpack(unittest.TestCase):
         self.assertEqual(verdict["service"], "cineverse")
         self.assertEqual(verdict["final_url"], "https://rozgarlelo.modiplay.xyz/stream_proxy.php?url=https%3A%2F%2Fexample.com%2Fmaster.m3u8")
 
+    def test_vidrift_iframe_fallback_active(self):
+        # Measured 2026-11-13: the proxy page is now a wrapper with an
+        # <iframe> to the vidrift embed instead of a directSrc or EMBED_URL.
+        proxy_html = (
+            '<html><head></head><body>'
+            '<iframe id="emb" src="https://embed.vidrift.net/embed/movie/550" '
+            'allowfullscreen="true"></iframe></body></html>'
+        )
+        vidrift_html = """
+        <html><body><script>
+        var embedMeta = {
+            "tmdbId": "550",
+            "type": "movie",
+            "orionStreams": [
+                {"url": "/api/orion/abc123hash/master.m3u8?s=123&e=456", "type": "hls", "name": "Orion"}
+            ],
+            "bigbangSubtitles": []
+        };
+        </script></body></html>
+        """
+        fetch = scripted_fetch({
+            "proxy.php": (200, proxy_html, {"content-type": "text/html"}),
+            "embed/movie/550": (200, vidrift_html, {"content-type": "text/html"}),
+            "master.m3u8": (200, b"#EXTM3U\n#EXT-X-VERSION:3", {"content-type": "application/vnd.apple.mpegurl"}),
+        })
+        verdict = hr.unwrap_cineverse("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=550", fetch=fetch)
+        self.assertEqual(verdict["status"], "active")
+        self.assertEqual(verdict["service"], "cineverse")
+        self.assertEqual(verdict["final_url"], "https://embed.vidrift.net/api/orion/abc123hash/master.m3u8?s=123&e=456")
+        self.assertIn("chained through vidrift", json.dumps(verdict["notes"]))
+
+    def test_a_proxy_page_with_no_offer_is_unknown_not_dead(self):
+        # A proxy page that carries none of the three known offers is a shape
+        # that moved again, not a dead file.
+        proxy_html = '<html><body><p>player loading</p></body></html>'
+        fetch = scripted_fetch({
+            "proxy.php": (200, proxy_html, {"content-type": "text/html"}),
+        })
+        verdict = hr.unwrap_cineverse("https://rozgarlelo.modiplay.xyz/embed/tmdb/movie?id=550", fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no vidrift stream, vidrift embed, or supported fallback embed",
+                      json.dumps(verdict["notes"]))
+
+
+# ---------------------------------------------------------------------------
+# Doodstream: recognition + the pass_md5 chain (Phase C item 6)
+#
+# The fixtures follow the documented CloudStream/JDownloader chain — no live
+# file was found in the 2026-11-13 sample to read the literal page shape
+# from, so the tests pin the chain the code implements and the live yield
+# probe (not these fixtures) is what proves a real file resolves.
+# ---------------------------------------------------------------------------
+
+DOOD_EMBED = "https://doodstream.com/e/valrxqbg7maz"
+DOOD_FILE = "https://doodstream.com/d/valrxqbg7maz"
+DOOD_PASS = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+DOOD_EMBED_PAGE = (
+    '<html><head></head><body>'
+    '<script>var pass_md5 = "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";</script>'
+    '</body></html>'
+)
+DOOD_DIRECT = ("https://xyz.doodcdn.co/ab12cd34ef56/valrxqbg7maz.mp4"
+               "?token=abcdef123456&expiry=1799999999")
+
+
+class TestDoodstreamRecognition(unittest.TestCase):
+    def test_both_published_shapes_name_the_same_file(self):
+        self.assertEqual(hr.doodstream_parse_url(DOOD_EMBED), {"id": "valrxqbg7maz"})
+        self.assertEqual(hr.doodstream_parse_url(DOOD_FILE), {"id": "valrxqbg7maz"})
+        self.assertTrue(hr.is_doodstream_url(DOOD_EMBED))
+        self.assertTrue(hr.is_doodstream_url(DOOD_FILE))
+
+    def test_mirrors_and_the_redirect_target_are_doodstream(self):
+        self.assertTrue(hr.is_doodstream_url("https://dood.watch/e/abc123"))
+        self.assertTrue(hr.is_doodstream_url("https://dood.pm/d/abc123"))
+        self.assertTrue(hr.is_doodstream_url("https://playmogo.com/e/abc123"))
+
+    def test_other_hosts_and_paths_are_not_doodstream(self):
+        for url in ("https://doodstream.com/x/abc123",
+                    "https://doodstream.com/e/",
+                    "https://example.com/e/abc123",
+                    "https://doodstream.com.evil.test/e/abc123",
+                    "not a url"):
+            self.assertFalse(hr.is_doodstream_url(url), url)
+
+
+class TestUnwrapDoodstream(unittest.TestCase):
+    def scripted(self, **over):
+        script = {
+            "doodstream.com/e/": (200, DOOD_EMBED_PAGE, {"content-type": "text/html"}),
+            "pass_md5/": (200, DOOD_DIRECT, {"content-type": "text/plain"}),
+            ".mp4": (206, b"\x00\x00\x00 ftypisom",
+                     {"content-type": "video/mp4", "content-range": "bytes 0-511/999"}),
+        }
+        script.update(over)
+        return scripted_fetch(script)
+
+    def test_full_chain_active_from_the_embed_page(self):
+        fetch = self.scripted()
+        verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual(verdict["service"], "doodstream")
+        self.assertEqual(verdict["final_url"], DOOD_DIRECT)
+        self.assertTrue(verdict["is_temporary"])
+        self.assertEqual(verdict["size_bytes"], 999)
+
+    def test_the_file_page_runs_the_same_chain(self):
+        fetch = self.scripted()
+        verdict = hr.unwrap_doodstream(DOOD_FILE, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual(verdict["final_url"], DOOD_DIRECT)
+        # The /d/ page is normalised to the /e/ embed page before any fetch.
+        self.assertTrue(fetch.calls[0][0].endswith("/e/valrxqbg7maz"))
+
+    def test_the_pass_md5_step_runs_on_the_host_the_embed_landed_on(self):
+        # Measured 2026-11-13: doodstream.com/e/<id> 302s to
+        # playmogo.com/e/<id>; the /pass_md5/ step must run there, not on the
+        # host the catalog row named. scripted_fetch cannot return a different
+        # final URL, so this one uses a hand-rolled fetch.
+        calls = []
+
+        def fetch(url, headers=None, timeout=None, method="GET", follow=True, data=None):
+            calls.append((url, headers or {}))
+            if url == DOOD_EMBED:
+                return 200, DOOD_EMBED_PAGE, {"content-type": "text/html"}, \
+                    "https://playmogo.com/e/valrxqbg7maz"
+            if url == "https://playmogo.com/pass_md5/" + DOOD_PASS:
+                return 200, DOOD_DIRECT, {"content-type": "text/plain"}, url
+            if url == DOOD_DIRECT:
+                return 206, b"\x00\x00\x00 ftypisom", \
+                    {"content-type": "video/mp4",
+                     "content-range": "bytes 0-511/999"}, url
+            return 404, b"", {"content-type": "text/html"}, url
+
+        verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "active", verdict["notes"])
+        self.assertEqual([u for u, _h in calls],
+                         [DOOD_EMBED,
+                          "https://playmogo.com/pass_md5/" + DOOD_PASS,
+                          DOOD_DIRECT])
+        self.assertEqual(calls[1][1].get("Referer"),
+                         "https://playmogo.com/e/valrxqbg7maz")
+
+    def test_a_removed_file_is_dead_not_unknown(self):
+        # Measured 2026-11-13: the host's own words, served with HTTP 200.
+        page = ("The resource you are looking for has been removed "
+                "or is temporarily unavailable.")
+        fetch = self.scripted(**{"doodstream.com/e/": (200, page, {})})
+        verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "dead")
+        self.assertIn("has been removed", json.dumps(verdict["notes"]))
+
+    def test_an_embed_page_with_no_pass_md5_is_unknown(self):
+        fetch = self.scripted(**{
+            "doodstream.com/e/": (200, "<html><body>player</body></html>", {})})
+        verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("no pass_md5", json.dumps(verdict["notes"]))
+
+    def test_a_pass_md5_step_that_refuses_is_unknown(self):
+        fetch = self.scripted(**{"pass_md5/": (403, b"", {})})
+        verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("pass_md5 HTTP 403", json.dumps(verdict["notes"]))
+
+    def test_a_pass_md5_answer_that_is_not_a_url_is_unknown(self):
+        fetch = self.scripted(**{"pass_md5/": (200, b"not a link", {})})
+        verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("not a direct URL", json.dumps(verdict["notes"]))
+
+    def test_embed_page_failure_shapes(self):
+        for status, expected in ((404, "dead"), (410, "dead"), (403, "blocked"),
+                                 (429, "blocked"), (500, "unknown")):
+            fetch = self.scripted(**{"doodstream.com/e/": (status, b"", {})})
+            verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch)
+            self.assertEqual(verdict["status"], expected, status)
+            self.assertIn(f"embed page HTTP {status}", json.dumps(verdict["notes"]))
+
+    def test_verify_off_stops_after_the_pass_md5_answer(self):
+        fetch = self.scripted()
+        verdict = hr.unwrap_doodstream(DOOD_EMBED, fetch=fetch, verify=False)
+        self.assertEqual(verdict["status"], "unverified")
+        self.assertEqual(verdict["final_url"], DOOD_DIRECT)
+        self.assertEqual(len(fetch.calls), 2)
+        self.assertIn("not probed", json.dumps(verdict["notes"]))
+
+    def test_a_non_doodstream_url_is_refused_before_any_request(self):
+        fetch = scripted_fetch({})
+        verdict = hr.unwrap_doodstream("https://example.com/e/abc123", fetch=fetch)
+        self.assertEqual(verdict["status"], "unknown")
+        self.assertIn("not a doodstream URL", verdict["notes"])
+        self.assertEqual(fetch.calls, [])
+
 
 # ---------------------------------------------------------------------------
 # Google Drive: recognition, the interstitial, the container header
@@ -2225,13 +2439,19 @@ class TestUnwrapAnimahd(unittest.TestCase):
         verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=self.scripted())
         self.assertIn("the page declares video/mp4", json.dumps(verdict["notes"]))
 
-    def test_every_request_names_a_user_agent_and_no_referer(self):
-        # Measured: the secure host answers 403 to a request with no User-Agent,
-        # and 200 to the same request with a browser UA and no Referer at all.
+    def test_the_secure_page_fetch_carries_the_player_page_as_referer(self):
+        # Measured 2026-11-13 on four live targets: the secure host answers
+        # 403 with a browser UA alone and 200 with the player page as Referer.
+        # The player-page fetch and the byte probe carry no Referer; only the
+        # secure-page fetch carries one, and it is exactly the player URL.
+        # (An earlier version of this test asserted no Referer anywhere and
+        # blamed the 403 on a missing User-Agent; both were wrong — the UA was
+        # always sent, and the missing header was the Referer.)
         seen = {}
 
         def fake_open(request, timeout, follow=True):
-            seen.setdefault("headers", []).append(dict(request.header_items()))
+            seen.setdefault("headers", []).append(
+                (request.full_url, dict(request.header_items())))
             body = (AH_PLAYER_PAGE if "animahd.com" in request.full_url
                     else AH_SECURE_PAGE if "animahd.fun" in request.full_url
                     else AH_WORKER_HEAD)
@@ -2245,9 +2465,13 @@ class TestUnwrapAnimahd(unittest.TestCase):
             verdict = hr.unwrap_animahd(AH_PLAYER_URL, referer="https://animahd.com/x")
         self.assertEqual(verdict["status"], "active", verdict["notes"])
         self.assertEqual(len(seen["headers"]), 3)
-        for headers in seen["headers"]:
-            self.assertEqual(headers.get("User-agent"), hr.USER_AGENT)
-            self.assertNotIn("Referer", headers)
+        by_url = dict(seen["headers"])
+        self.assertEqual(by_url[AH_PLAYER_URL].get("User-agent"), hr.USER_AGENT)
+        self.assertNotIn("Referer", by_url[AH_PLAYER_URL])
+        self.assertEqual(by_url[AH_SECURE_URL].get("User-agent"), hr.USER_AGENT)
+        self.assertEqual(by_url[AH_SECURE_URL].get("Referer"), AH_PLAYER_URL)
+        self.assertEqual(by_url[AH_WORKER_URL].get("User-agent"), hr.USER_AGENT)
+        self.assertNotIn("Referer", by_url[AH_WORKER_URL])
 
     def test_the_signed_query_is_named_but_its_token_is_not_an_expiry(self):
         verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=self.scripted())
@@ -2313,7 +2537,7 @@ class TestUnwrapAnimahd(unittest.TestCase):
                          "https://theultimateanimehub.animahd.fun/?id=9zOtherFileIdValue000000000000000")
         self.assertEqual(verdict["status"], "active", verdict["notes"])
 
-    def test_a_secure_page_that_refuses_names_the_user_agent_rule(self):
+    def test_a_secure_page_that_refuses_names_the_referer_rule(self):
         for status, expected in ((403, "blocked"), (404, "dead"), (500, "unknown")):
             fetch = self.scripted(**{"animahd.fun/?id=": (status, b"", {})})
             verdict = hr.unwrap_animahd(AH_PLAYER_URL, fetch=fetch)
@@ -2322,7 +2546,7 @@ class TestUnwrapAnimahd(unittest.TestCase):
                                 for n in verdict["notes"]),
                             f"no 'secure page HTTP {status}' note in {verdict['notes']}")
             self.assertEqual(("403" if expected == "blocked" else ""),
-                             "403" if "no User-Agent" in json.dumps(verdict["notes"]) else "")
+                             "403" if "player page as Referer" in json.dumps(verdict["notes"]) else "")
 
     def test_the_google_quota_page_is_a_blocked_file_not_a_missing_one(self):
         page = AH_SECURE_PAGE.replace(
@@ -2589,6 +2813,7 @@ class TestDispatcher(unittest.TestCase):
             "filmu": hr.unwrap_filmu,
             "cineverse": hr.unwrap_cineverse,
             "vidout": hr.unwrap_vidout,
+            "doodstream": hr.unwrap_doodstream,
         }
         for service, fn in expected.items():
             self.assertIs(hr.resolver_for_service(service), fn, service)

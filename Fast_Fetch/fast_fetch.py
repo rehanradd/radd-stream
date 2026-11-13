@@ -6691,7 +6691,13 @@ RESOLVE_FAILURE_CLASSES = ("probe_failed", "no_unwrapper", "unwrap_failed")
 #: 2026-11-13): filepress copies failed under v3 with no unwrapper, so
 #: their failure records are stale and the rows deserve one fresh press
 #: now that the downlaod/downlaod2 chain exists.
-RESOLVER_VERSION = 4
+#: 5 — Phase C items 5-7 (2026-11-13): the animahd secure page is
+#: Referer-gated (rows failed under v4 with a 403 that was misread as a
+#: User-Agent problem), mxdrop's deleted-file page now resolves "dead"
+#: instead of "unknown", cineverse chains through the vidrift iframe the
+#: proxy now publishes, and doodstream has an unwrapper for the first
+#: time — every one of those rows deserves one fresh press.
+RESOLVER_VERSION = 5
 
 
 def _is_transport_verdict(verdict) -> bool:

@@ -139,7 +139,7 @@ _EMBED_SERVICES = {
 _SERVER_RESOLVABLE_SERVICES = frozenset({
     "cineverse", "vidrift", "vidbolt", "filmu", "iqsmart",
     "streamtape", "stream", "streamwish", "mixdrop", "voe", "vidhide",
-    "1xplayer", "uploadflix", "vidout",
+    "1xplayer", "uploadflix", "vidout", "doodstream",
 })
 _BRIDGE_SERVICES = {
     "shortink", "shortlink", "linkvertise", "ezylink", "vlink", "shrinkme", "urlshort",
