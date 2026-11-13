@@ -4212,6 +4212,24 @@ _WORKS_CACHE_TTL_SECONDS = 120.0
 _WORKS_CACHE_MAX_ENTRIES = 32
 _WORKS_LIST_CACHE: dict = {}
 
+#: Cap on the posts the unfiltered works browse groups per request.
+#: With no title restriction the grouping scan reads the whole
+#: filtered post set and groups it in Python (`works.group_posts`
+#: is O(groups * WINDOW)); on the live catalog (~225k posts) that
+#: runs 20–44 s and the route answers 503 `search_timeout` —
+#: measured 2026-11-13 on `/api/v1/works?q=` (empty q, no backup
+#: running) and reproduced on a 225k-row synthetic catalog (11–13 s
+#: to the same `interrupted` error). The browse window is the newest
+#: posts by id (ingestion order tracks release year closely enough
+#: for a browse); 12,500 posts cover the route's max page offset
+#: (POSTS_MAX_OFFSET, 10,000 works) at the live ~1.25 posts-per-work
+#: ratio. `total` is the works in the window, and the window is what
+#: the 120 s cache holds — a title search is unaffected, it names its
+#: own candidate ids first. A `work_ref` call stays unbounded: the
+#: one named post can sit anywhere in the catalog, and bounding its
+#: scan could hide it.
+_WORKS_BROWSE_SCAN_LIMIT = 12_500
+
 #: The columns the grouping scan needs: identity for `works.group_posts`
 #: plus the display columns the representative is picked from. `slug`
 #: and `source_site` are there for one server-side decision only — the
@@ -4548,10 +4566,22 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
     fallback, the one-edit fuzzy fallback, and `did_you_mean` — on a
     miss and, for small result sets, on a poor match. The grouped
     list is cached 120 s per filter tuple (see `_WORKS_CACHE_*`).
-    `full` is accepted for signature parity with the posts route and
-    ignored: the works list never publishes provenance in either mode.
+    A call with no title restriction (no query, no mood clause) is a
+    browse, and the browse is bounded: the grouping scan reads only
+    the newest `_WORKS_BROWSE_SCAN_LIMIT` posts (see the constant),
+    so an empty `q` answers a fast first page instead of timing out
+    the whole-catalog grouping (503 `search_timeout` on live,
+    2026-11-13). `total` is the works in that window. `full` is
+    accepted for signature parity with the posts route and ignored:
+    the works list never publishes provenance in either mode.
     """
     _ensure_schema()
+    # A blank query is no query: the app search screen sends `q=` with
+    # filters and no text (the same shape the v2 search fix answered
+    # with an empty page), and a whitespace-only query must not fall
+    # into the title search — it names nothing. Stripping also fixes
+    # " salaar " missing its own title on the LIKE.
+    query = (query or "").strip()
     try:
         limit = int(limit)
     except (TypeError, ValueError):
@@ -4631,6 +4661,17 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
                      language, quality, sort_key, free_only, work_ref)
         groups = _works_cache_get(cache_key)
         if groups is None:
+            # No title restriction (no query, no work_ref, no mood
+            # clause → candidate_ids stayed None): the grouping scan
+            # is bounded to the browse window (see
+            # `_WORKS_BROWSE_SCAN_LIMIT`) instead of reading the whole
+            # catalog — the unbounded scan is the 503 on
+            # `/api/v1/works?q=` (2026-11-13). A title search names its
+            # own candidate ids, so it is never bounded here.
+            bounded_scan = candidate_ids is None \
+                and work_ref_post_id is None
+            window_sql = (" ORDER BY p.id DESC LIMIT %d"
+                          % _WORKS_BROWSE_SCAN_LIMIT) if bounded_scan else ""
             facet_clauses, facet_params = _facet_filter_clauses(
                 content_type=content_type, industry=effective_industry,
                 genre=genre, language=language, quality=quality,
@@ -4659,7 +4700,7 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
                 where_sql = " AND ".join(clauses) if clauses else "1 = 1"
                 rows = conn.execute(
                     "SELECT " + _WORKS_GROUP_COLS + " FROM posts p"
-                    f" WHERE {where_sql}", params).fetchall()
+                    f" WHERE {where_sql}{window_sql}", params).fetchall()
                 rows_by_id = {int(r["id"]): r for r in rows}
                 groups = [g for g in works.group_posts(
                               rows, adult_agrees=_adult_rule_agrees)
@@ -4686,7 +4727,7 @@ def api_v1_get_works(query: str = "", content_type: str = "", page: int = 1,
                         " FROM releases r"
                         " LEFT JOIN download_sources s ON s.release_id = r.id"
                         " WHERE r.post_id IN (SELECT p.id FROM posts p"
-                        f" WHERE {where_sql}) GROUP BY r.post_id",
+                        f" WHERE {where_sql}{window_sql}) GROUP BY r.post_id",
                         params).fetchall()
                     copies = {int(r["pid"]): int(r["rc"] or 0) + int(r["sc"] or 0)
                               for r in count_rows}
