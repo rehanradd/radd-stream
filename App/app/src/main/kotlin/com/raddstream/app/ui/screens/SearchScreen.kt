@@ -70,6 +70,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.R
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.player.PastedText
 import com.raddstream.app.player.classifyPastedText

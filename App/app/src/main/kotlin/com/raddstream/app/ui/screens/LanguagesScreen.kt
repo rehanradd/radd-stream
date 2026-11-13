@@ -33,6 +33,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.raddstream.app.R
 import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.LanguagesViewModel
 import com.raddstream.app.viewmodel.UserPreferences
