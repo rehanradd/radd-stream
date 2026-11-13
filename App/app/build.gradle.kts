@@ -337,6 +337,19 @@ tasks.withType<Test>().configureEach {
     }
 }
 
+// ── Unit-test worker heap: 2g ───────────────────────────────────────────────
+// No maxHeapSize was configured, so Gradle ran the test worker at its
+// 512m default (proven by the worker command line in the run-474 --info
+// log). After the Crashlytics wiring the full 212-class Robolectric suite
+// dies at the first Robolectric class (runs 471/473/474: executor exit 1,
+// no test XMLs, no failure line — a worker-process death, not a test
+// failure), while CrashReportingTest passes alone. The suite passed on
+// main at this heap before the Firebase jars joined the test runtime
+// classpath, so raise the worker heap before bisecting classes.
+tasks.withType<Test>().configureEach {
+    maxHeapSize = "2048m"
+}
+
 // ── brand.json: generated asset, single runtime source for Brand.kt ──────────
 // Flat JSON object of every brand key. Regenerated on every build whenever
 // brand.properties changes, and merged into the APK assets via the sourceSets
