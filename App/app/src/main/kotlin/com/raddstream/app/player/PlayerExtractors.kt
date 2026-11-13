@@ -1,5 +1,7 @@
 package com.raddstream.app.player
 
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.extractor.DefaultExtractorsFactory
 import androidx.media3.extractor.mkv.MatroskaExtractor
 
@@ -22,6 +24,7 @@ import androidx.media3.extractor.mkv.MatroskaExtractor
  * synthetic tail-cued MKV: unflagged it seeks to 973,456,274 and emits
  * no sample; flagged it seeks nowhere and emits a sample.
  */
+@OptIn(UnstableApi::class)
 internal val playerMatroskaExtractorFlags: Int =
     MatroskaExtractor.FLAG_DISABLE_SEEK_FOR_CUES
 
