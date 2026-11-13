@@ -315,13 +315,14 @@ tasks.withType<Test>().configureEach {
             excludeTestsMatching("com.raddstream.app.ui.ScreenSnapshotTest")
             excludeTestsMatching("com.raddstream.app.data.local.AppDatabaseMigrationTest")
             excludeTestsMatching("com.raddstream.app.data.cache.AheadFetcherFinalizeTest")
+            excludeTestsMatching("com.raddstream.app.data.cache.CacheSweepWorkerTest")
         }
         doFirst {
             // Name every excluded class: this line is the only signal a reader of a local gate
             // gets that the suite count below is not the whole suite count.
             logger.lifecycle(
-                "Skipping PosterCardProvenanceTest, ScreenSnapshotTest, AppDatabaseMigrationTest " +
-                    "and AheadFetcherFinalizeTest: Robolectric has no native runtime for " +
+                "Skipping PosterCardProvenanceTest, ScreenSnapshotTest, AppDatabaseMigrationTest, " +
+                    "AheadFetcherFinalizeTest and CacheSweepWorkerTest: Robolectric has no native runtime for " +
                     "${System.getProperty("os.arch")}. Run these classes on an x86_64 CI runner."
             )
         }
@@ -465,6 +466,13 @@ dependencies {
     // ── WorkManager (the closed-app sweep — CacheSweepWorker) ────────────────
     implementation(libs.workmanager)
     implementation(libs.hilt.work)
+    // The processor that generates CacheSweepWorker_AssistedFactory +
+    // CacheSweepWorker_HiltModule from @HiltWorker. The runtime alone is NOT
+    // enough: without this kapt line the worker compiles but WorkManager cannot
+    // instantiate it (NoSuchMethodException on the S6 device, Session 160) —
+    // HiltWorkerFactory's map is empty and the reflection fallback needs a
+    // (Context, WorkerParameters) constructor the worker does not have.
+    kapt(libs.hilt.work.compiler)
 
     // ── Core ──────────────────────────────────────────────────────────────────
     implementation(libs.core.ktx)
@@ -482,6 +490,7 @@ dependencies {
     testImplementation(composeBom)
     testImplementation(libs.robolectric)
     testImplementation(libs.androidx.test.core)
+    testImplementation(libs.work.testing)
     testImplementation(libs.compose.ui.test.junit4)
     debugImplementation(libs.compose.ui.test.manifest)
 }
