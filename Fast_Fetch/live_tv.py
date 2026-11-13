@@ -32,9 +32,13 @@ REGISTRY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 #: Categories a channel may carry. Only categories with real verified
 #: channels are seeded; the app renders chips from what the endpoint
 #: actually serves, so adding a category here is enough to show it.
+#: "movies" arrived with the iptv-org importer (import_iptv_org.py):
+#: linear movie channels are a real category in that data. "education"
+#: arrived with it too: DD Kisan, Gyandarshan and KITE Victers are real
+#: linear education channels, not entertainment.
 ALLOWED_CATEGORIES = frozenset({
     "news", "sports", "entertainment", "music", "kids", "religious",
-    "travel",
+    "travel", "movies", "education",
 })
 
 #: The probe that decides whether a channel plays right now: a short GET of

@@ -298,27 +298,45 @@ class StreamRouteTests(LiveTvFixture):
 class SeededRegistryTests(unittest.TestCase):
     """The shipped registry itself: shape + counts, no network."""
 
-    def test_seeded_registry_loads_and_counts(self):
-        # 2026-11-11: panel dropped the 18 third-party restreams outright
-        # (user order) and added 6 public test channels (ids 36-41), so the
-        # shipped registry is now exactly the 23 live channels, all enabled.
-        registry = live_tv.load_registry()
-        self.assertEqual(len(registry["channels"]), 23)
-        enabled = [c for c in registry["channels"] if c["enabled"]]
-        self.assertEqual(len(enabled), 23)
-        self.assertEqual(len({c["id"] for c in registry["channels"]}), 23)
+    # The 23 hand-picked channels seeded 2026-11-11 (panel dropped the 18
+    # third-party restreams outright by user order, and added 6 public test
+    # channels, ids 36-41). The iptv-org importer (2026-11-13) added
+    # verified-alive PK/IN channels on top; it never removes these 23.
+    ORIGINAL_IDS = {1, 11, 14, 16, 18, 19, 21, 22, 23, 26, 27, 28, 29, 30,
+                    32, 33, 35, 36, 37, 38, 39, 40, 41}
 
-    def test_seeded_enabled_sports_are_three(self):
+    def test_seeded_registry_loads_and_counts(self):
+        registry = live_tv.load_registry()
+        channels = registry["channels"]
+        ids = {c["id"] for c in channels}
+        self.assertEqual(len(ids), len(channels))
+        self.assertTrue(self.ORIGINAL_IDS <= ids,
+                        "the original 23 channels must survive every sync")
+        self.assertGreater(len(channels), 23,
+                           "the iptv-org import adds channels on top")
+        # The original 23 are operator-curated: the importer never disables
+        # them, so they stay enabled. (An iptv-org row may legitimately go
+        # disabled after 2 failed refresh probes — that is the strike rule
+        # working, not a broken seed.)
+        by_id = {c["id"]: c for c in channels}
+        for channel_id in self.ORIGINAL_IDS:
+            self.assertTrue(by_id[channel_id]["enabled"])
+
+    def test_seeded_enabled_sports_include_the_original_three(self):
         registry = live_tv.load_registry()
         sports = [c["name"] for c in registry["channels"]
                   if c["enabled"] and c["category"] == "sports"]
-        self.assertEqual(sports, ["DD Sports", "Eurosport India", "FUEL TV"])
+        for name in ("DD Sports", "Eurosport India", "FUEL TV"):
+            self.assertIn(name, sports)
 
     def test_seeded_enabled_sources_are_official(self):
         registry = live_tv.load_registry()
         official = {"official", "official-group", "official-playout",
                     "official-fast", "official-cdn", "public-broadcaster",
-                    "channel-cdn", "official-geoblocked"}
+                    "channel-cdn", "official-geoblocked",
+                    # The iptv-org importer is a curated source too: every
+                    # row it writes was verified alive by a real probe.
+                    "iptv-org"}
         for channel in registry["channels"]:
             if channel["enabled"]:
                 self.assertIn(channel["source"], official)

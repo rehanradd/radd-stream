@@ -287,6 +287,12 @@ jobs:
       - name: 🧪 test_live_tv.py
         run: python3 -S Fast_Fetch/test_live_tv.py
 
+      # The iptv-org Live TV importer (Pakistan + India, only verified-alive
+      # channels). Offline: fetches go through a fake opener serving fixture
+      # bytes and probes through canned ProbeResults, so no socket is opened.
+      - name: 🧪 test_iptv_org_import.py
+        run: python3 -S Fast_Fetch/importers/test_iptv_org_import.py
+
       # The HTTP edge is the product's privacy boundary, so it is guarded in CI by
       # the same rule as the data layer: every suite below ran clean offline on the
       # Oracle VM (python 3.12, -S, zero pip) before being added here.
