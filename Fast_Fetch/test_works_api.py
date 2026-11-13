@@ -36,6 +36,15 @@ then pins:
    posts: on a 225k-post catalog the unbounded scan ran 11–13 s into
    the `interrupted` error (503 live, 2026-11-13), the window answers
    in ~2 s.
+7. **The bounded work_ref call.** A `work_ref` names one work, and
+   the list groups only that work's candidates (the detail's
+   candidate query, ids only): on a 225k-post catalog the
+   work_ref-only call ran 11–13 s before the bound (the same 503
+   shape, 2026-11-13) and answers in ~0.01 s after it with the
+   trigram index. The resolve's no-year family key is trigram-bounded
+   the same way (0.00 s for a discriminative token, vs 1.44 s for
+   the full UDF scan; 1.76 s full-scan fallback for a token whose
+   grams collide with most of the catalog).
 
     python3 -S Fast_Fetch/test_works_api.py
 """
@@ -548,6 +557,11 @@ class Fixture(unittest.TestCase):
                 return item
         self.fail("no work %r in %r" % (work_id, resp["results"]))
 
+    def _work_ref_for(self, post_id):
+        row = self.conn.execute(
+            "SELECT * FROM posts WHERE id = ?", (post_id,)).fetchone()
+        return viewer._work_ref(row)
+
 
 class WorksListTests(Fixture):
     def test_salaar_is_one_work_not_three_posts(self):
@@ -620,6 +634,85 @@ class WorksListTests(Fixture):
             limit=20, page=(limit + 19) // 20 + 1)
         self.assertEqual(past["results"], [])
         self.assertEqual(past["total"], limit)
+
+    def test_work_ref_call_returns_the_named_work_only(self):
+        # A minted handle names one work: the list answers that work
+        # with all its members, not the whole catalog grouped and
+        # filtered — the work_ref-only call ran the unbounded grouping
+        # scan before this (11–13 s on a 225k-post catalog, 503 live,
+        # 2026-11-13). Both key shapes name the same Salaar work: the
+        # family key from the bare title, the imdb key from the copy
+        # that carries the external id.
+        for post_id in (self.salaar_a, self.salaar_c):
+            ref = self._work_ref_for(post_id)
+            resp = viewer.api_v1_get_works(work_ref=ref, limit=20)
+            self.assertEqual(resp["total"], 1, post_id)
+            self.assertEqual(len(resp["results"]), 1, post_id)
+            salaar = resp["results"][0]
+            self.assertEqual(int(salaar["id"]), self.salaar_a, post_id)
+            self.assertEqual(salaar["post_count"], 3, post_id)
+            self.assertEqual(
+                sorted(int(pid) for pid in salaar["post_ids"]),
+                sorted((self.salaar_a, self.salaar_b, self.salaar_c)),
+                post_id)
+
+    def test_unresolvable_work_ref_answers_an_empty_page(self):
+        resp = viewer.api_v1_get_works(work_ref="not-a-handle", limit=20)
+        self.assertEqual(resp["total"], 0)
+        self.assertEqual(resp["results"], [])
+
+    def test_work_ref_call_finds_an_old_work_below_the_browse_window(self):
+        # The bound must never hide the named work: the Salaar posts
+        # sit below the browse window once the catalog grows past it,
+        # and the work_ref call still answers them whole.
+        limit = viewer._WORKS_BROWSE_SCAN_LIMIT
+        rows = [("https://bench.example/movie/film-%05d/" % i,
+                 "film-%05d" % i, "Film %05d (2020)" % i,
+                 "Film %05d" % i,
+                 2020, "movie", "bench.example", 0, "film-%05d" % i,
+                 "Hollywood", "India", "English")
+                for i in range(limit + 500)]
+        self.conn.executemany(
+            "INSERT INTO posts (url, slug, title, clean_title, year,"
+            " content_type, source_site, is_18_plus, canonical_key,"
+            " industry, country, language)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+        self.conn.commit()
+        viewer._WORKS_LIST_CACHE.clear()
+        ref = self._work_ref_for(self.salaar_a)
+        resp = viewer.api_v1_get_works(work_ref=ref, limit=20)
+        self.assertEqual(resp["total"], 1)
+        self.assertEqual(resp["results"][0]["post_count"], 3)
+
+    def test_family_no_year_key_resolves_with_and_without_the_trigram_index(self):
+        # A work with no year mints a family:<title>:ny key, and the
+        # resolve's no-year path is the full UDF scan without the
+        # trigram index — the bound must return the same post either
+        # way (the detail's trigram test, same shape).
+        self.conn.execute(
+            "INSERT INTO posts (url, slug, title, clean_title, year,"
+            " content_type, source_site, is_18_plus, canonical_key,"
+            " industry, country, language)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            ("https://bench.example/movie/nyfilm/", "nyfilm",
+             "Nyfilm (No Year)", "Nyfilm", None,
+             "movie", "bench.example", 0, "nyfilm",
+             "Hollywood", "India", "English"))
+        ny_id = self.conn.execute(
+            "SELECT id FROM posts WHERE canonical_key = ?",
+            ("nyfilm",)).fetchone()[0]
+        self.conn.commit()
+        ref = self._work_ref_for(ny_id)
+        self.assertEqual(viewer._resolve_work_ref(self.conn, ref), ny_id)
+        resp = viewer.api_v1_get_works(work_ref=ref, limit=20)
+        self.assertEqual(resp["total"], 1)
+        self.assertEqual(int(resp["results"][0]["id"]), ny_id)
+        import fts_posts
+        fts_posts.rebuild_fts(self.conn)
+        self.assertEqual(viewer._resolve_work_ref(self.conn, ref), ny_id)
+        resp = viewer.api_v1_get_works(work_ref=ref, limit=20)
+        self.assertEqual(resp["total"], 1)
+        self.assertEqual(int(resp["results"][0]["id"]), ny_id)
 
     def test_sequel_stays_its_own_work(self):
         resp = viewer.api_v1_get_works(query="salaar", limit=20)
@@ -903,6 +996,18 @@ class WorksHttpTests(Fixture):
         self.assertEqual(status, 200, data)
         self.assertEqual(data["total"], 14)
         self.assertEqual(len(data["results"]), 14)
+
+    def test_work_ref_route_answers_the_named_work(self):
+        # The 503 shape (2026-11-13): `/api/v1/works?work_ref=…`
+        # ran the whole-catalog grouping. It now answers the one work.
+        import urllib.parse
+        ref = self._work_ref_for(self.salaar_a)
+        status, _headers, data = self.get(
+            "/api/v1/works?work_ref=%s&limit=20"
+            % urllib.parse.quote(ref, safe=""))
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["results"][0]["post_count"], 3)
 
     def test_works_detail_route(self):
         status, _headers, data = self.get(
