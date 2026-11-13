@@ -137,8 +137,13 @@ object RaddMotion {
     const val DurationDefault = 250
     /** Screen-level entrance, sheet expand, poster→detail share. */
     const val DurationEmphasized = 400
-    /** Hero/fanfare only — first frame of DetailScreen, brand splash mark. */
-    const val DurationSlow = 600
+    /**
+     * Hero/fanfare only — first frame of DetailScreen, brand splash mark.
+     * Session 154 (T-2): capped at 500ms — the skill never lets a
+     * transition exceed about 500ms (was 600ms). Currently unused; the cap
+     * keeps the token honest for the day it is used.
+     */
+    const val DurationSlow = 500
 
     /** Paired tween for standard property animation. */
     fun <T> quick(millis: Int = DurationQuick) = tween<T>(millis, easing = Standard)

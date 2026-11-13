@@ -1,6 +1,5 @@
 package com.raddstream.app.ui.theme
 
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Dp
@@ -75,43 +74,41 @@ object RaddTokens {
         val Pill: RoundedCornerShape = RoundedCornerShape(Radius.Pill)
     }
 
-    /** Motion — token durations, springs, press feedback (benchmark §14). */
+    /**
+     * Motion — press feedback only (benchmark §14). Session 154 (T-1): the
+     * duration/easing/spring duplicates lived here unused and their values
+     * did not match the skill — the live system is [RaddMotion] (Theme.kt).
+     * Only [PressScale] is used, by [pressScale].
+     */
     object Motion {
-        /** Fast: toggles, ripples, colour crossfades. */
-        const val FastMs: Int = 120
-        /** Normal: chip selection, icon state, tab indicator. */
-        const val NormalMs: Int = 200
-        /** Slow: screen entrances, sheet expands. */
-        const val SlowMs: Int = 320
-        /** Emphasis: brand and hero moves. */
-        const val EmphasisMs: Int = 400
         /** Press scale: 0.97-0.98, under 100ms, with haptic confirmation. */
         const val PressScale: Float = 0.97f
-        /** Skeleton shimmer sweep. */
-        const val ShimmerMs: Int = 1500
-        /** Feedback within 200ms: nothing may look dead while it loads. */
-        const val FeedbackMs: Int = 200
-
-        /** Enter: ease-out, fast start, graceful settle. */
-        val EaseOut: CubicBezierEasing = CubicBezierEasing(0f, 0f, 0.2f, 1f)
-        /** Move: the standard curve for content in transit. */
-        val EaseStandard: CubicBezierEasing = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
-        /** Exit: gentle lean-in, brisk finish. */
-        val EaseIn: CubicBezierEasing = CubicBezierEasing(0.4f, 0f, 1f, 1f)
-
-        /** Springs, not tweens: snappy, default, gentle (damping / stiffness). */
-        const val SpringSnappyDamping: Float = 0.85f
-        const val SpringSnappyStiffness: Float = 600f
-        const val SpringDefaultDamping: Float = 0.90f
-        const val SpringDefaultStiffness: Float = 400f
-        const val SpringGentleDamping: Float = 1.00f
-        const val SpringGentleStiffness: Float = 280f
     }
 
     /** Touch — 48x48dp minimum target, 8pt minimum gap (benchmark §14/§15). */
     object Touch {
         val MinTarget: Dp = 48.dp
         val MinGap: Dp = 8.dp
+
+        /**
+         * Bottom-nav active-indicator pill, 64×48dp (Session 154, N-2).
+         * M3's spec pill is 56×32dp on a 64dp bar — this app keeps the
+         * larger pill on purpose: Robo runs 4–6 measured the 32dp pill
+         * under the 48dp touch-target floor, and the bar's 80dp content
+         * height (below) is what stops the system nav-bars inset from
+         * crushing the tabs to 32dp. Do not shrink these to the spec
+         * without re-running Robo on a 3-button-nav device.
+         */
+        val NavIndicatorWidth: Dp = 64.dp
+        val NavIndicatorHeight: Dp = 48.dp
+
+        /**
+         * Bottom-nav tab height, 80dp (Session 154, N-2). M3's bar is
+         * 64dp; this app uses 80dp of content height so that, once M3's
+         * NavigationBar applies the system nav-bars inset inside the bar,
+         * the tabs still measure the full 48dp floor (Robo run 6).
+         */
+        val NavTabHeight: Dp = 80.dp
     }
 
     /**

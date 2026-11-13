@@ -2,6 +2,7 @@ package com.raddstream.app.ui.theme
 
 import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -39,13 +40,29 @@ class RaddTokensTest {
     }
 
     @Test
-    fun motionDurationsAreTheBenchmarkNumbers() {
-        assertEquals(120, RaddTokens.Motion.FastMs)
-        assertEquals(200, RaddTokens.Motion.NormalMs)
-        assertEquals(320, RaddTokens.Motion.SlowMs)
-        assertEquals(400, RaddTokens.Motion.EmphasisMs)
-        assertEquals(1500, RaddTokens.Motion.ShimmerMs)
+    fun motionKeepsOnlyThePressScale() {
+        // Session 154 (T-1): the duration/easing/spring duplicates were
+        // deleted — they were unused and their values did not match the
+        // skill. The live motion system is RaddMotion (Theme.kt); only
+        // PressScale survives here.
         assertEquals(0.97f, RaddTokens.Motion.PressScale, 0.001f)
+    }
+
+    @Test
+    fun navIndicatorKeepsTheRoboMeasuredSizes() {
+        // Session 154 (N-2): the 64×48dp pill and 80dp tab are deliberate,
+        // not spec drift — Robo runs 4–6 measured the 32dp pill under the
+        // 48dp touch floor. These pin the token; BottomNavTouchTargetTest
+        // pins the rendered bar.
+        assertEquals(64.dp, RaddTokens.Touch.NavIndicatorWidth)
+        assertEquals(48.dp, RaddTokens.Touch.NavIndicatorHeight)
+        assertEquals(80.dp, RaddTokens.Touch.NavTabHeight)
+    }
+
+    @Test
+    fun slowDurationStaysInsideTheFiveHundredMillisecondCap() {
+        // Session 154 (T-2): no transition may exceed about 500ms.
+        assertTrue(RaddMotion.DurationSlow <= 500)
     }
 
     @Test

@@ -672,7 +672,7 @@ private fun PlayerScreenContent(
                     ) {
                         Icon(Icons.Default.Check, null, tint = RaddNarrationCheck, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text(banner, color = Color.White, fontSize = brandSp(13), maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        Text(banner, color = Color.White, fontSize = brandSp(14), maxLines = 2, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -920,7 +920,7 @@ private fun PlayerScreenContent(
                         .padding(horizontal = 24.dp)
                         .padding(bottom = 100.dp),
                 ) {
-                    Text(msg, color = Color.White, fontSize = brandSp(13), modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
+                    Text(msg, color = Color.White, fontSize = brandSp(14), modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp))
                 }
             }
         }
@@ -2095,8 +2095,9 @@ private fun PlayerControlButton(
                 shortLabel,
                 // E-C3: 10sp white at 75% over the bar was ~3.3:1 over a bright
                 // frame. 0.85f is the floor the audit allows for these labels.
+                // Session 154: 11sp now — 10sp is off the M3 type scale.
                 color = if (selected) RaddCurrent500 else Color.White.copy(alpha = 0.85f),
-                fontSize = brandSp(10),
+                fontSize = brandSp(11),
                 maxLines = 1,
                 modifier = Modifier.clearAndSetSemantics { },
             )
@@ -2375,7 +2376,7 @@ private fun AutoplayCountdownCard(
                         nextEpisodeTitle,
                     ),
                     color = Color.White.copy(alpha = 0.85f),
-                    fontSize = brandSp(13),
+                    fontSize = brandSp(14),
                     textAlign = TextAlign.Center,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis,
@@ -2411,7 +2412,7 @@ private fun ConnectionErrorCard(message: String, onRetry: () -> Unit) {
             Text(
                 message,
                 color = Color.White,
-                fontSize = brandSp(13),
+                fontSize = brandSp(14),
                 textAlign = TextAlign.Start,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -2443,7 +2444,7 @@ private fun OfflineCard(onRetry: () -> Unit) {
             Text(
                 stringResource(R.string.player_offline_body),
                 color = Color.White.copy(alpha = 0.85f),
-                fontSize = brandSp(13),
+                fontSize = brandSp(14),
                 textAlign = TextAlign.Center,
             )
             Spacer(Modifier.height(12.dp))
@@ -2795,7 +2796,7 @@ private fun GiveUpCard(
         },
         text = {
             Column {
-                Text(message, color = Color.White.copy(alpha = 0.85f), fontSize = brandSp(13))
+                Text(message, color = Color.White.copy(alpha = 0.85f), fontSize = brandSp(14))
                 Spacer(Modifier.height(8.dp))
                 Text(
                     when (why) {
@@ -3024,7 +3025,7 @@ private fun ResumeDialog(state: PlayerUiState, vm: PlayerViewModel) {
                     state.pendingTitle ?: stringResource(R.string.player_this_print),
                 ),
                 color = Color.White.copy(alpha = 0.8f),
-                fontSize = brandSp(13),
+                fontSize = brandSp(14),
             )
         },
         confirmButton = {
@@ -3058,7 +3059,7 @@ private fun CalibrationDialog(
                 Text(
                     state.warning ?: stringResource(R.string.player_calibration_body),
                     color = Color.White.copy(alpha = 0.8f),
-                    fontSize = brandSp(13),
+                    fontSize = brandSp(14),
                 )
                 Spacer(Modifier.height(10.dp))
                 OutlinedTextField(
@@ -3155,7 +3156,7 @@ private fun SpeedSheet(state: PlayerUiState, vm: PlayerViewModel) {
                             Text(
                                 stringResource(R.string.player_speed_short, preset),
                                 color = if (selected) Color.Black else Color.White,
-                                fontSize = brandSp(13),
+                                fontSize = brandSp(14),
                             )
                         }
                     }
@@ -3278,7 +3279,7 @@ private fun SleepSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     stringResource(R.string.player_sleep_fading, state.sleep.remainingMs.formatTime()),
                     color = RaddCurrent500,
-                    fontSize = brandSp(13),
+                    fontSize = brandSp(14),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
                 )
             }
@@ -3355,7 +3356,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 stringResource(R.string.player_subtitle_size, state.subtitle.sizePercent),
                 color = Color.White,
-                fontSize = brandSp(13),
+                fontSize = brandSp(14),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Slider(
@@ -3368,7 +3369,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 stringResource(R.string.player_subtitle_position, (state.subtitle.bottomFraction * 100).toInt()),
                 color = Color.White,
-                fontSize = brandSp(13),
+                fontSize = brandSp(14),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Slider(
@@ -3385,14 +3386,14 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             }
 
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.player_subtitle_bold), color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.player_subtitle_bold), color = Color.White, fontSize = brandSp(14), modifier = Modifier.weight(1f))
                 Switch(
                     checked = state.subtitle.bold,
                     onCheckedChange = { vm.setSubtitleSettings(state.subtitle.copy(bold = it)) },
                 )
             }
             Row(Modifier.padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.player_subtitle_background), color = Color.White, fontSize = brandSp(13), modifier = Modifier.weight(1f))
+                Text(stringResource(R.string.player_subtitle_background), color = Color.White, fontSize = brandSp(14), modifier = Modifier.weight(1f))
                 Switch(
                     checked = state.subtitle.textBackground,
                     onCheckedChange = { vm.setSubtitleSettings(state.subtitle.copy(textBackground = it)) },
@@ -3402,7 +3403,7 @@ private fun SubtitleSettingsSheet(state: PlayerUiState, vm: PlayerViewModel) {
             Text(
                 stringResource(R.string.player_subtitle_colour),
                 color = Color.White,
-                fontSize = brandSp(13),
+                fontSize = brandSp(14),
                 modifier = Modifier.padding(horizontal = 16.dp),
             )
             Row(
@@ -3510,7 +3511,7 @@ private fun TracksSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     AudioBoost.labelFor(state.audioBoostLevel),
                     color = RaddCurrent500,
-                    fontSize = brandSp(13),
+                    fontSize = brandSp(14),
                     fontWeight = FontWeight.SemiBold,
                 )
                 Slider(
@@ -3756,7 +3757,7 @@ private fun PrintLogSheet(state: PlayerUiState, vm: PlayerViewModel) {
                 Text(
                     rowText,
                     color = if (active) RaddCurrent500 else Color.White.copy(alpha = 0.8f),
-                    fontSize = brandSp(13),
+                    fontSize = brandSp(14),
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 3.dp),
                 )
             }
@@ -3828,7 +3829,7 @@ private fun SheetTitle(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         color = Color.White,
-        fontSize = brandSp(15),
+        fontSize = brandSp(16),
         fontWeight = FontWeight.SemiBold,
         modifier = modifier.padding(horizontal = 16.dp, vertical = 10.dp),
     )

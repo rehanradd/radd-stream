@@ -63,6 +63,7 @@ import com.raddstream.app.ui.theme.PressHaptics
 import com.raddstream.app.ui.theme.RaddEmphasized
 import com.raddstream.app.ui.theme.RaddMotion
 import com.raddstream.app.ui.theme.RaddStreamMark
+import com.raddstream.app.ui.theme.RaddTokens
 import com.raddstream.app.ui.theme.pressScale
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -520,7 +521,9 @@ private fun HeroIndicator(
     val scheme = MaterialTheme.colorScheme
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(24.dp))
+            // Session 154 (N-1): the indicator pill is fully round — 24dp is
+            // not on the M3 shape scale (20 → 28).
+            .clip(RaddTokens.Shape.Pill)
             .background(scheme.surface.copy(alpha = 0.55f))
             .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),

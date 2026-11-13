@@ -1,6 +1,7 @@
 package com.raddstream.app.ui.screens
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -56,6 +57,8 @@ import com.raddstream.app.R
 import com.raddstream.app.data.RegionChoice
 import com.raddstream.app.data.RegionChoices
 import com.raddstream.app.data.UserRegion
+import com.raddstream.app.ui.components.rememberReduceMotion
+import com.raddstream.app.ui.theme.RaddMotion
 import com.raddstream.app.ui.theme.RaddStreamMark
 import com.raddstream.app.ui.theme.RaddTokens
 import com.raddstream.app.viewmodel.RegionUiState
@@ -76,6 +79,11 @@ fun RegionSelectionScreen(
     viewModel: RegionViewModel = hiltViewModel(),
 ) {
     val state by viewModel.uiState.collectAsState()
+
+    // Session 154 (R-1): the stagger rides the motion token (250ms) and
+    // reduced-motion users get the fade only, never the rise — the
+    // HomeScreen rails pattern.
+    val reduceMotion = rememberReduceMotion()
 
     Column(
         modifier = modifier
@@ -115,8 +123,22 @@ fun RegionSelectionScreen(
         RegionChoices.ALL.forEachIndexed { index, choice ->
             AnimatedVisibility(
                 visible = true,
-                enter = fadeIn(tween(300, delayMillis = index * 90)) +
-                    slideInVertically(tween(300, delayMillis = index * 90)) { it / 3 },
+                enter = fadeIn(
+                    tween(
+                        durationMillis = RaddMotion.DurationDefault,
+                        delayMillis = index * 90,
+                    ),
+                ) + if (reduceMotion) {
+                    EnterTransition.None
+                } else {
+                    slideInVertically(
+                        tween(
+                            durationMillis = RaddMotion.DurationDefault,
+                            delayMillis = index * 90,
+                            easing = RaddMotion.EmphasizedDecelerate,
+                        ),
+                    ) { it / 3 }
+                },
             ) {
                 RegionChoiceCard(
                     choice = choice,
@@ -208,6 +230,9 @@ private fun RegionChoiceCard(
     onSelect: () -> Unit,
 ) {
     val jade = MaterialTheme.colorScheme.primary
+    // Session 154 (R-1): the check badge rides the motion tokens and
+    // reduced-motion users get a 30ms alpha crossfade, never a scale.
+    val reduceMotion = rememberReduceMotion()
     val containerColor by animateColorAsState(
         if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
         label = "regionCardContainer",
@@ -315,8 +340,16 @@ private fun RegionChoiceCard(
             }
             AnimatedVisibility(
                 visible = selected,
-                enter = scaleIn(tween(200)) + fadeIn(tween(200)),
-                exit = scaleOut(tween(150)) + fadeOut(tween(150)),
+                enter = if (reduceMotion) {
+                    fadeIn(tween(RaddMotion.FadeWhenReduced))
+                } else {
+                    scaleIn(RaddMotion.default()) + fadeIn(RaddMotion.default())
+                },
+                exit = if (reduceMotion) {
+                    fadeOut(tween(RaddMotion.FadeWhenReduced))
+                } else {
+                    scaleOut(RaddMotion.quick()) + fadeOut(RaddMotion.quick())
+                },
             ) {
                 Box(
                     modifier = Modifier

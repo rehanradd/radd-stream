@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -75,6 +74,7 @@ import com.raddstream.app.ui.screens.SetupScreen
 import com.raddstream.app.ui.screens.VipUpgradeScreen
 import com.raddstream.app.ui.screens.WatchHistoryScreen
 import com.raddstream.app.ui.theme.RaddMotion
+import com.raddstream.app.ui.theme.RaddTokens
 
 private data class BottomNavItem(
     val label: String,
@@ -127,7 +127,10 @@ internal fun RowScope.BottomNavTab(
     Box(
         modifier = Modifier
             .weight(1f)
-            .height(80.dp)
+            // Session 154 (N-2): the 80dp tab height is the app's own token —
+            // M3's bar is 64dp, but 80dp of content is what stops the system
+            // nav-bars inset from crushing the tabs (Robo run 6).
+            .height(RaddTokens.Touch.NavTabHeight)
             .clickable(onClick = onClick, role = Role.Tab)
             // The tab itself carries the spoken name (the SwitchRow pattern):
             // the painted icon and label are silent, so the name is heard
@@ -142,7 +145,13 @@ internal fun RowScope.BottomNavTab(
         ) {
             Box(
                 modifier = Modifier
-                    .size(width = 64.dp, height = 48.dp)
+                    // Session 154 (N-2): the 64×48dp pill is the app's own
+                    // token, not the M3 56×32dp spec — Robo runs 4–6 measured
+                    // the 32dp pill under the 48dp touch-target floor.
+                    .size(
+                        width = RaddTokens.Touch.NavIndicatorWidth,
+                        height = RaddTokens.Touch.NavIndicatorHeight,
+                    )
                     .background(
                         // Restyle: the active pill is primaryContainer, not
                         // surfaceContainerHighest — the jade tint says
@@ -153,7 +162,9 @@ internal fun RowScope.BottomNavTab(
                         } else {
                             Color.Transparent
                         },
-                        shape = RoundedCornerShape(24.dp),
+                        // Session 154 (N-1): the indicator pill is fully
+                        // round — 24dp is not on the M3 shape scale (20 → 28).
+                        shape = RaddTokens.Shape.Pill,
                     )
                     .testTag(BottomNavIndicatorTag),
                 contentAlignment = Alignment.Center,

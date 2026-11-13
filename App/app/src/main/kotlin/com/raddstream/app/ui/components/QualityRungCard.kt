@@ -1,6 +1,7 @@
 package com.raddstream.app.ui.components
 
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.snap
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -123,9 +124,13 @@ private fun RungRow(
     // Restyle 2026-11-13: the selected rung's container morphs — its corners
     // open from 12dp to 28dp on the default-spatial spring, so the chosen
     // quality visibly settles instead of just changing colour.
+    // Session 154 (D-2): reduced-motion users get the corner at once — the
+    // spring overshoots, and the skill says replace motion with an instant
+    // transition under reduced motion.
+    val reduceMotion = rememberReduceMotion()
     val corner by animateDpAsState(
         targetValue = if (selected) 28.dp else 12.dp,
-        animationSpec = RaddMotion.defaultSpatial(),
+        animationSpec = if (reduceMotion) snap() else RaddMotion.defaultSpatial(),
         label = "rungCorner",
     )
     Surface(
