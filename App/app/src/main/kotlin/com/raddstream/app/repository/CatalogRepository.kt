@@ -1,5 +1,6 @@
 package com.raddstream.app.repository
 
+import android.util.Log
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.bearerHeader
@@ -198,6 +199,16 @@ class CatalogRepository @Inject constructor(
             // instead of hard-failing the first tap. A dead socket still
             // throws (IOException is not a RuntimeException).
             return null
+        } catch (ex: Exception) {
+            // Session 158 (S5): the same failure-to-ask rule, for a
+            // checked exception the catches above do not name. A dead
+            // socket is NOT swallowed here: IOException is rethrown so
+            // the caller can still tell a refusal from a failure to ask
+            // (Session 155) — only a checked non-IO throw answers null,
+            // and its class is logged for the next device run.
+            if (ex is IOException) throw ex
+            Log.w("CatalogRepository", "detail ask failed without a request: ${ex::class.java.simpleName}: ${ex.message}")
+            return null
         }
         if (response.success && response.data != null) {
             return response.data
@@ -321,6 +332,19 @@ class CatalogRepository @Inject constructor(
             // instead of hard-failing the first tap. A dead socket still
             // throws (IOException is not a RuntimeException), so the caller
             // can still tell a refusal from a failure to ask.
+            return null
+        } catch (ex: Exception) {
+            // Session 158 (S5): the last failure-to-ask class — a CHECKED
+            // exception the catches above do not name (a TimeoutException,
+            // a CertificateException from the TLS stack, any other checked
+            // throw from a library on this path). It is still a failure to
+            // ask, not a server refusal: null so the caller's null-retry
+            // re-asks. The class is logged because the S5 Tarzan thrower
+            // was never identified from code alone — the next device run
+            // names it here instead of failing silently. HttpException,
+            // IOException and RuntimeException are already caught above,
+            // so only a checked non-IO throw lands here.
+            Log.w("CatalogRepository", "detail ask failed without a request: ${ex::class.java.simpleName}: ${ex.message}")
             return null
         }
         if (!response.ok) return null

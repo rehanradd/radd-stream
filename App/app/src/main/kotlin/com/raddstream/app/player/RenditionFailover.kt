@@ -30,6 +30,34 @@ internal fun isGateRefusalError(error: PlaybackException): Boolean {
 }
 
 /**
+ * Session 158 (S5): did this player error come from OUR redirector
+ * answering that the handle has no playable source — a 404, 403 or 410
+ * — rather than from a copy that merely failed? The same two signals
+ * Media3 1.3.1 carries for the gate refusal (see [isGateRefusalError]):
+ * the message of [HttpDataSource.InvalidResponseCodeException] is
+ * exactly "Response code: 404", and the cause chain holds the exception
+ * itself. A dead handle will not heal on a second try of the SAME
+ * address — the next move is a different handle, never RetrySame. The
+ * 403 joins the set because the redirector answers it for a handle whose
+ * source is gone, the same dead class the cache engine files 403 under.
+ */
+internal fun isDeadHandleError(error: PlaybackException): Boolean {
+    if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+        (error.message?.contains("Response code: 404") == true ||
+            error.message?.contains("Response code: 403") == true ||
+            error.message?.contains("Response code: 410") == true)
+    ) return true
+    var cause: Throwable? = error.cause
+    while (cause != null) {
+        if (cause is HttpDataSource.InvalidResponseCodeException &&
+            (cause.responseCode == 404 || cause.responseCode == 403 || cause.responseCode == 410)
+        ) return true
+        cause = cause.cause
+    }
+    return false
+}
+
+/**
  * Pure failover policy for a [PlayBundle], implementing API_V2.md §5:
  * "Try rank 1; on error, retry once, then move to rank 2, then rank 3 — never beyond
  * max_ranks (each failover is reported back)."
@@ -234,12 +262,20 @@ class FailoverStateMachine(
      * So a start failure skips straight to a backup handle / the next rank. After
      * the first frame the policy's retry_same still applies — a mid-playback blip
      * is worth one same-file retry.
+     *
+     * [isDeadHandle] marks a 404/403/410 from our own redirector (Session 158,
+     * S5): the handle has no playable source, so retrying the SAME address
+     * after the first frame is futile for the same reason a start failure is —
+     * the S5 log shows the player pressing dead handles ~1/sec until the
+     * server's per-minute bucket 429'd the session. A dead handle hops to a
+     * backup / the next rank at once, whenever it fails.
      */
     fun onFailure(
         errorSummary: String,
         isExpiry: Boolean = false,
         isGateRefusal: Boolean = false,
         beforeFirstFrame: Boolean = false,
+        isDeadHandle: Boolean = false,
     ): FailoverDecision {
         // Session 121 (P-6): the summary may be a raw ExoPlayer code; the machine is the
         // single funnel every failure passes through, so translate it here — the Handoff
@@ -274,8 +310,12 @@ class FailoverStateMachine(
         return when {
             // retry_same budget still available for THIS candidate — but
             // never before the first frame (see [beforeFirstFrame] above):
-            // a start failure hops to a different file at once.
-            !beforeFirstFrame && usedSoFar <= policy.retrySame -> {
+            // a start failure hops to a different file at once. And never
+            // for a dead handle (see [isDeadHandle] above): a 404 means
+            // "no playable source for that handle", and re-pressing the
+            // same address can only re-pay the resolve and trip the
+            // server's rate bucket.
+            !beforeFirstFrame && !isDeadHandle && usedSoFar <= policy.retrySame -> {
                 _log.add(record.copy(action = "retried (same rank)"))
                 FailoverDecision.RetrySame(index, policy.backoffMs, record.copy(action = "retry"))
             }

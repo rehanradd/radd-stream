@@ -5,6 +5,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.RaddStreamApi
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertNull
@@ -76,6 +77,42 @@ class CatalogDetailProviderFailureTest {
     @Test
     fun `v2 detail still answers null for the provider not ready error`() = runBlocking {
         val repository = repository(IllegalStateException("Connect to a catalog server first."))
+        assertNull(repository.getWorkDetailV2(132312))
+    }
+
+    /**
+     * Session 158 (S5): the S5 Tarzan thrower was never identified from
+     * code alone — every RuntimeException on the pre-network path is
+     * already caught, so the remaining class is a CHECKED exception the
+     * catches do not name (a TimeoutException, a CertificateException
+     * from the TLS stack). Whatever its member, a failure to ask must
+     * answer null so the caller's null-retry re-asks, not hard-fail the
+     * first tap — and a dead socket must still propagate on the v1 path,
+     * where the caller tells a refusal from a failure to ask by it.
+     */
+    @Test
+    fun `v2 detail answers null when the provider throws a checked timeout`() = runBlocking {
+        val repository = repository(java.util.concurrent.TimeoutException("timed out"))
+        assertNull(repository.getWorkDetailV2(132312))
+    }
+
+    @Test
+    fun `v1 detail answers null when the provider throws a checked timeout`() = runBlocking {
+        val repository = repository(java.util.concurrent.TimeoutException("timed out"))
+        assertNull(repository.getPostDetail(157747))
+    }
+
+    @Test
+    fun `v1 detail still propagates a dead socket instead of answering null`() {
+        val repository = repository(IOException("Connection reset"))
+        assertThrows(IOException::class.java) {
+            runBlocking { repository.getPostDetail(157747) }
+        }
+    }
+
+    @Test
+    fun `v2 detail still answers null for a dead socket`() = runBlocking {
+        val repository = repository(IOException("Connection reset"))
         assertNull(repository.getWorkDetailV2(132312))
     }
 }

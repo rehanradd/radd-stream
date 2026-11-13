@@ -380,6 +380,14 @@ class SearchViewModel @Inject constructor(
      */
     private var searchGeneration = 0
 
+    /**
+     * Session 158 (S5): the last search whose results are on screen, if
+     * any — the dedupe key [scheduleSearch] compares a re-submit against,
+     * so an identical search is never fetched twice. Cleared when a search
+     * fails, so a retry after an error always re-asks.
+     */
+    private var lastCompletedSearch: CompletedSearchKey? = null
+
     fun loadMore() {
         val state = _uiState.value
         if (!state.hasMore || state.isLoadingMore || !state.hasSearchIntent) return
@@ -456,6 +464,27 @@ class SearchViewModel @Inject constructor(
     }
 
     private fun scheduleSearch(reset: Boolean, immediate: Boolean = false) {
+        // Session 158 (S5): an identical search whose results are already
+        // on screen is a no-op, not a re-fetch. Typing fires a debounced
+        // search and pressing Search (IME) fires an immediate one for the
+        // SAME query — the S5 log shows "Tarzan" submitted twice 2 s apart
+        // and "Tarzan's Revenge" twice the same way — and the second fetch
+        // re-emits the whole list (fresh Post instances, regrouped) in
+        // exactly the window the viewer taps a result in. A re-submit that
+        // changes nothing must not cancel jobs, reset the page, or flash
+        // loading, so the check runs before any of that happens. A new
+        // query, new filters, a new sort, an error on screen, or no
+        // results yet all still search.
+        val current = _uiState.value
+        if (shouldSkipIdenticalSearch(
+                lastCompletedSearch,
+                current.query.trim(),
+                current.filters,
+                current.sort,
+                current.hasSearched && current.groups.isNotEmpty(),
+                current.error != null,
+            )
+        ) return
         searchJob?.cancel()
         // A fresh search supersedes a page load too: the page would append
         // its rows onto the new search's list (Issue 6, same stale-write
@@ -539,6 +568,7 @@ class SearchViewModel @Inject constructor(
                             )
                         }
                         recompute()
+                        lastCompletedSearch = CompletedSearchKey(query, filters, state.sort)
                         recordRecent(query)
                         return@launch
                     }
@@ -575,6 +605,7 @@ class SearchViewModel @Inject constructor(
                     )
                 }
                 recompute()
+                lastCompletedSearch = CompletedSearchKey(query, filters, state.sort)
                 recordRecent(query)
             } catch (cancelled: CancellationException) {
                 throw cancelled
@@ -583,6 +614,9 @@ class SearchViewModel @Inject constructor(
                 // newer search's list either (Issue 6, same stale-write
                 // class as the success path above).
                 if (generation != searchGeneration) return@launch
+                // Session 158 (S5): a failed search leaves nothing on
+                // screen to dedupe against — a retry must re-ask.
+                lastCompletedSearch = null
                 rawResults = emptyList()
                 _uiState.update {
                     it.copy(
@@ -672,6 +706,40 @@ class SearchViewModel @Inject constructor(
         const val PAGE_SIZE = 100
     }
 }
+
+/**
+ * Session 158 (S5): the search whose results are on screen, as the
+ * dedupe key — the trimmed query plus the filters and sort that shaped
+ * the list. Two searches with the same key answer the same list, so the
+ * second one is a re-submit, not a new question.
+ */
+internal data class CompletedSearchKey(
+    val query: String,
+    val filters: SearchFilters,
+    val sort: SearchSort,
+)
+
+/**
+ * Session 158 (S5): may this search be skipped because its answer is
+ * already on screen? Only when the key matches the last completed
+ * search exactly, results are showing, and no error is on screen — a
+ * different query, filter or sort, an empty list, or a failed search
+ * all still fetch.
+ */
+internal fun shouldSkipIdenticalSearch(
+    lastCompleted: CompletedSearchKey?,
+    query: String,
+    filters: SearchFilters,
+    sort: SearchSort,
+    hasResults: Boolean,
+    hasError: Boolean,
+): Boolean =
+    lastCompleted != null &&
+        lastCompleted.query == query &&
+        lastCompleted.filters == filters &&
+        lastCompleted.sort == sort &&
+        hasResults &&
+        !hasError
 
 internal fun parseYear(year: String?): Int? {
     if (year.isNullOrBlank()) return null

@@ -391,7 +391,22 @@ private fun PlayerScreenContent(
                     originalBrightness ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
                 it.attributes = attrs
             }
-            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            // Session 158 (S5): UNSPECIFIED alone does not snap the app
+            // back on a device whose rotation is locked (a cloud device,
+            // or a phone with auto-rotate off) — after exiting the Salaar
+            // player the detail stayed landscape while the device frame
+            // was portrait, until the tester rotated the device. Ask the
+            // sensor once, so the app follows how the device is actually
+            // held right now, then release back to neutral a second later
+            // so the rest of the app is not sensor-driven forever. The
+            // delayed post survives the composition (it is tied to the
+            // decor view, not the composable) and is a no-op on a
+            // finishing activity.
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR
+            activity?.window?.decorView?.postDelayed(
+                { activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED },
+                1_000L,
+            )
         }
     }
 

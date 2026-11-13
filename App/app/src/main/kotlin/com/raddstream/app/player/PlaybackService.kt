@@ -147,7 +147,17 @@ class PlaybackService : MediaSessionService() {
             // (see PlayerExtractors.kt) — without it a tail-cued MKV makes the
             // extractor seek ~973 MB in while preparing, which a Range-ignoring
             // host answers by making the player download the whole file first.
-            .setMediaSourceFactory(DefaultMediaSourceFactory(dataFactory, buildPlayerExtractorsFactory()))
+            // Session 158 (S5): the factory also carries a load-error policy
+            // that never retries a final answer from our own redirector (see
+            // RedirectorLoadErrorPolicy) — Media3's default retries the media
+            // item, which IS the redirector URL, on 404/429, and the S5 log
+            // shows those retries pressing ~1/sec until the server's
+            // per-minute bucket 429'd the session. A dead handle is the
+            // failover machine's job, not a loader retry's.
+            .setMediaSourceFactory(
+                DefaultMediaSourceFactory(dataFactory, buildPlayerExtractorsFactory())
+                    .setLoadErrorHandlingPolicy(RedirectorLoadErrorPolicy()),
+            )
             .setLoadControl(loadControl())
             .setSeekBackIncrementMs(MX_SKIP_MS)
             .setSeekForwardIncrementMs(MX_SKIP_MS)
@@ -810,6 +820,10 @@ class PlaybackService : MediaSessionService() {
             val beforeFirstFrame = player?.let { !StartDeadline.hasFirstFrame(it.playbackState) } ?: true
             if (beforeFirstFrame) store.recordStartError(rawSummary)
             val gateRefusal = isGateRefusalError(error)
+            // Session 158 (S5): a dead handle (404/403/410 from our own
+            // redirector) is not a blip — the failover machine must hop,
+            // never retry the same address.
+            val deadHandle = isDeadHandleError(error)
             if (gateRefusal) {
                 // Salaar (2026-11-12): the gate refused the rung now opening, and
                 // every copy of that rung shares the refusal. Before the first
@@ -833,7 +847,12 @@ class PlaybackService : MediaSessionService() {
                     }
                 }
             }
-            val decision = machine.onFailure(rawSummary, isGateRefusal = gateRefusal, beforeFirstFrame = beforeFirstFrame)
+            val decision = machine.onFailure(
+                rawSummary,
+                isGateRefusal = gateRefusal,
+                beforeFirstFrame = beforeFirstFrame,
+                isDeadHandle = deadHandle,
+            )
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
         }
 

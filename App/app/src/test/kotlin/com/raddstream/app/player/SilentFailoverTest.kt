@@ -222,4 +222,46 @@ class SilentFailoverTest {
         )
         assertFalse(isGateRefusalError(timeout))
     }
+
+    // ── the dead-handle detector (Session 158, S5) ──────────────────────────
+
+    @Test
+    fun `isDeadHandleError recognizes a 404 bad-http-status error`() {
+        val error = androidx.media3.common.PlaybackException(
+            "Response code: 404", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertTrue(isDeadHandleError(error))
+    }
+
+    @Test
+    fun `isDeadHandleError recognizes a 403 and a 410`() {
+        val gone = androidx.media3.common.PlaybackException(
+            "Response code: 403", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertTrue(isDeadHandleError(gone))
+        val deleted = androidx.media3.common.PlaybackException(
+            "Response code: 410", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertTrue(isDeadHandleError(deleted))
+    }
+
+    @Test
+    fun `isDeadHandleError rejects a 402 and a timeout`() {
+        // A 402 is a gate refusal, not a dead handle: the two detectors
+        // must stay disjoint, or a refused rung would hop instead of
+        // stepping down.
+        val refused = androidx.media3.common.PlaybackException(
+            "Response code: 402", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertFalse(isDeadHandleError(refused))
+        val timeout = androidx.media3.common.PlaybackException(
+            "timeout", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        )
+        assertFalse(isDeadHandleError(timeout))
+    }
 }

@@ -608,8 +608,14 @@ private fun SearchBody(
                 // P1-S1: results are a scannable vertical grid, two posters
                 // wide — rails are for Home. Scanning 20 results no longer
                 // means swiping every rail sideways.
-                group.items.chunked(2).forEachIndexed { rowIndex, pair ->
-                    item(key = "${group.typeKey}-row-$rowIndex") {
+                // Session 158 (S5): a row is keyed by what it holds, not
+                // where it sits — a re-emitted list (the same search
+                // landing twice, a second identical submit) rebuilds the
+                // groups, and an index key lets the rows shift under a
+                // press in flight. A content key keeps the row — and the
+                // press on it — alive across the re-emission.
+                group.items.chunked(2).forEach { pair ->
+                    item(key = "${group.typeKey}-${pair.joinToString(separator = ",") { it.id }}") {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
