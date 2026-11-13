@@ -4,6 +4,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 
 /** A freshly (re)resolved source for one resource, produced by the app's resolver layer. */
@@ -61,7 +62,8 @@ class CacheCoordinator(
      * makes a later re-seed of the same source take the small window first,
      * which is what a first seed is.
      */
-    private val firstSeedWindows = ConcurrentHashMap.newKeySet<String>()
+    private val firstSeedWindows =
+        Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /**
      * Pre-resolve better (2026-11-13): mark [sourceKey]'s next fill as a
