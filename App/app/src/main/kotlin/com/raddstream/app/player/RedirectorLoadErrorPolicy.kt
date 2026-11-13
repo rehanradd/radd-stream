@@ -1,6 +1,7 @@
 package com.raddstream.app.player
 
 import androidx.media3.common.C
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.upstream.DefaultLoadErrorHandlingPolicy
 import androidx.media3.exoplayer.upstream.LoadErrorHandlingPolicy
@@ -38,6 +39,7 @@ internal fun redirectorRetryDelayMs(responseCode: Int?): Long? =
  * (see [isGateRefusalError]): the [HttpDataSource.InvalidResponseCodeException]
  * itself, or its message, "Response code: 404".
  */
+@OptIn(UnstableApi::class)
 class RedirectorLoadErrorPolicy : LoadErrorHandlingPolicy {
 
     private val fallback = DefaultLoadErrorHandlingPolicy()
