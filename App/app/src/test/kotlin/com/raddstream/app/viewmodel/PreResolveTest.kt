@@ -311,9 +311,9 @@ class PreResolveTest {
     }
 
     @Test
-    fun `detail load retries at most three times with one null retry`() {
+    fun `detail load retries at most three times with two null retries`() {
         assertEquals(3, DETAIL_LOAD_MAX_ATTEMPTS)
-        assertEquals(1, DETAIL_LOAD_NULL_RETRIES)
+        assertEquals(2, DETAIL_LOAD_NULL_RETRIES)
     }
 
     @Test
