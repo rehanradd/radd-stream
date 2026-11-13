@@ -28,9 +28,13 @@ import retrofit2.converter.gson.GsonConverterFactory
  *
  * There is also no `If-None-Match` / ETag handling: the v1 server sends no ETag, and the v2
  * contract's ETag/304 support is not served yet — see `models/EndpointGaps.kt`.
+ *
+ * Open, with [current] open, so a test can stand in a provider that throws
+ * without a server (Session 157): the detail path must answer null on a
+ * provider failure, and that contract is only pinnable through a fake.
  */
 @Singleton
-class ApiProvider @Inject constructor(
+open class ApiProvider @Inject constructor(
     private val settingsRepository: ServerSettingsRepository,
 ) {
     @Volatile
@@ -110,7 +114,7 @@ class ApiProvider @Inject constructor(
         }
     }
 
-    suspend fun current(): RaddStreamApi {
+    open suspend fun current(): RaddStreamApi {
         val savedUrl = settingsRepository.serverUrl.first()
             ?: throw IllegalStateException("Connect to a catalog server first.")
         return forServer(savedUrl)

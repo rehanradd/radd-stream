@@ -3,6 +3,7 @@ package com.raddstream.app.repository
 import com.raddstream.app.data.ServerSettingsRepository
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.bearerHeader
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import com.raddstream.app.network.models.ContactRequest
 import com.raddstream.app.network.models.FacetsResponse
@@ -170,6 +171,17 @@ class CatalogRepository @Inject constructor(
                 warm = if (warm) "1" else null,
                 audio = audio?.takeIf { it.isNotBlank() },
             )
+        } catch (ex: CancellationException) {
+            // A cancelled load is not a failed load: rethrow so the
+            // coroutine ends cancelled instead of painting an error over a
+            // screen the viewer already left (Session 155/156).
+            throw ex
+        } catch (ex: java.util.concurrent.CancellationException) {
+            // The java.util sibling is not the coroutines one — it extends
+            // IllegalStateException too, so without this line a cancelled
+            // load would answer null and retry instead of aborting
+            // (Session 156 parent fixup).
+            throw ex
         } catch (_: IllegalStateException) {
             // Session 155 (S2): the provider throwing "Connect to a catalog
             // server first" is a first-call readiness failure, not a server
@@ -178,6 +190,13 @@ class CatalogRepository @Inject constructor(
             // of hard-failing the first tap. Only the provider-not-ready
             // error is caught here: a dead socket still throws, so the
             // caller can tell a refusal from a failure to ask.
+            return null
+        } catch (_: RuntimeException) {
+            // Session 157 (S4): the same failure-to-ask rule as the v2
+            // path — a provider or client-build failure that is not the
+            // not-ready error answers null so the caller's retry re-asks
+            // instead of hard-failing the first tap. A dead socket still
+            // throws (IOException is not a RuntimeException).
             return null
         }
         if (response.success && response.data != null) {
@@ -269,6 +288,18 @@ class CatalogRepository @Inject constructor(
     suspend fun getWorkDetailV2(workId: Long, audio: String? = null): PostDetail? {
         val response = try {
             apiProvider.current().getWorkDetail(workId)
+        } catch (ex: CancellationException) {
+            // A cancelled load is not a failed load: rethrow so the
+            // coroutine ends cancelled instead of painting an error over a
+            // screen the viewer already left (Session 155/156).
+            throw ex
+        } catch (ex: java.util.concurrent.CancellationException) {
+            // The java.util sibling is not the coroutines one — it extends
+            // IllegalStateException too, so without this line it would fall
+            // through to the not-ready branch below and a cancelled load
+            // would answer null and retry instead of aborting (Session 156
+            // parent fixup).
+            throw ex
         } catch (_: HttpException) {
             return null
         } catch (_: IOException) {
@@ -279,6 +310,17 @@ class CatalogRepository @Inject constructor(
             // refusal — the server IS configured (the brand default), and a
             // re-call succeeds. Null so the caller's null-retry re-asks
             // instead of hard-failing the first tap.
+            return null
+        } catch (_: RuntimeException) {
+            // Session 157 (S4): a provider or client-build failure that is
+            // not the not-ready error — a bad address, a client build that
+            // throws — is still a failure to ask, not a server refusal. The
+            // S4 first tap died with no request on the wire and the hard
+            // "Failed to load details" error because this failure escaped
+            // the catches above; null so the caller's null-retry re-asks
+            // instead of hard-failing the first tap. A dead socket still
+            // throws (IOException is not a RuntimeException), so the caller
+            // can still tell a refusal from a failure to ask.
             return null
         }
         if (!response.ok) return null

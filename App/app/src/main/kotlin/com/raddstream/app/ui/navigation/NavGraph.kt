@@ -217,7 +217,15 @@ private fun NavHostController.navigateToPost(post: Post, autoplay: Boolean = fal
     } else {
         Screen.Detail.createRoute(post.id, autoplay)
     }
-    navigate(route)
+    // Session 157 (S4): one tap, one detail. A double-tap on a poster must
+    // not stack two identical detail entries — the second entry's ViewModel
+    // loads the same title again while the first is still loading, and Back
+    // then lands on the same detail instead of the list. Same rule as the
+    // player route (Session 114): a different title is a different route,
+    // so related titles still open.
+    navigate(route) {
+        launchSingleTop = true
+    }
 }
 
 @Composable

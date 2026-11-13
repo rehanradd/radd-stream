@@ -374,7 +374,14 @@ private fun PlayerScreenContent(
             WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         insets?.hide(WindowInsetsCompat.Type.systemBars())
         val originalBrightness = window?.attributes?.screenBrightness
-        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        // Session 157 (S4): playback starts in forced landscape, not
+        // sensor landscape. A sensor reading only picks which landscape the
+        // device is already in — on a device whose sensor is fixed, flat
+        // or slow (a cloud device, an emulator) it can hold the player in
+        // portrait while a landscape picture plays sideways. Forced
+        // landscape is what "play this video" means; the rotate button's
+        // portrait branch below still follows the sensor.
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
         onDispose {
             window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             insets?.show(WindowInsetsCompat.Type.systemBars())
@@ -408,9 +415,14 @@ private fun PlayerScreenContent(
     }
 
     // Manual orientation (rotate button). configChanges on MainActivity keeps playback alive.
+    // Session 157 (S4): the landscape branch is forced, matching the entry
+    // effect above — the orientation state is the source of truth, and its
+    // first composition would otherwise overwrite the forced request with
+    // the sensor one. The portrait branch keeps the sensor, so an explicit
+    // flip to portrait still follows how the viewer holds the device.
     LaunchedEffect(state.orientation) {
         activity?.requestedOrientation = when (state.orientation) {
-            PlayerOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+            PlayerOrientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             PlayerOrientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
         }
     }
