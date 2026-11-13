@@ -42,10 +42,21 @@ class RedirectorLoadErrorPolicy : LoadErrorHandlingPolicy {
 
     private val fallback = DefaultLoadErrorHandlingPolicy()
 
-    override fun getRetryDelayMs(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
+    override fun getRetryDelayMsFor(loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo): Long {
         val terminal = redirectorRetryDelayMs(invalidResponseCode(loadErrorInfo.exception))
         if (terminal != null) return terminal
-        return fallback.getRetryDelayMs(loadErrorInfo)
+        return fallback.getRetryDelayMsFor(loadErrorInfo)
+    }
+
+    override fun getFallbackSelectionFor(
+        fallbackOptions: LoadErrorHandlingPolicy.FallbackOptions,
+        loadErrorInfo: LoadErrorHandlingPolicy.LoadErrorInfo,
+    ): LoadErrorHandlingPolicy.FallbackSelection? {
+        // A terminal answer is a final word, not a cue to try another
+        // location/track of the same redirector URL — the failover machine
+        // owns the next move. Everything else keeps the default's fallback.
+        if (redirectorRetryDelayMs(invalidResponseCode(loadErrorInfo.exception)) != null) return null
+        return fallback.getFallbackSelectionFor(fallbackOptions, loadErrorInfo)
     }
 
     override fun getMinimumLoadableRetryCount(dataType: Int): Int =
