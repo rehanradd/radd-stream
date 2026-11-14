@@ -438,6 +438,221 @@ class AheadFetcherFinalizeTest {
         assertEquals(AheadFetcher.DEFAULT_AHEAD_BYTES, after.verifiedPrefixBytes)
     }
 
+    // ── Robo re-test (2026-11-14): follow once, fetch direct ──────────
+
+    /** Counts requests per host for the redirector-simulating client below. */
+    private class RedirectCounts(var redirector: Int = 0, var cdn: Int = 0)
+
+    /**
+     * A client that behaves like our redirector in front of a file host.
+     * An application interceptor answers from memory — no socket, no
+     * MockWebServer — following the HlsAheadBufferTest pattern: a request
+     * to `redirector.test` is answered with the file host's bytes and the
+     * response carries the post-redirect request (`https://cdn.test/file`),
+     * exactly as OkHttp presents a followed 302. A real 302 returned by an
+     * interceptor is never followed (the first version of these tests
+     * proved it: all three outcomes came back wrong), and the redirect
+     * itself is OkHttp's job, proven in production every time the player
+     * follows the redirector — not something this suite can pin. What
+     * this suite pins is the fetcher's side: it must adopt the served
+     * address and press the redirector once per pass, not once per chunk.
+     * When [failCdnFrom] is set, the file host refuses every range starting
+     * at or past it with [failCdnStatus] — a rotted direct address.
+     */
+    private fun redirectingClient(
+        total: Long,
+        counts: RedirectCounts,
+        failCdnFrom: Long? = null,
+        failCdnStatus: Int = 403,
+    ): OkHttpClient =
+        OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val request = chain.request()
+                val url = request.url.toString()
+                val finalRequest = if (url.startsWith("https://redirector.test/")) {
+                    counts.redirector++
+                    request.newBuilder().url("https://cdn.test/file").build()
+                } else {
+                    counts.cdn++
+                    request
+                }
+                val range = finalRequest.header("Range") ?: "bytes=0-"
+                val bounds = range.removePrefix("bytes=").split("-")
+                val start = bounds[0].toLongOrNull()?.coerceIn(0L, total) ?: 0L
+                if (failCdnFrom != null && start >= failCdnFrom) {
+                    Response.Builder()
+                        .request(finalRequest)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(failCdnStatus)
+                        .message(if (failCdnStatus == 402) "Payment Required" else "Forbidden")
+                        .body("".toResponseBody("text/plain".toMediaType()))
+                        .build()
+                } else {
+                    val lastByte = bounds.getOrNull(1)?.takeIf { it.isNotBlank() }?.toLongOrNull()
+                        ?: (total - 1L)
+                    val end = lastByte.coerceIn(start, (total - 1L).coerceAtLeast(start))
+                    val slice = ByteArray((end - start + 1).toInt()) { ((start + it) % 251).toByte() }
+                    Response.Builder()
+                        .request(finalRequest)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(206)
+                        .message("Partial Content")
+                        .header("Content-Range", "bytes $start-$end/$total")
+                        .body(slice.toResponseBody("application/octet-stream".toMediaType()))
+                        .build()
+                }
+            }
+            .build()
+
+    private fun redirectingFetcher(
+        fx: Fixture,
+        total: Long,
+        counts: RedirectCounts,
+        failCdnFrom: Long? = null,
+        failCdnStatus: Int = 403,
+    ): AheadFetcher = AheadFetcher(
+        fetcher = RangeByteFetcher(redirectingClient(total, counts, failCdnFrom, failCdnStatus)),
+        taskDao = fx.taskDao,
+        manifestDao = fx.manifestDao,
+        fileDao = fx.fileDao,
+        storage = fx.storage,
+        clock = UptimeClock { 1_000L },
+        maxBytesPerPass = 256L * 1024 * 1024,
+        chunkBytes = 1024 * 1024,
+    )
+
+    @Test
+    fun `a preview pass presses the redirector once and fetches the rest direct`() {
+        // Before the fix every 1 MiB chunk re-pressed our redirector, so one
+        // 40 MiB preview pass spent ~40 of the 30/min play budget and the
+        // real Play press 429'd. The first chunk follows the 302 and learns
+        // the file host; the other 39 chunks go there direct.
+        val total = 100L * 1024 * 1024
+        val fx = Fixture(chunkBytes = 1024 * 1024, maxBytesPerPass = 256L * 1024 * 1024)
+        val task = fx.taskDao.seed(
+            bigPreviewTask(total).copy(currentUrl = "https://redirector.test/api/v1/stream?id=abc"),
+        )
+        val counts = RedirectCounts()
+
+        val outcome = runBlocking {
+            redirectingFetcher(fx, total, counts).run(task, FetchMode.AUTO_PREVIEW_AHEAD) { 0L }
+        }
+
+        assertEquals(FetchOutcome.WINDOW_FILLED, outcome)
+        val after = fx.taskDao.rows[1L]!!
+        assertEquals("the full forty mebibyte window still fills",
+            AheadFetcher.DEFAULT_AHEAD_BYTES, after.downloadedBytes)
+        assertEquals("one press learns the target; the rest must not re-press it",
+            1, counts.redirector)
+        assertEquals("the other thirty-nine chunks go direct to the file host",
+            39, counts.cdn)
+        assertEquals("the row keeps our redirector address — the direct url is never stored",
+            "https://redirector.test/api/v1/stream?id=abc", after.currentUrl)
+        val part = fx.tempFile.readBytes()
+        for (offset in listOf(0, 1024, 20 * 1024 * 1024, 40 * 1024 * 1024 - 1024)) {
+            assertEquals("byte at $offset must be the file's own byte",
+                (offset % 251).toByte(), part[offset])
+        }
+    }
+
+    @Test
+    fun `a rotted direct url re-resolves through the redirector instead of wedging`() {
+        // The file host 403s from the second chunk on: the learned address
+        // has rotted. The pass must report NEEDS_RERESOLVE (the coordinator's
+        // re-resolve path rebuilds our redirector address) and the row must
+        // still name the redirector, so the rebuild has a handle to work from.
+        val total = 100L * 1024 * 1024
+        val fx = Fixture(chunkBytes = 1024 * 1024, maxBytesPerPass = 256L * 1024 * 1024)
+        val task = fx.taskDao.seed(
+            bigPreviewTask(total).copy(currentUrl = "https://redirector.test/api/v1/stream?id=abc"),
+        )
+        val counts = RedirectCounts()
+
+        val outcome = runBlocking {
+            redirectingFetcher(fx, total, counts, failCdnFrom = 1024L * 1024)
+                .run(task, FetchMode.AUTO_PREVIEW_AHEAD) { 0L }
+        }
+
+        assertEquals(FetchOutcome.NEEDS_RERESOLVE, outcome)
+        val after = fx.taskDao.rows[1L]!!
+        assertEquals("only the first chunk landed before the rot",
+            1024L * 1024, after.downloadedBytes)
+        assertEquals(1, counts.redirector)
+        assertEquals("chunk one served, chunk two refused", 1, counts.cdn)
+        assertEquals("the row keeps our redirector address so re-resolve can rebuild it",
+            "https://redirector.test/api/v1/stream?id=abc", after.currentUrl)
+    }
+
+    @Test
+    fun `a 402 from the file host is a retryable error, never our gate refusing the rung`() {
+        // Salaar (2026-11-12): our redirector's 402 is the quality gate
+        // refusing the rung — not retryable, and the preview is dropped
+        // silently. A 402 from the file host after the redirect is a
+        // different fact (upstream's gate), and must stay a plain retryable
+        // HttpError: without the gateUrl the fetcher compares against the
+        // adopted direct address and misclassifies it as our gate.
+        val total = 100L * 1024 * 1024
+        val fx = Fixture(chunkBytes = 1024 * 1024, maxBytesPerPass = 256L * 1024 * 1024)
+        val task = fx.taskDao.seed(
+            bigPreviewTask(total).copy(currentUrl = "https://redirector.test/api/v1/stream?id=abc"),
+        )
+        val counts = RedirectCounts()
+
+        val outcome = runBlocking {
+            redirectingFetcher(fx, total, counts, failCdnFrom = 1024L * 1024, failCdnStatus = 402)
+                .run(task, FetchMode.AUTO_PREVIEW_AHEAD) { 0L }
+        }
+
+        assertEquals(FetchOutcome.RETRY_LATER, outcome)
+        val after = fx.taskDao.rows[1L]!!
+        assertEquals("only the first chunk landed before the refusal",
+            1024L * 1024, after.downloadedBytes)
+        assertEquals(1, counts.redirector)
+        assertEquals(1, counts.cdn)
+    }
+
+    @Test
+    fun `a full download through a redirector commits with the redirector address on the row`() {
+        // The whole file arrives via the 302; the committed row must still
+        // name our redirector, never the hoster url — identity and
+        // re-resolve read the row, and a stored hoster url would break both.
+        val fx = Fixture(chunkBytes = 4 * 1024, maxBytesPerPass = 64L * 1024 * 1024)
+        val counts = RedirectCounts()
+        val fetcher = AheadFetcher(
+            fetcher = RangeByteFetcher(redirectingClient(payload.size.toLong(), counts)),
+            taskDao = fx.taskDao,
+            manifestDao = fx.manifestDao,
+            fileDao = fx.fileDao,
+            storage = fx.storage,
+            clock = UptimeClock { 1_000L },
+            maxBytesPerPass = 64L * 1024 * 1024,
+            chunkBytes = 4 * 1024,
+        )
+        val task = fx.taskDao.seed(
+            CacheTaskEntity(
+                id = 1L,
+                sourceKey = sourceKey,
+                releaseId = 9L,
+                linkKind = "direct",
+                currentUrl = "https://redirector.test/api/v1/stream?id=abc",
+                totalSizeBytes = payload.size.toLong(),
+                priority = CachePriority.USER_REQUESTED.name,
+                origin = CacheOrigin.USER_KEEP.name,
+                state = CacheTaskState.LOADING.name,
+            ),
+        )
+
+        val outcome = runBlocking { fetcher.run(task, FetchMode.FULL_DOWNLOAD) { 0L } }
+
+        assertEquals(FetchOutcome.COMPLETED, outcome)
+        assertTrue(fx.committedFile.exists())
+        fx.assertContentMatches()
+        assertEquals(1, counts.redirector)
+        assertEquals("chunk one via the 302, chunk two direct", 1, counts.cdn)
+        assertEquals("https://redirector.test/api/v1/stream?id=abc",
+            fx.taskDao.rows[1L]!!.currentUrl)
+    }
+
     private fun Fixture.assertContentMatches() {
         assertTrue(
             "committed bytes must equal what the source served",
