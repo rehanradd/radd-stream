@@ -1,6 +1,5 @@
 package com.raddstream.app.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -12,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -25,7 +25,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -119,24 +122,38 @@ internal fun DisclaimerDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (disclaimer.email.isNotBlank()) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "Contact: ",
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                            // F13 (Batch B): the address is a link, not a
-                            // line to copy by hand — one tap opens the mail
-                            // app addressed to it.
-                            Text(
-                                disclaimer.email,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
-                                textDecoration = TextDecoration.Underline,
-                                modifier = Modifier.clickable {
-                                    uriHandler.openUri("mailto:${disclaimer.email}")
-                                },
-                            )
+                        // F13 (Batch B): the address is a link, not a line
+                        // to copy by hand — one tap opens the mail app
+                        // addressed to it. One text node, with the email
+                        // annotated inside it: splitting it into two Texts
+                        // broke the "Contact: <email>" line the test pins,
+                        // and a screen reader should hear the whole line.
+                        val contactText = buildAnnotatedString {
+                            append("Contact: ")
+                            pushStringAnnotation(tag = "mailto", annotation = disclaimer.email)
+                            withStyle(
+                                SpanStyle(
+                                    color = MaterialTheme.colorScheme.primary,
+                                    textDecoration = TextDecoration.Underline,
+                                ),
+                            ) {
+                                append(disclaimer.email)
+                            }
+                            pop()
                         }
+                        ClickableText(
+                            text = contactText,
+                            style = MaterialTheme.typography.bodyMedium,
+                            onClick = { offset ->
+                                contactText.getStringAnnotations(
+                                    tag = "mailto",
+                                    start = offset,
+                                    end = offset,
+                                ).firstOrNull()?.let { annotation ->
+                                    uriHandler.openUri("mailto:${annotation.item}")
+                                }
+                            },
+                        )
                     }
                 }
                 // F13 (Batch B): the scroll cue — a small line that says the

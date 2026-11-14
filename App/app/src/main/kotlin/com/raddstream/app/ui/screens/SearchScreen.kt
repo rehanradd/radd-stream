@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -618,10 +617,12 @@ private fun SearchBody(
             }
         }
         state.isLoading && state.groups.isEmpty() -> PosterGridSkeleton(
-            // F21 (Batch B): the loading state is a 2-column grid skeleton —
-            // the results arrive as a 2-column grid, so the wait looks like
-            // the answer instead of a rail that never comes.
-            columns = GridCells.Fixed(2),
+            // F21 (Batch B): the loading state is a grid skeleton — the
+            // results arrive as a grid, so the wait looks like the answer
+            // instead of a rail that never comes. The columns are the shared
+            // CatalogGridColumns rule (the skeleton's default): a literal
+            // count here would be a second column rule, and the skeleton
+            // would disagree with the grid again the moment the rule moves.
             contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
         )
         state.error != null && state.groups.isEmpty() -> ErrorState(title = "Couldn't search", message = state.error ?: "Search failed.", onRetry = viewModel::submitCurrentQuery)
