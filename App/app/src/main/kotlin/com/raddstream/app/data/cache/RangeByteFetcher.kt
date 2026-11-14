@@ -22,7 +22,20 @@ import kotlin.coroutines.coroutineContext
  *  - [HttpError] / [IoError] — retryable per [RetryPolicy].
  */
 sealed class RangeFetchResult {
-    data class Success(val bytesWritten: Long, val rangeHonored: Boolean, val totalSize: Long?) : RangeFetchResult()
+    data class Success(
+        val bytesWritten: Long,
+        val rangeHonored: Boolean,
+        val totalSize: Long?,
+        /**
+         * The URL that actually served these bytes, after any redirect.
+         * Our redirector 302s per request, so a caller that re-issues the
+         * redirector address per chunk pays one play-bucket press per chunk;
+         * adopting this for the rest of a pass fetches the rest direct
+         * (Robo re-test 2026-11-14: 36 stream presses in one minute). Null
+         * when the fetch never reached a serving response.
+         */
+        val finalUrl: String? = null,
+    ) : RangeFetchResult()
     data class SourceDead(val httpStatus: Int) : RangeFetchResult()
     /**
      * Salaar (2026-11-12): our own redirector refused this rung with the quality
@@ -59,6 +72,13 @@ class RangeByteFetcher(private val client: OkHttpClient) {
         start: Long,
         endExclusive: Long?,
         totalSize: Long?,
+        /**
+         * The address a 402 must have come from to count as our own gate
+         * refusing the rung. Defaults to [url]; a caller that fetches from
+         * an already-redirected address passes the redirector address here,
+         * so a 402 from the file host is never mistaken for our gate.
+         */
+        gateUrl: String? = null,
     ): RangeFetchResult = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(url)
@@ -73,17 +93,18 @@ class RangeByteFetcher(private val client: OkHttpClient) {
             if (code == 403 || code == 410 || code == 404) {
                 return@withContext RangeFetchResult.SourceDead(code)
             }
-            if (code == GATE_REFUSED_HTTP_STATUS && response.request.url.toString() == url) {
+            if (code == GATE_REFUSED_HTTP_STATUS && response.request.url.toString() == (gateUrl ?: url)) {
                 // The gate refused this rung before any redirect: the 402 came
                 // from OUR redirector (the final request is still the one we
-                // sent), not from an upstream host after a 302. A 402 after a
-                // redirect is upstream's, and stays a plain HttpError.
+                // sent, or the gate address the caller named), not from an
+                // upstream host after a 302. A 402 after a redirect is
+                // upstream's, and stays a plain HttpError.
                 return@withContext RangeFetchResult.GateRefused(code)
             }
             if (code == 416) {
                 // Requested a range past EOF: treat as success with zero bytes, the caller
                 // will see the ledger already covers the file.
-                return@withContext RangeFetchResult.Success(0, true, totalSize)
+                return@withContext RangeFetchResult.Success(0, true, totalSize, finalUrl = response.request.url.toString())
             }
             if (!response.isSuccessful) {
                 return@withContext RangeFetchResult.HttpError(code)
@@ -124,7 +145,7 @@ class RangeByteFetcher(private val client: OkHttpClient) {
                 file.write(buffer, 0, read)
                 written += read
             }
-            RangeFetchResult.Success(written, honored, discovered)
+            RangeFetchResult.Success(written, honored, discovered, finalUrl = response.request.url.toString())
         } catch (ce: CancellationException) {
             throw ce // never swallow structured concurrency cancellation
         } catch (io: IOException) {

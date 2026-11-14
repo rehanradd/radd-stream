@@ -80,6 +80,16 @@ class AheadFetcher(
         var totalSize = task.totalSizeBytes
         var downloaded = ledger.coveredBytes()
         var currentUrl = task.currentUrl
+        // Robo re-test (2026-11-14): every 1 MiB chunk re-pressed our
+        // redirector, so one 40 MiB preview pass spent ~40 of the 30/min
+        // play budget and the real Play press 429'd. Follow the redirect
+        // once per pass and fetch the rest of the window from the address
+        // the 302 named — the same shape Media3 uses for playback and
+        // HlsAheadBuffer uses for segments. The learned address lives only
+        // in this pass: it is never persisted, so the row keeps our
+        // redirector address (re-resolve and identity keep working), and a
+        // rotted target still falls back to NEEDS_RERESOLVE below.
+        var fetchUrl = currentUrl
 
         // Where do we stop this pass?
         //
@@ -139,9 +149,13 @@ class AheadFetcher(
                         return FetchOutcome.STORAGE_SUSPENDED
                     }
 
-                    val result = fetcher.fetch(currentUrl, raf, cursor, pieceEnd, totalSize.takeIf { it > 0 })
+                    val result = fetcher.fetch(fetchUrl, raf, cursor, pieceEnd, totalSize.takeIf { it > 0 }, gateUrl = currentUrl)
                     when (result) {
                         is RangeFetchResult.Success -> {
+                            // Adopt the address that served these bytes for the
+                            // rest of this pass, so only the first chunk of a
+                            // pass ever presses the redirector.
+                            result.finalUrl?.takeIf { it.isNotBlank() && it != fetchUrl }?.let { fetchUrl = it }
                             if (result.totalSize != null && result.totalSize > 0 && totalSize <= 0) {
                                 totalSize = result.totalSize
                             }
