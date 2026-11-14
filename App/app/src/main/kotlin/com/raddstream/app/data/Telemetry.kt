@@ -119,17 +119,7 @@ object Telemetry {
      */
     fun installCrashHandler() {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
-        // TEMP-DIAG 4 (revert before merge): the test executor dies with
-        // exit 1 and no test output (runs 471/473/474/475/476). This handler
-        // is the only place that can swallow an uncaught exception silently
-        // (it records a counter and, with no previous handler, kills the
-        // process — a no-op under Robolectric's ShadowProcess). Print the
-        // exception and the chain state so the next CI run shows WHAT
-        // throws, if anything, and whether Crashlytics' handler is chained.
-        System.err.println("TEMP-DIAG 4: installCrashHandler previous=$previous")
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
-            System.err.println("TEMP-DIAG 4: uncaught on ${thread.name}: $error")
-            error.printStackTrace()
             runCatching { counters?.record("crashes") }
             if (previous != null) {
                 previous.uncaughtException(thread, error)
