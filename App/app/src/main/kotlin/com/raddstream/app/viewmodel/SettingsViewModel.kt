@@ -111,7 +111,10 @@ data class UserPreferences(
         /** The chip label for the explicit "leave it to the player" pick, stored as the word itself. */
         const val AUDIO_LANGUAGE_DEFAULT = "Player default"
         val AUDIO_LANGUAGE_OPTIONS = listOf(
-            AUDIO_LANGUAGE_DEFAULT, "English", "Hindi", "Urdu", "Tamil", "Telugu", "Malayalam", "Japanese",
+            // F23 (Batch B): Kannada joins the list — the catalog carries
+            // Kannada titles, and the list had every other South Indian
+            // language but this one.
+            AUDIO_LANGUAGE_DEFAULT, "English", "Hindi", "Urdu", "Tamil", "Telugu", "Malayalam", "Kannada", "Japanese",
         )
 
         /** Subtitles start off — a catalog this mixed has no language worth guessing. */

@@ -24,6 +24,7 @@ import com.raddstream.app.network.models.WirePlayRequest
 import com.raddstream.app.player.Coverage
 import com.raddstream.app.player.toPlayerCoverage
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -34,6 +35,29 @@ class CatalogRepository @Inject constructor(
     private val apiProvider: ApiProvider,
     private val settingsRepository: ServerSettingsRepository,
 ) {
+    /**
+     * F9 (Batch B): the last few hundred list rows, by post id, in memory.
+     * A detail load that fails (offline, 429, 5xx) still knows the title,
+     * poster and year — because the viewer just tapped it in a list this
+     * process already fetched — so the error screen can name the title
+     * instead of a bare "Couldn't load this title". Populated by the list
+     * routes only (never by detail: a failed detail must not cache its own
+     * absence); capped, so a long browse cannot grow it without bound; and
+     * a miss is simply "no fallback", never an error. The rows are the
+     * server's own, minutes old at most — good enough to name a title, and
+     * never used as a substitute for the detail itself.
+     */
+    private val postCache = ConcurrentHashMap<Int, Post>()
+
+    fun cachePosts(posts: List<Post>) {
+        if (postCache.size > POST_CACHE_MAX) postCache.clear()
+        for (post in posts) {
+            if (post.id > 0) postCache[post.id] = post
+        }
+    }
+
+    fun cachedPost(postId: Int): Post? = postCache[postId]
+
     suspend fun testAndSaveServer(serverUrl: String): StatsResponse {
         val normalizedUrl = com.raddstream.app.network.normalizeServerUrl(serverUrl)
         val stats = apiProvider.forServer(normalizedUrl).getStats()
@@ -76,19 +100,26 @@ class CatalogRepository @Inject constructor(
         workRef: String? = null,
         page: Int = 1,
         limit: Int = 20,
-    ): PostsResponse = apiProvider.current().getPosts(
-        query = query?.takeIf(String::isNotBlank),
-        type = type,
-        industry = industry,
-        genre = genre,
-        language = language,
-        quality = quality,
-        sort = sort,
-        freeOnly = freeOnly,
-        workRef = workRef,
-        page = page,
-        limit = limit,
-    )
+    ): PostsResponse {
+        val response = apiProvider.current().getPosts(
+            query = query?.takeIf(String::isNotBlank),
+            type = type,
+            industry = industry,
+            genre = genre,
+            language = language,
+            quality = quality,
+            sort = sort,
+            freeOnly = freeOnly,
+            workRef = workRef,
+            page = page,
+            limit = limit,
+        )
+        // F9 (Batch B): every list page feeds the fallback cache, so a
+        // detail tap on one of these rows can still name its title when
+        // the detail call itself fails.
+        cachePosts(response.results)
+        return response
+    }
 
     /**
      * GET /api/v1/trending — the "Most versions" rail's own route. Throws
@@ -100,11 +131,15 @@ class CatalogRepository @Inject constructor(
         type: String? = null,
         page: Int = 1,
         limit: Int = 20,
-    ): PostsResponse = apiProvider.current().getTrending(
-        type = type,
-        page = page,
-        limit = limit,
-    )
+    ): PostsResponse {
+        val response = apiProvider.current().getTrending(
+            type = type,
+            page = page,
+            limit = limit,
+        )
+        cachePosts(response.results)
+        return response
+    }
 
     /**
      * GET /api/v1/related — "Because you watch" for one seed post id.
@@ -115,11 +150,15 @@ class CatalogRepository @Inject constructor(
         workId: Int,
         page: Int = 1,
         limit: Int = 20,
-    ): PostsResponse = apiProvider.current().getRelated(
-        workId = workId,
-        page = page,
-        limit = limit,
-    )
+    ): PostsResponse {
+        val response = apiProvider.current().getRelated(
+            workId = workId,
+            page = page,
+            limit = limit,
+        )
+        cachePosts(response.results)
+        return response
+    }
 
     /**
      * GET /api/v1/facets — the browse jump-off chips. Null on any failure,
@@ -239,8 +278,11 @@ class CatalogRepository @Inject constructor(
             return null
         }
         if (!response.ok) return null
+        val posts = response.items.map { it.toPost() }
+        // F9 (Batch B): v2 browse pages feed the fallback cache too.
+        cachePosts(posts)
         return V2BrowsePage(
-            posts = response.items.map { it.toPost() },
+            posts = posts,
             nextCursor = response.nextCursor,
             hasMore = response.hasMore,
             totalEstimate = response.totalEstimate,
@@ -274,8 +316,11 @@ class CatalogRepository @Inject constructor(
             return null
         }
         if (!response.ok) return null
+        val posts = response.items.map { it.toPost() }
+        // F9 (Batch B): v2 search pages feed the fallback cache too.
+        cachePosts(posts)
         return V2BrowsePage(
-            posts = response.items.map { it.toPost() },
+            posts = posts,
             nextCursor = response.nextCursor,
             hasMore = response.hasMore,
             totalEstimate = response.totalEstimate,
@@ -579,6 +624,9 @@ class CatalogRepository @Inject constructor(
 
     companion object {
         private const val HTTP_OK = 200
+
+        /** F9 (Batch B): the in-memory post cache's cap — see [CatalogRepository.cachePosts]. */
+        private const val POST_CACHE_MAX = 500
     }
 }
 

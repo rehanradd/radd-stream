@@ -7,6 +7,7 @@ import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -14,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -30,15 +32,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.raddstream.app.network.models.Post
 import com.raddstream.app.ui.layout.CardGeometry
 import com.raddstream.app.ui.theme.PressHaptics
+import com.raddstream.app.ui.theme.RaddStreamTheme
 import com.raddstream.app.ui.theme.pressScale
 
 /**
@@ -98,6 +104,16 @@ fun PosterCard(
         }
         if (tileBadges.isNotEmpty()) append(", ").append(tileBadges.joinToString(", ") { it.a11y })
         if (progressLabel != null) append(", ").append(progressLabel)
+    }
+
+    // F7 (Batch B): the title slot is exactly two lines tall, taken from the
+    // style's own line height, so a one-line title leaves the same card height
+    // as a two-line one — the round-2 "inconsistent card heights" complaint.
+    // The height is density-scaled, so a 200% font scale grows the slot
+    // instead of clipping the second line.
+    val titleLineHeight = MaterialTheme.typography.titleSmall.lineHeight
+    val titleSlotHeight = with(LocalDensity.current) {
+        if (titleLineHeight.isSpecified) (titleLineHeight.value * 2).sp.toDp() else 40.dp
     }
 
     val clickable = Modifier.semantics { contentDescription = a11y }
@@ -165,29 +181,11 @@ fun PosterCard(
                     )
                 }
 
-                // One tap, not a held tile and not a confirm: the × removes
-                // the row at once, and the screen offers Undo in the snackbar.
-                // The button eats its own tap, so it never also opens the title.
-                if (onRemove != null) {
-                    IconButton(
-                        onClick = onRemove,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(6.dp)
-                            .size(48.dp)
-                            .background(
-                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                                CircleShape,
-                            ),
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Remove $title from My List",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
+                // F12 (Batch B): the remove × no longer sits on the poster
+                // art — it rode the image corner and covered the artwork on
+                // every saved tile. It lives in the text row now, beside the
+                // title, on the card surface; the image corner is art-only.
+                // (The rating badge keeps BottomStart on the scrim — P0-1.)
 
                 // Bottom scrim: a poster's lower edge is whatever the artwork happens to be, and
                 // the progress bar below has to stay visible against it.
@@ -238,52 +236,113 @@ fun PosterCard(
                 }
             }
 
-            Column(
-                // One spoken sentence per tile (see the a11y string above):
-                // the title, details, badges and progress are paint here, not
-                // four more nodes saying the same words the tile already said.
-                modifier = Modifier.padding(start = 8.dp, end = 8.dp, bottom = 10.dp).clearAndSetSemantics { },
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            // The text row: the title, details, badges and progress are paint
+            // here, not four more nodes saying the same words the tile already
+            // said — the column below is cleared for exactly that reason, so
+            // the remove button sits BESIDE it in this row, not inside it:
+            // a cleared subtree would swallow the button's own description
+            // and tap. One spoken sentence per tile (see the a11y string
+            // above).
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(start = 8.dp, end = 8.dp, bottom = 10.dp),
+                verticalAlignment = Alignment.Top,
             ) {
-                Text(
-                    text = UserWords.breakableTitle(title),
-                    color = MaterialTheme.colorScheme.onSurface,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (details.isNotBlank()) {
+                Column(
+                    modifier = Modifier.weight(1f).clearAndSetSemantics { },
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
                     Text(
-                        text = details,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.labelSmall,
+                        text = UserWords.breakableTitle(title),
+                        color = MaterialTheme.colorScheme.onSurface,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.height(titleSlotHeight),
                     )
-                }
-                // Session 121 (P-28): the badge row only exists when a title has
-                // badges, so cards in one rail had different heights and a badge
-                // could straddle the rail's clip edge ("Dual Audio" cut mid-glyph).
-                // The slot is always 24 dp — the pill's own height — so card height
-                // is invariant to badge presence and rails stay uniform.
-                Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.CenterStart) {
-                    // Dub status decides whether this title is watchable at all for a
-                    // Hindi/Urdu-first viewer, so it is said on the tile, not after a tap.
-                    AudioBadgeChipRow(badges = tileBadges)
+                    if (details.isNotBlank()) {
+                        Text(
+                            text = details,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            // F7 (Batch B): one line, not two — year + type
+                            // never needs a second line, and the second line
+                            // was the other half of the uneven card heights.
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    // Session 121 (P-28): the badge row only exists when a title has
+                    // badges, so cards in one rail had different heights and a badge
+                    // could straddle the rail's clip edge ("Dual Audio" cut mid-glyph).
+                    // The slot is always 24 dp — the pill's own height — so card height
+                    // is invariant to badge presence and rails stay uniform.
+                    Box(Modifier.fillMaxWidth().height(24.dp), contentAlignment = Alignment.CenterStart) {
+                        // Dub status decides whether this title is watchable at all for a
+                        // Hindi/Urdu-first viewer, so it is said on the tile, not after a tap.
+                        AudioBadgeChipRow(badges = tileBadges)
+                    }
+
+                    progressLabel?.let { label ->
+                        Text(
+                            text = label,
+                            color = MaterialTheme.colorScheme.primary,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
 
-                progressLabel?.let { label ->
-                    Text(
-                        text = label,
-                        color = MaterialTheme.colorScheme.primary,
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                // F12 (Batch B): one tap, not a held tile and not a confirm —
+                // the × removes the row at once, and the screen offers Undo in
+                // the snackbar. The button eats its own tap, so it never also
+                // opens the title. It sits on the card surface beside the
+                // title now, never on the poster art above.
+                if (onRemove != null) {
+                    IconButton(
+                        onClick = onRemove,
+                        modifier = Modifier
+                            .size(48.dp)
+                            .background(
+                                MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
+                                CircleShape,
+                            ),
+                    ) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = "Remove $title from My List",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
                 }
             }
         }
+    }
+}
+
+/**
+ * F25 (Batch B): the placeholder tile as Android Studio sees it — a title
+ * with no poster art, so the F6 gradient + title treatment is visible
+ * without running the app. The screenshot test in ScreenSnapshotTest pins
+ * the same tile in CI.
+ */
+@Preview(name = "Poster card placeholder", showBackground = true)
+@Composable
+private fun PosterCardPlaceholderPreview() {
+    RaddStreamTheme {
+        PosterCard(
+            post = Post(
+                id = 1,
+                title = "Jawan",
+                cleanTitle = "Jawan",
+                year = 2023,
+                contentType = "movie",
+                posterUrl = null,
+            ),
+            modifier = Modifier.width(180.dp),
+        )
     }
 }

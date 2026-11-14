@@ -756,8 +756,9 @@ private fun PlayerScreenContent(
         // PL-4: a locked player keeps a small time chip visible — position and
         // remaining, without unlocking. A locked screen that says nothing about
         // where you are is a screen that says nothing at all. A duration the
-        // player has not learned yet is not a time to show.
-        if (state.locked && state.durationMs > 0) {
+        // player has not learned yet is not a time to show. F29 (Batch B): a
+        // live stream has no remaining to show, so the chip stays down.
+        if (state.locked && !state.isLive && state.durationMs > 0) {
             LockedTimeChip(
                 positionMs = state.positionMs,
                 durationMs = state.durationMs,
@@ -780,8 +781,17 @@ private fun PlayerScreenContent(
                 shape = MaterialTheme.shapes.medium,
                 modifier = Modifier.align(Alignment.Center),
             ) {
+                // F4 (Batch B): the notice names how much is buffered ahead
+                // ("Buffering… 42%") on a VOD, so a stall shows progress, not
+                // just a spinner. A live stream never shows a percent — see
+                // [bufferingPercent].
+                val bufferedPct = bufferingPercent(state.bufferedMs, state.durationMs, state.isLive)
                 PlayerLoadingIndicator(
-                    label = stringResource(R.string.player_buffering),
+                    label = if (bufferedPct != null) {
+                        stringResource(R.string.player_buffering_percent, bufferedPct)
+                    } else {
+                        stringResource(R.string.player_buffering)
+                    },
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 )
             }
@@ -1560,11 +1570,16 @@ private fun CenterControls(state: PlayerUiState, vm: PlayerViewModel) {
         // is a spinner; while playing it is pause; while paused it is play.
         if (state.startPhase != StartPhase.NONE || state.isBuffering) {
             Surface(color = chrome.chip, shape = CircleShape) {
-                Box(Modifier.size(72.dp), contentAlignment = Alignment.Center) {
+                // F4 (Batch B): the centre spinner was 44dp in a 72dp chip —
+                // the round-2 re-review read it as very small against the
+                // playback area, with no visible buffering progress. The ring
+                // is 56dp in an 88dp chip now, and the buffering notice below
+                // carries the buffered percent.
+                Box(Modifier.size(88.dp), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator(
                         color = Color.White,
-                        strokeWidth = 3.dp,
-                        modifier = Modifier.size(44.dp),
+                        strokeWidth = 4.dp,
+                        modifier = Modifier.size(56.dp),
                     )
                 }
             }
@@ -1620,19 +1635,24 @@ private fun EdgeHud(
     val chrome = PlayerChromeTheme.forId(state.playerTheme)
     Box(Modifier.fillMaxSize()) {
         // Progress, painted on the edge of the frame rather than across the image.
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .align(Alignment.TopStart)
-                .height(2.dp)
-                .background(chrome.track),
-        ) {
+        // F29 (Batch B): no line on a live stream — position over a DVR-window
+        // duration is not progress, and the bar would imply a scrub that does
+        // not exist.
+        if (!state.isLive) {
             Box(
                 Modifier
-                    .fillMaxWidth(played)
+                    .fillMaxWidth()
+                    .align(Alignment.TopStart)
                     .height(2.dp)
-                    .background(chrome.played),
-            )
+                    .background(chrome.track),
+            ) {
+                Box(
+                    Modifier
+                        .fillMaxWidth(played)
+                        .height(2.dp)
+                        .background(chrome.played),
+                )
+            }
         }
 
         // Top-left: leave, and what is playing.
@@ -1692,7 +1712,7 @@ private fun EdgeHud(
                 // unknown total, never a "--:--" total that was never measured.
                 text = if (state.startPhase != StartPhase.NONE) {
                     stringResource(R.string.app_loading)
-                } else if (state.durationMs > 0) {
+                } else if (!state.isLive && state.durationMs > 0) {
                     stringResource(
                         R.string.player_time_of,
                         state.positionMs.formatTime(),
@@ -1805,7 +1825,13 @@ private fun BottomControls(
             // live picture. A VOD's duration is known at prepare, so the bar
             // appears as soon as playback can start; while the start card is up
             // the card itself narrates the phase, so nothing is lost.
-            if (state.durationMs > 0) {
+            // F29 (Batch B): the duration gate was not enough — a live HLS
+            // playlist can report a finite DVR-window duration (Discover
+            // Pakistan: 2:00:12), and the scrubber came back with it. The
+            // gate is the explicit live flag now: a live stream gets no
+            // scrubber and no time row at all, only a LIVE mark in their
+            // place, whatever duration the playlist claims.
+            if (!state.isLive && state.durationMs > 0) {
                 Scrubber(
                     chrome = chrome,
                     positionMs = state.positionMs,
@@ -1850,6 +1876,8 @@ private fun BottomControls(
                         style = MaterialTheme.typography.labelMedium,
                     )
                 }
+            } else if (state.isLive) {
+                LiveMark()
             }
             Row(
                 Modifier
@@ -2561,6 +2589,35 @@ private fun PlayerCoachOverlay(onDismiss: () -> Unit) {
  * underneath when the caller has one. The mark stays for brand moments (the
  * splash, the start card's corner) and never stands in for progress.
  */
+
+/**
+ * F29 (Batch B): the live mark — a red dot and the word Live, in place of the
+ * scrubber + time row a live stream does not have. It says what the stream
+ * is; it promises no position, because a live window has none to show.
+ */
+@Composable
+private fun LiveMark(modifier: Modifier = Modifier) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(8.dp)
+                .background(MaterialTheme.colorScheme.error, CircleShape),
+        )
+        Text(
+            text = stringResource(R.string.player_live),
+            color = Color.White,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
 @Composable
 private fun PlayerLoadingIndicator(
     label: String? = null,

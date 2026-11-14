@@ -18,6 +18,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -30,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowInsetsControllerCompat
 import com.raddstream.app.brand.Brand
 import com.raddstream.app.data.RemoteConfigWatcher
 import com.raddstream.app.data.RemoteFeatures
@@ -224,8 +226,22 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
+            // F26 (Batch B): the status-bar and navigation-bar icons follow
+            // the app theme, not the system default. enableEdgeToEdge()
+            // leaves both bars transparent, so a dark app on a light system
+            // bar — or the reverse after a theme flip in Settings — left
+            // the clock and battery unreadable against the app behind them.
+            // Recomputed on every recomposition, so a theme change flips
+            // the icons with the paint, not on the next cold start.
+            val darkTheme = resolveThemeDark(operatorTheme.mode, isSystemInDarkTheme())
+            SideEffect {
+                val controller = WindowInsetsControllerCompat(window, window.decorView)
+                controller.isAppearanceLightStatusBars = !darkTheme
+                controller.isAppearanceLightNavigationBars = !darkTheme
+            }
+
             RaddStreamTheme(
-                darkTheme = resolveThemeDark(operatorTheme.mode, isSystemInDarkTheme()),
+                darkTheme = darkTheme,
                 dynamicColor = effectiveDynamicColor(dynamicColorRequested, operatorTheme.dynamicColor),
                 accent = parseAccentHex(operatorTheme.accent),
             ) {

@@ -144,4 +144,16 @@ class SearchFilterStateTest {
             body.contains("if (query != _uiState.value.query.trim()) return@launch"),
         )
     }
+
+    @Test
+    fun `industry has no anime door because the server answers both identically`() {
+        // F10 (Batch B): the server answers `type=anime` and `industry=anime`
+        // with the identical fragment, so the two doors selected the same
+        // rows. Anime lives under Type only; an Industry entry whose wire
+        // value is "anime" would bring the duplicate back.
+        assertTrue(
+            "IndustryFilter still carries an anime wire value",
+            IndustryFilter.entries.none { it.wireValue == "anime" },
+        )
+    }
 }

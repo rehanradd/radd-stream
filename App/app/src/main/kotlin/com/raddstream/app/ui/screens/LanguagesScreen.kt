@@ -30,6 +30,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -37,6 +39,7 @@ import com.raddstream.app.R
 import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.LanguagesViewModel
 import com.raddstream.app.viewmodel.UserPreferences
+import com.raddstream.app.viewmodel.displayLanguageName
 
 /**
  * One Languages screen: the audio language, the subtitle language and the
@@ -94,6 +97,7 @@ fun LanguagesScreen(
                 // The chips wrap: eight options do not fit one row on a phone, and a
                 // row that scrolls sideways hides the choice a viewer is looking for.
                 LanguageChipRow(
+                    rowName = "Audio language",
                     options = UserPreferences.AUDIO_LANGUAGE_OPTIONS,
                     selectedIndex = UserPreferences.AUDIO_LANGUAGE_OPTIONS
                         .indexOf(state.audioLanguage).coerceAtLeast(0),
@@ -111,6 +115,7 @@ fun LanguagesScreen(
 
             LanguageSection(title = "Default subtitle language") {
                 LanguageChipRow(
+                    rowName = "Subtitle language",
                     options = subtitleOptions,
                     selectedIndex = subtitleOptions
                         .indexOf(state.subtitleLanguage).coerceAtLeast(0),
@@ -184,6 +189,11 @@ private fun LanguageSection(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun LanguageChipRow(
+    // F31 (Batch B): the row's name, spoken before the language — the audio
+    // row and the subtitle row hold the same words ("Hindi" in both), and a
+    // screen reader hearing bare "Hindi" twice cannot tell which choice it
+    // is changing. The painted label stays the language alone.
+    rowName: String,
     options: List<String>,
     selectedIndex: Int,
     onSelect: (Int) -> Unit,
@@ -197,7 +207,10 @@ private fun LanguageChipRow(
             FilterChip(
                 selected = idx == selectedIndex,
                 onClick = { onSelect(idx) },
-                label = { Text(label) },
+                // F23 (Batch B): the chip paints both scripts —
+                // "Hindi · हिन्दी" — so the language is findable by a reader
+                // of either. The stored value stays the English name.
+                label = { Text(displayLanguageName(label)) },
                 // F3 (Batch A): this was the one bare FilterChip in the app — no
                 // emerald selected treatment. It now uses the shared token, and
                 // the selected chip also carries a check, so the choice is not
@@ -216,7 +229,9 @@ private fun LanguageChipRow(
                     null
                 },
                 // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
-                modifier = Modifier.heightIn(min = 48.dp),
+                modifier = Modifier.heightIn(min = 48.dp).semantics {
+                    contentDescription = "$rowName: $label"
+                },
             )
         }
     }

@@ -95,6 +95,7 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.WireText
 import com.raddstream.app.network.models.parseCastNames
@@ -292,19 +293,29 @@ fun DetailScreen(
         val post = state.post
         when {
             state.isLoading -> DetailSkeleton(Modifier.padding(detailPadding))
-            state.error != null && post == null -> ErrorState(
-                title = "Couldn't load this title",
-                message = state.error ?: "Unable to load title.",
-                onRetry = viewModel::loadDetail,
-                // F9 (Batch A): a failed title needs a way out that is not
-                // "retry forever" — back to browse. The message itself is
-                // already specific by error type (see friendlyNetworkError in
-                // the ViewModel: offline, timeout, 429, 404 and 5xx each get
-                // their own words); this branch only adds the exit.
-                secondaryLabel = "Back to browse",
-                onSecondary = onBackClick,
-                modifier = Modifier.padding(detailPadding),
-            )
+            state.error != null && post == null -> Column(Modifier.padding(detailPadding)) {
+                // F9 (Batch B): the failure names the title when the list row
+                // is still in this process — a poster + title above the error,
+                // instead of a bare "Couldn't load this title" for a title the
+                // viewer was just looking at.
+                state.fallbackPost?.let { fallback ->
+                    DetailErrorHeader(post = fallback)
+                    Spacer(Modifier.height(16.dp))
+                }
+                ErrorState(
+                    title = "Couldn't load this title",
+                    message = state.error ?: "Unable to load title.",
+                    onRetry = viewModel::loadDetail,
+                    // F9 (Batch A): a failed title needs a way out that is not
+                    // "retry forever" — back to browse. The message itself is
+                    // already specific by error type (see friendlyNetworkError in
+                    // the ViewModel: offline, timeout, 429, 404 and 5xx each get
+                    // their own words); this branch only adds the exit.
+                    secondaryLabel = "Back to browse",
+                    onSecondary = onBackClick,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             post != null -> DetailContent(
                 post = post,
                 seasons = state.layout?.seasons ?: emptyList(),
@@ -482,6 +493,49 @@ internal fun detailContentPadding(
             safeDrawingPadding.calculateBottomPadding(),
         ) + bottomBreathing,
     )
+}
+
+/**
+ * F9 (Batch B): the failed title, named. The poster + title + year from the
+ * list row the viewer tapped, so the error screen is about *this* title
+ * instead of a bare failure. No Play, no prints, no promises — the row is
+ * the server's own but minutes old, and only the retry below can say what
+ * the title actually holds now.
+ */
+@Composable
+private fun DetailErrorHeader(post: Post, modifier: Modifier = Modifier) {
+    val title = post.cleanTitle?.takeIf { it.isNotBlank() } ?: post.title
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        CatalogImage(
+            url = post.posterUrl,
+            contentDescription = null, // the title beside it says which title this is
+            modifier = Modifier
+                .width(72.dp)
+                .aspectRatio(CardGeometry.POSTER_ASPECT)
+                .clip(RoundedCornerShape(8.dp)),
+            fallbackLabel = title,
+        )
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(
+                text = title,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            post.yearLabel?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -933,7 +987,12 @@ private fun PrimaryActions(
                 onClick = onToggleFavorite,
                 modifier = Modifier
                     .weight(1f)
-                    .height(48.dp),
+                    .height(48.dp)
+                    // Round-2 (Batch B): the full "Save to My List" never fit
+                    // a third of the row and truncated mid-word. The visible
+                    // label is the short verb; the full phrase is the spoken
+                    // name, so TalkBack still hears what the tap does.
+                    .semantics { contentDescription = favoriteActionLabel(isFavorite) },
                 contentPadding = PaddingValues(horizontal = 4.dp),
             ) {
                 Icon(
@@ -944,7 +1003,7 @@ private fun PrimaryActions(
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    text = favoriteActionLabel(isFavorite),
+                    text = if (isFavorite) "Saved" else "Save",
                     style = MaterialTheme.typography.labelMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
@@ -1657,6 +1716,11 @@ private fun PrintCard(
                 enabled = print.canStart,
                 modifier = Modifier
                     .weight(1f)
+                    // F32 (Batch B): M3 buttons are 40dp tall by default and
+                    // Robo measured this row's Play at 28dp in run 0 — under
+                    // the 48dp touch-target floor. The row's buttons carry
+                    // the floor themselves.
+                    .heightIn(min = 48.dp)
                     .semantics(mergeDescendants = true) { contentDescription = spokenPlay },
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1668,7 +1732,10 @@ private fun PrintCard(
                 // "Play" — it is the single hero action.
                 Text(playText, modifier = Modifier.clearAndSetSemantics { })
             }
-            OutlinedButton(onClick = { onKeep(print) }) {
+            OutlinedButton(
+                onClick = { onKeep(print) },
+                modifier = Modifier.heightIn(min = 48.dp),
+            ) {
                 Icon(Icons.Default.Download, contentDescription = "Download ${print.qualityLabel} video$copySuffix")
             }
             if (print.playableHere) {

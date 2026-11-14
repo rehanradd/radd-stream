@@ -37,7 +37,9 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
@@ -216,6 +218,34 @@ fun LiveTvScreen(
 private fun categoryLabel(category: String): String =
     category.replaceFirstChar { it.uppercase() }
 
+/**
+ * The server's country code as a readable name. The registry writes ISO
+ * codes ("PK", "IN") and "INTL" for the international set — two-letter
+ * codes on a card are alphabet soup, and a viewer should not need a
+ * geography lesson to know which country's channel this is. Unknown codes
+ * pass through untouched, never guessed at.
+ */
+internal fun countryLabel(code: String?): String? {
+    if (code.isNullOrBlank()) return null
+    return when (code.trim().uppercase()) {
+        "PK" -> "Pakistan"
+        "IN" -> "India"
+        "INTL" -> "International"
+        "US" -> "USA"
+        "GB", "UK" -> "UK"
+        "AE" -> "UAE"
+        "SA" -> "Saudi Arabia"
+        "BD" -> "Bangladesh"
+        "LK" -> "Sri Lanka"
+        "NP" -> "Nepal"
+        "AF" -> "Afghanistan"
+        "TR" -> "Turkey"
+        "IR" -> "Iran"
+        "EG" -> "Egypt"
+        else -> code.trim()
+    }
+}
+
 @Composable
 private fun LiveTvChannelCard(
     channel: LiveTvChannel,
@@ -228,14 +258,24 @@ private fun LiveTvChannelCard(
     val a11y = listOfNotNull(
         "${channel.name}, live",
         categoryLabel(channel.category),
-        channel.country.takeIf { it.isNotBlank() },
+        countryLabel(channel.country),
     ).joinToString(" · ")
     Card(
         onClick = onClick,
         modifier = modifier.semantics { contentDescription = a11y },
     ) {
         Column {
-            Box {
+            Box(
+                // F11 (Batch B): logos are letterboxed, not cropped. The old
+                // 16:9 Crop box cut square logos down to a strip and stretched
+                // wide ones, so no two cards' logos were the same size. Fit
+                // shows every logo whole on one neutral plate.
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(CardGeometry.WIDE_ART_ASPECT)
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center,
+            ) {
                 CatalogImage(
                     url = channel.logoUrl,
                     contentDescription = null, // the card sentence says the name
@@ -244,9 +284,11 @@ private fun LiveTvChannelCard(
                     // channel registry, not the catalog — their hosts are the
                     // registry's own, and the art policy does not vet them.
                     allowAnyHost = true,
+                    contentScale = ContentScale.Fit,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(CardGeometry.WIDE_ART_ASPECT),
+                        .aspectRatio(CardGeometry.WIDE_ART_ASPECT)
+                        .padding(8.dp),
                 )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -280,17 +322,23 @@ private fun LiveTvChannelCard(
                 text = channel.name,
                 style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.onSurface,
-                maxLines = 2,
+                // F11 (Batch B): one line, not two — a wrapping name was half
+                // the uneven card heights, and a channel name that needs two
+                // lines in a 120dp column is a truncated name anyway.
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp).clearAndSetSemantics { },
             )
             Text(
                 text = listOfNotNull(
                     categoryLabel(channel.category),
-                    channel.country.takeIf { it.isNotBlank() },
+                    countryLabel(channel.country),
                 ).joinToString(" · "),
                 // P2-6: no trailing separator when the country is blank.
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.padding(horizontal = 10.dp).padding(bottom = 10.dp).clearAndSetSemantics { },
             )
         }

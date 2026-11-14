@@ -43,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -371,23 +372,37 @@ internal fun DeviceDownloadRow(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (item.playing) {
-                Button(onClick = onPlay, modifier = Modifier.weight(1f)) {
+                Button(
+                    onClick = onPlay,
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "Play ${item.title}" },
+                ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.size(6.dp))
                     Text("Play")
                 }
             }
             if (item.canPause) {
-                OutlinedButton(onClick = onPause) {
+                OutlinedButton(
+                    onClick = onPause,
+                    modifier = Modifier.semantics { contentDescription = "Pause ${item.title}" },
+                ) {
                     Icon(Icons.Default.Pause, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(Modifier.size(6.dp))
                     Text("Pause")
                 }
             }
             if (item.canResume) {
-                OutlinedButton(onClick = onResume) { Text("Resume") }
+                OutlinedButton(
+                    onClick = onResume,
+                    modifier = Modifier.semantics { contentDescription = "Resume ${item.title}" },
+                ) { Text("Resume") }
             }
-            OutlinedButton(onClick = onRemove) {
+            OutlinedButton(
+                onClick = onRemove,
+                modifier = Modifier.semantics {
+                    contentDescription = "${if (item.playing) "Delete" else "Cancel"} ${item.title}"
+                },
+            ) {
                 Text(if (item.playing) "Delete" else "Cancel")
             }
         }
@@ -421,6 +436,10 @@ private fun DeviceStatusPill(state: DeviceDownloadState) {
         text = text,
         backgroundColor = if (error) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceVariant,
         contentColor = if (error) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+        // F31 (Batch B): paint-only — the status line under the title already
+        // speaks this state ("Downloading 42%", "Saved on device"), so a
+        // speaking pill would say it twice, once per row, with no title.
+        modifier = Modifier.clearAndSetSemantics {},
     )
 }
 
@@ -476,13 +495,24 @@ internal fun KeptItemRow(
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (item.playable) {
-                Button(onClick = onPlay, modifier = Modifier.weight(1f)) { Text("Play") }
+                Button(
+                    onClick = onPlay,
+                    modifier = Modifier.weight(1f).semantics { contentDescription = "Play ${item.title}" },
+                ) { Text("Play") }
             }
             when (item.state) {
-                KeepState.FAILED, KeepState.NO_SPACE -> OutlinedButton(onClick = onRetry) { Text("Retry") }
+                KeepState.FAILED, KeepState.NO_SPACE -> OutlinedButton(
+                    onClick = onRetry,
+                    modifier = Modifier.semantics { contentDescription = "Retry ${item.title}" },
+                ) { Text("Retry") }
                 KeepState.DOWNLOADING, KeepState.QUEUED, KeepState.PAUSED,
                 KeepState.READY, KeepState.EXPIRING ->
-                    OutlinedButton(onClick = onCancel) { Text(keepActionLabel(item.state) ?: "Cancel") }
+                    OutlinedButton(
+                        onClick = onCancel,
+                        modifier = Modifier.semantics {
+                            contentDescription = "${keepActionLabel(item.state) ?: "Cancel"} ${item.title}"
+                        },
+                    ) { Text(keepActionLabel(item.state) ?: "Cancel") }
                 else -> {}
             }
         }
@@ -538,7 +568,15 @@ private fun StatusPill(state: KeepState) {
     } else {
         MaterialTheme.colorScheme.onSurfaceVariant
     }
-    Pill(text = text, backgroundColor = bg, contentColor = fg)
+    Pill(
+        text = text,
+        backgroundColor = bg,
+        contentColor = fg,
+        // F31 (Batch B): paint-only — the status line under the title already
+        // speaks this state, so a speaking pill would say it twice, once
+        // per row, with no title.
+        modifier = Modifier.clearAndSetSemantics {},
+    )
 }
 
 private fun formatGib(bytes: Long): String = "%.1f GB".format(bytes / 1_000_000_000.0)

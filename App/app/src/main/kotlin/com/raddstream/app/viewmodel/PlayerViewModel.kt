@@ -671,6 +671,10 @@ class PlayerViewModel @Inject constructor(
                             positionMs = c.currentPosition,
                             bufferedMs = bufferedOf(c),
                             durationMs = if (c.duration > 0) c.duration else it.durationMs,
+                            // F29 (Batch B): the live flag rides the same tick
+                            // as the position — a live window stays live for
+                            // the whole stream, and a VOD never flips to it.
+                            isLive = c.isCurrentMediaItemLive,
                             // P-3: the notice card's elapsed line counts from
                             // the request (Play press), so the resolve wait is
                             // counted too — published on every tick, whatever

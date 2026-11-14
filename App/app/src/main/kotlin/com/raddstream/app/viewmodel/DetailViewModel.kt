@@ -17,6 +17,7 @@ import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.network.ApiProvider
 import com.raddstream.app.network.friendlyNetworkError
 import com.raddstream.app.network.models.LinkState
+import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.PostDetail
 import com.raddstream.app.network.models.parseCastNames
 import com.raddstream.app.network.streamRedirectUrl
@@ -57,6 +58,16 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 data class DetailUiState(
     val post: PostDetail? = null,
+    /**
+     * F9 (Batch B): the list row this detail was opened from, when the
+     * detail call itself failed. The error screen names the title and shows
+     * its poster from this row instead of a bare "Couldn't load this
+     * title" — the row is the server's own, minutes old, and it is never a
+     * substitute for the detail: no Play, no prints, only the name and the
+     * way back. Null when the row was never in this process's cache (a
+     * deep link, or a cold start straight to detail).
+     */
+    val fallbackPost: Post? = null,
     val layout: ReleaseLayout? = null,
     val selectedSeason: Int? = null,
     val isLoading: Boolean = true,
@@ -533,7 +544,7 @@ class DetailViewModel @Inject constructor(
             return
         }
         viewModelScope.launch {
-            _uiState.update { it.copy(isLoading = true, error = null) }
+            _uiState.update { it.copy(isLoading = true, error = null, fallbackPost = null) }
             try {
                 // Session 153: warm the connection once before the first detail
                 // call — a cold pool can fail the first tap before any byte
@@ -586,8 +597,14 @@ class DetailViewModel @Inject constructor(
                         syncAccountRepository.adoptWorkRef(detail.id, detail.workRef)
                     }
                 } else {
+                    // F9 (Batch B): the server answered "no such title" — the
+                    // list row still names it, when this process has it.
                     _uiState.update {
-                        it.copy(isLoading = false, error = "This title is not available on the connected server.")
+                        it.copy(
+                            isLoading = false,
+                            error = "This title is not available on the connected server.",
+                            fallbackPost = catalogRepository.cachedPost(postId),
+                        )
                     }
                 }
             } catch (ex: CancellationException) {
@@ -596,8 +613,14 @@ class DetailViewModel @Inject constructor(
                 // over a screen the viewer already left.
                 throw ex
             } catch (ex: Exception) {
+                // F9 (Batch B): the call failed — the list row still names
+                // the title, when this process has it.
                 _uiState.update {
-                    it.copy(isLoading = false, error = friendlyNetworkError(ex, "Failed to load details. Check connection."))
+                    it.copy(
+                        isLoading = false,
+                        error = friendlyNetworkError(ex, "Failed to load details. Check connection."),
+                        fallbackPost = catalogRepository.cachedPost(postId),
+                    )
                 }
             }
         }

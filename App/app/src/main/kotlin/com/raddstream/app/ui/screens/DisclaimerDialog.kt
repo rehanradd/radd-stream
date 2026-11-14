@@ -1,5 +1,6 @@
 package com.raddstream.app.ui.screens
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -8,11 +9,14 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.Button
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -20,6 +24,8 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -88,47 +94,103 @@ internal fun DisclaimerDialog(
                 // semibold, 20sp.
                 RaddDialogTitle("Disclaimer")
                 Spacer(Modifier.height(16.dp))
+                val scrollState = rememberScrollState()
+                val uriHandler = LocalUriHandler.current
                 Column(
                     modifier = Modifier
                         .weight(1f, fill = true)
-                        .verticalScroll(rememberScrollState()),
+                        .verticalScroll(scrollState),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
-                    Text(
-                        disclaimer.text,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
+                    // F13 (Batch B): the text arrives as one block from the
+                    // panel, and a wall of it is not read — each line break
+                    // is a paragraph, and each paragraph gets its own block
+                    // with air between them. A blank line is nothing to show.
+                    disclaimer.text.split("\n").map { it.trim() }
+                        .filter { it.isNotEmpty() }.forEach { paragraph ->
+                            Text(
+                                paragraph,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
                     Text(
                         "Version ${disclaimer.version}",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     if (disclaimer.email.isNotBlank()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Contact: ",
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                            // F13 (Batch B): the address is a link, not a
+                            // line to copy by hand — one tap opens the mail
+                            // app addressed to it.
+                            Text(
+                                disclaimer.email,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.primary,
+                                textDecoration = TextDecoration.Underline,
+                                modifier = Modifier.clickable {
+                                    uriHandler.openUri("mailto:${disclaimer.email}")
+                                },
+                            )
+                        }
+                    }
+                }
+                // F13 (Batch B): the scroll cue — a small line that says the
+                // text goes on, shown only while there is more below. A
+                // dialog that scrolls without saying so hides its own terms.
+                if (scrollState.canScrollForward) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.Center,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            "Contact: ${disclaimer.email}",
-                            style = MaterialTheme.typography.bodyMedium,
+                            "Scroll for more",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Icon(
+                            Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                 }
                 Spacer(Modifier.height(16.dp))
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    // First run only: declining is a real choice with a real
-                    // consequence, so it gets its own button instead of hiding
-                    // behind the back gesture, which stays disabled here.
-                    val declineLabel = dismissLabel
-                    val declineAction = onDecline
-                    if (declineLabel != null && declineAction != null) {
-                        TextButton(onClick = declineAction) {
-                            Text(declineLabel)
+                // F13 (Batch B): on first run the Decline is its own line
+                // under the Accept button — the choice to walk away is
+                // unmissable, not a small word beside the big button. On a
+                // re-read there is no Decline at all: the terms are already
+                // accepted, and re-reading is not a new agreement.
+                if (firstRun) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Button(
+                            onClick = onConfirm,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(confirmLabel)
                         }
-                        Spacer(Modifier.width(8.dp))
+                        TextButton(onClick = onDecline ?: {}) {
+                            Text(dismissLabel ?: "")
+                        }
                     }
-                    Button(onClick = onConfirm) {
-                        Text(confirmLabel)
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Button(onClick = onConfirm) {
+                            Text(confirmLabel)
+                        }
                     }
                 }
             }
