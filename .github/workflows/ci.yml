@@ -102,6 +102,17 @@ jobs:
       - name: 🔧 Make gradlew executable
         run: chmod +x App/gradlew
 
+      - name: 🔑 Restore google-services.json (CI secret, never committed)
+        # google-services.json is gitignored: GitHub secret scanning flags the
+        # Firebase client key inside it. CI restores the file from the
+        # GOOGLE_SERVICES_JSON Actions secret (base64) so the google-services
+        # plugin can run; the file never lands in git.
+        env:
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -z "$GOOGLE_SERVICES_JSON" ]; then echo "GOOGLE_SERVICES_JSON secret is empty" >&2; exit 1; fi
+          echo "$GOOGLE_SERVICES_JSON" | base64 -d > App/app/google-services.json
+
       - name: "🏗️🧪🔍 Gradle: debug APK + unit tests + lint (single invocation)"
         working-directory: App
         # --continue: report every task's failures in one run.

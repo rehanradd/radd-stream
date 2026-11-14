@@ -110,6 +110,38 @@ object Telemetry {
     }
 
     /**
+     * True only under Robolectric: the Robolectric classes are on the test
+     * classpath and nowhere else, so a real phone never takes this path.
+     */
+    private val isRobolectric: Boolean by lazy {
+        runCatching { Class.forName("org.robolectric.RuntimeEnvironment") }.isSuccess
+    }
+
+    /**
+     * The known-spurious Firebase Sessions crash under Robolectric — and
+     * ONLY that crash. `SessionLifecycleClient` binds to its service through
+     * an `android.os.Messenger`; under Robolectric the Messenger has no
+     * target, so `Messenger.send` throws `NullPointerException` on a
+     * Firebase background thread (run 477: `SessionLifecycleClient.kt:175`
+     * via `ShadowMessenger.send`). It is not an app crash: no app code is
+     * on the stack, and the same code never throws on a real phone, where
+     * the Messenger has a real target.
+     *
+     * Why it must never reach the fatal chain: the handler below counts the
+     * crash and delegates to Crashlytics, whose handler records the report
+     * and kills the process — exactly right for a real crash, and exactly
+     * what kills the Gradle test worker (exit 1, no test XMLs) when this
+     * spurious NPE fires (runs 471/473/474/475/476). The crash is still
+     * counted in the local aggregates above; it is only kept out of the
+     * fatal chain, under Robolectric, for this one frame.
+     */
+    private fun isRobolectricFirebaseSessionsNoise(thread: Thread, error: Throwable): Boolean {
+        if (!isRobolectric) return false
+        if (!thread.name.startsWith("Firebase Background Thread")) return false
+        return error.stackTrace.any { it.className.contains("SessionLifecycleClient") }
+    }
+
+    /**
      * Count one crash and hand the process to whoever was going to kill it.
      * Installed in `RaddStreamApplication.onCreate`, before anything else can
      * crash. The write is a synchronous SharedPreferences commit wrapped in
@@ -121,6 +153,7 @@ object Telemetry {
         val previous = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, error ->
             runCatching { counters?.record("crashes") }
+            if (isRobolectricFirebaseSessionsNoise(thread, error)) return@setDefaultUncaughtExceptionHandler
             if (previous != null) {
                 previous.uncaughtException(thread, error)
             } else {

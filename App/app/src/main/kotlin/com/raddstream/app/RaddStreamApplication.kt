@@ -7,6 +7,7 @@ import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import com.raddstream.app.brand.Brand
+import com.raddstream.app.data.CrashReporting
 import com.raddstream.app.data.DeviceIdentity
 import com.raddstream.app.data.RemoteConfigWatcher
 import com.raddstream.app.data.ServerSettingsRepository
@@ -72,6 +73,11 @@ class RaddStreamApplication : Application(), Configuration.Provider {
         // every Brand getter falls back to its compiled BuildConfig constant, so this call
         // can only make the brand *more* current, never blank it.
         Brand.load(this)
+        // Crashlytics first, Telemetry second: CrashReporting installs
+        // Firebase's uncaught-exception handler, and Telemetry's handler
+        // (below) captures it as its `previous` and chains to it — a crash
+        // is counted locally AND reported to Crashlytics. See CrashReporting.
+        CrashReporting.install(this)
         // Tracking A: the counters exist from the first lines of the process,
         // and the crash handler with them — a crash before this point is a
         // crash before the app did anything worth counting. The snapshot
