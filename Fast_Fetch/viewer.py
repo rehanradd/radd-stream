@@ -135,6 +135,29 @@ def _play_limit_per_min():
     _PLAY_LIMIT_CACHE["at"] = now
     return value
 
+
+def _warm_press(path: str, target: str) -> bool:
+    """True when a redirector press asks for metadata, not the file.
+
+    `redirect=0` (also `false`/`no`) on `/api/v1/stream`,
+    `/api/v1/download` and `/api/v2/resolve/<handle>` answers a JSON
+    descriptor and never 302s — that is the warm/preview press, and it pays
+    into the `warm` bucket so background checks can never starve a real
+    Play. Anything else — including a missing `redirect`, which defaults to
+    the 302 — is a real press and pays `play`. The test mirrors each
+    handler's own decision exactly (the v1 handlers redirect exactly when
+    the flag is `1`/`true`/`yes`; api_v2 resolve redirects exactly when it
+    is not `0`/`false`/`no`), so the gate and the handler can never
+    disagree about which bucket a press bought.
+    """
+    flag = urllib.parse.parse_qs(
+        urllib.parse.urlparse(target).query).get("redirect", ["1"])[0]
+    if path in ("/api/v1/stream", "/api/v1/download"):
+        return flag not in ("1", "true", "yes")
+    if path.startswith("/api/v2/resolve/"):
+        return flag in ("0", "false", "no")
+    return False
+
 #: CORS lives in redact so the v1 and v2 edges share one allow-list (§16.7).
 cors_headers_for = redact.cors_headers_for
 
@@ -6414,7 +6437,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
         self.send_bytes(body, content_type=content_type, status=status,
                         extra_headers=extra_headers)
 
-    def _bucket_for(self, path: str, method: str = "GET") -> str:
+    def _bucket_for(self, path: str, method: str = "GET", warm: bool = False) -> str:
         if path in admin_panel.LOGIN_PATHS or path in admin_panel.LOGOUT_PATHS:
             # Named here so a sign-in route can never inherit `browse` by accident
             # of a fall-through if anyone ever mounts it on the public port. On the
@@ -6430,8 +6453,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if api_v2.is_v2(path):
             # The v2 budget is the same token bucket, under the route map in
             # `api_v2.ROUTE_BUCKETS`; there is no second limiter.
-            return api_v2.bucket_for(path, method)
+            return api_v2.bucket_for(path, method, warm=warm)
         if path in ("/api/v1/stream", "/api/v1/download", "/api/v1/art", "/api/m3u"):
+            if warm and path in ("/api/v1/stream", "/api/v1/download"):
+                # A warm press (redirect=0) describes the link without
+                # redirecting to the file; it pays the warm bucket, never play,
+                # so background checks can never starve a real Play.
+                return "warm"
             return "play"
         if path == "/api/v1/stats":
             return "reports"
@@ -6629,8 +6657,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
         # a tuning change takes effect without a restart and an unwired
         # panel keeps the shipped 30.
         redact.limiter.limits["play"] = (_play_limit_per_min(), 60.0)
-        verdict = redact.limiter.check(self._bucket_for(path, method),
-                                       redact.client_ip(self))
+        # A warm press (redirect=0) describes the link without redirecting
+        # to the file; it pays the warm bucket, never play. The query lives
+        # on the request target, which the bare `path` this gate receives
+        # has already stripped — read it back from `self.path`.
+        verdict = redact.limiter.check(
+            self._bucket_for(path, method,
+                             warm=_warm_press(path, getattr(self, "path", ""))),
+            redact.client_ip(self))
         self.rate_headers = redact.limiter.headers(verdict)
         if not verdict["allowed"]:
             if api_v2.is_v2(path):
