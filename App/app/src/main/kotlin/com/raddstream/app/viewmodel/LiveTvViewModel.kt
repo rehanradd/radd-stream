@@ -3,7 +3,9 @@ package com.raddstream.app.viewmodel
 import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import androidx.media3.common.MimeTypes
 import com.raddstream.app.network.models.LiveTvChannel
+import com.raddstream.app.player.PlayerSessionStore
 import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -171,5 +173,19 @@ class LiveTvViewModel @Inject constructor(
             }.isSuccess
             if (warmed) lastWarmedHandle = streamId
         }
+    }
+
+    /**
+     * Live TV is HLS, always: every channel in the registry serves an
+     * `.m3u8` playlist (759/759), and the player opens the bare handle
+     * through our extensionless redirector — which carries no `.m3u8` for
+     * the reader to infer from. Staging the manifest MIME here is what lets
+     * the player declare HLS before the first frame instead of opening the
+     * playlist with the progressive reader (`UnrecognizedInputFormatException`,
+     * Robo #4). Same in-memory-only discipline as the warm: a playback
+     * launched any other way simply has no entry and builds as before.
+     */
+    fun stageLiveChannel(streamId: String) {
+        PlayerSessionStore.Instance.stageManifestMime(streamId, MimeTypes.APPLICATION_M3U8)
     }
 }

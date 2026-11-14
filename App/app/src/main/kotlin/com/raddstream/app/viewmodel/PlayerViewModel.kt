@@ -893,8 +893,13 @@ class PlayerViewModel @Inject constructor(
             )
             // Runner-ups of this rung, staged by the detail screen: handles only, so a
             // 403 mid-play costs one silent hop instead of a dialog and a quality drop.
+            // The manifest MIME, staged by the Live TV screen for a channel: without
+            // it a bare handle classifies as progressive and an HLS playlist meets
+            // the progressive reader (Robo #4). A handle with no entry — a movie,
+            // a deep link — passes null and builds exactly as before.
             val bundle = PlaybackBundle.forStreamHandle(streamId = streamId, playUrl = playUrl,
                                                        title = title,
+                                                       mimeType = store.peekManifestMime(streamId),
                                                        backupHandles = store.peekFailover(streamId))
                 .withStagedTarget(streamId)
                 .withStagedCoverage(streamId)

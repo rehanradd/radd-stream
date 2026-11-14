@@ -260,6 +260,39 @@ class PlayerSessionStore(
     fun peekFailover(streamId: String): List<String> = stagedFailovers[streamId].orEmpty()
 
     /**
+     * The manifest MIME a launched handle's bytes are, staged by the Live TV
+     * screen next to the runner-ups of the launched rung and read by the
+     * player when it opens the handle.
+     *
+     * WHY: every address this app plays is our own extensionless redirector,
+     * and the reader is picked before the 302 is followed — so a Live TV
+     * channel, which is always an HLS playlist (759/759 in the registry),
+     * arrives at the player with nothing on it that says HLS, and the
+     * progressive reader meets `#EXTM3U` where an MP4 box should be
+     * (`UnrecognizedInputFormatException`, Robo #4). The MIME travels with
+     * the handle instead of being guessed from an address that cannot
+     * carry it; [PlaybackMediaItemFactory.manifestMimeType] normalises it
+     * to the Media3 constant on the way out.
+     *
+     * Same discipline as [stageFailover]: in memory only, nothing survives a
+     * process death. A playback launched any other way simply has no entry,
+     * so it builds exactly as before — a bare movie handle stays progressive.
+     */
+    private val stagedManifestMimes = LinkedHashMap<String, String>()
+
+    fun stageManifestMime(streamId: String, mimeType: String) {
+        if (streamId.isBlank() || mimeType.isBlank()) return
+        stagedManifestMimes.remove(streamId)
+        stagedManifestMimes[streamId] = mimeType.trim()
+        while (stagedManifestMimes.size > MAX_STAGED_FAILOVERS) {
+            stagedManifestMimes.remove(stagedManifestMimes.keys.first())
+        }
+    }
+
+    /** Read without consuming: re-opening the same channel still declares HLS. */
+    fun peekManifestMime(streamId: String): String? = stagedManifestMimes[streamId]
+
+    /**
      * The print's coverage — the episode boundaries and chapter titles — staged by the
      * detail screen next to the runner-ups of the launched rung and read by the player
      * when it opens the handle.
