@@ -468,9 +468,20 @@ class PlaybackService : MediaSessionService() {
      * that never arrives — used to sit on the "Warming the link" notice
      * until the thirty-second card, and nothing ever advanced it. After
      * [StartDeadline.START_WATCHDOG_MS] with no first frame, the attempt
-     * is failed over exactly as a player error would be: retry the same
-     * rung once, then a silent hop, then the next rank, then the honest
-     * give-up. A first frame disarms it; a new load re-arms it.
+     * is failed over exactly as a player error before the first frame
+     * would be: a silent hop to a backup, then the next rank, then the
+     * honest give-up — never a retry of the same address (see
+     * [FailoverStateMachine.onFailure]'s S2 rule). A first frame disarms
+     * it; a new load re-arms it.
+     *
+     * Batch C (2026-11-14, Robo APK 499): the watchdog used to leave
+     * `beforeFirstFrame` at its false default, so its first failover was
+     * RetrySame — re-pressing the same stalled address (and re-seeding a
+     * preview press-pair) while the 30 s clock ran out. That is how a
+     * stalled McLintock! play showed the timeout card instead of the
+     * honest rate-limited handoff: the re-press re-paid the refused
+     * bucket, and no 429 ever surfaced as a player error for the
+     * 429-as-pause path to catch.
      */
     private fun armStartWatchdog(bundle: PlaybackBundle, rendition: PlaybackRendition) {
         watchdogJob?.cancel()
@@ -483,8 +494,12 @@ class PlaybackService : MediaSessionService() {
             val machine = failover ?: return@launch
             val decision = machine.onFailure(
                 "start timed out after ${StartDeadline.START_WATCHDOG_MS / 1_000} s with no first frame",
-                // Session 159 (S5): a stalled kept copy falls back to the
-                // live link through the same rule as a failed one.
+                // Batch C (2026-11-14): a stalled start IS a start failure —
+                // the machine must hop to a different file, never retry the
+                // same address (S2). The one exception stays: a stalled
+                // kept copy falls back to the live link through
+                // isLocalCopyAttempt, exactly as a failed one does.
+                beforeFirstFrame = true,
                 isLocalCopyAttempt = lastLoadedWasLocalCopy,
             )
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)
