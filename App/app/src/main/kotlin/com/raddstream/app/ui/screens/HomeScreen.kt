@@ -66,6 +66,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
@@ -937,15 +938,18 @@ private fun LibraryTile(
 ) {
     Surface(
         onClick = onClick,
-        // F30 (Batch B): the tile is a tap target with no spoken name of its
-        // own — its icon is decorative and its label is a child Text, so
-        // Robo flagged the "Your library" row as unlabeled. The label is
-        // the action's name.
-        onClickLabel = label,
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier,
+        // F30 (Batch B): the tile is a tap target with no spoken name of its
+        // own — its icon is decorative and its label is a child Text, so
+        // Robo flagged the "Your library" row as unlabeled. The merged node
+        // speaks the label. (Surface's onClick overload takes no onClickLabel
+        // in this M3 version — that parameter lives on Modifier.clickable —
+        // so the name rides on semantics instead.)
+        modifier = modifier.semantics(mergeDescendants = true) {
+            contentDescription = label
+        },
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),

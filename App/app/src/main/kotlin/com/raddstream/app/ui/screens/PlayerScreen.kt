@@ -173,6 +173,7 @@ import com.raddstream.app.player.PinchCommand
 import com.raddstream.app.player.PlayerOrientation
 import com.raddstream.app.player.PlayerStatusWord
 import com.raddstream.app.player.PlayerUiState
+import com.raddstream.app.player.bufferingPercent
 import com.raddstream.app.player.playerStatusWord
 import com.raddstream.app.player.ScreenZone
 import com.raddstream.app.player.ScrubPreviewPlayer

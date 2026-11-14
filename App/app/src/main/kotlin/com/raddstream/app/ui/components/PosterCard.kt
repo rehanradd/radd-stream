@@ -39,6 +39,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.raddstream.app.network.models.Post
@@ -113,7 +114,9 @@ fun PosterCard(
     // instead of clipping the second line.
     val titleLineHeight = MaterialTheme.typography.titleSmall.lineHeight
     val titleSlotHeight = with(LocalDensity.current) {
-        if (titleLineHeight.isSpecified) (titleLineHeight.value * 2).sp.toDp() else 40.dp
+        // TextUnit has no isSpecified in this Compose version — Unspecified
+        // is the sentinel to compare against.
+        if (titleLineHeight != TextUnit.Unspecified) (titleLineHeight.value * 2).sp.toDp() else 40.dp
     }
 
     val clickable = Modifier.semantics { contentDescription = a11y }

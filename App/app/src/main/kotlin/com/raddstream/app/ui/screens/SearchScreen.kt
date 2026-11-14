@@ -527,6 +527,7 @@ private fun RecentsSection(state: SearchUiState, viewModel: SearchViewModel) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SearchBody(
     state: SearchUiState,
