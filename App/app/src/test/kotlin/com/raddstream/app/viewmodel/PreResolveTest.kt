@@ -604,4 +604,27 @@ class PreResolveTest {
             ),
         )
     }
+
+    // ── Batch C: the warm-on-tap guard ──────────────────────────────────
+
+    @Test
+    fun `a fresh handle warms`() {
+        assertTrue(shouldWarmHandle("h1", null))
+    }
+
+    @Test
+    fun `a blank handle warms nothing`() {
+        assertFalse(shouldWarmHandle("", null))
+        assertFalse(shouldWarmHandle("   ", "h1"))
+    }
+
+    @Test
+    fun `a handle warmed once is not warmed again`() {
+        assertFalse(shouldWarmHandle("h1", "h1"))
+    }
+
+    @Test
+    fun `a different handle warms even after another was warmed`() {
+        assertTrue(shouldWarmHandle("h2", "h1"))
+    }
 }

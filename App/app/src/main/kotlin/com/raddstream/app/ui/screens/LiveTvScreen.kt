@@ -204,7 +204,14 @@ fun LiveTvScreen(
                         items(state.visibleChannels, key = { it.id }) { channel ->
                             LiveTvChannelCard(
                                 channel = channel,
-                                onClick = { onPlayChannel(channel.streamId, channel.name) },
+                                // Batch C: warm the channel's link in parallel
+                                // with the navigation, so the player 302s from
+                                // the banked answer instead of paying the live
+                                // resolve inside "Finding your video".
+                                onClick = {
+                                    viewModel.warmChannel(channel.streamId)
+                                    onPlayChannel(channel.streamId, channel.name)
+                                },
                             )
                         }
                     }

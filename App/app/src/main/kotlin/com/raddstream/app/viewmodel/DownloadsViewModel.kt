@@ -16,13 +16,16 @@ import com.raddstream.app.data.downloads.DeviceDownloadsRepository
 import com.raddstream.app.data.local.WatchHistoryDao
 import com.raddstream.app.data.local.WatchHistoryEntity
 import com.raddstream.app.repository.CacheRepository
+import com.raddstream.app.repository.CatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 enum class KeepState { QUEUED, DOWNLOADING, PAUSED, READY, EXPIRING, EXPIRED, NO_SPACE, FAILED }
 
@@ -158,6 +161,7 @@ sealed interface DownloadRow {
 class DownloadsViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val cacheRepository: CacheRepository,
+    private val catalogRepository: CatalogRepository,
     private val keepTtl: KeepTtlHolder,
     private val deviceDownloads: DeviceDownloadsRepository,
     private val cacheEngine: OfflineCacheEngine,
@@ -325,6 +329,33 @@ class DownloadsViewModel @Inject constructor(
             null
         }
         return KeepPlayback.route(local, item.streamHandle, item.playable)
+    }
+
+    private var warmJob: Job? = null
+    private var lastWarmedHandle: String? = null
+
+    /**
+     * Batch C — warm a keep's stream handle in the background, on tap.
+     *
+     * Only the redirector path (`KeepRoute.Stream`) warms: a keep with
+     * local bytes plays them with no network at all, and a local tap never
+     * reaches this. Same shape and guard as
+     * [LiveTvViewModel.warmChannel] — a metadata-only
+     * `GET /api/v1/stream?redirect=0` that makes the server live-resolve
+     * and bank the answer, so the player's redirector 302s from cache
+     * instead of paying the resolve inside "Finding your video". It runs
+     * in parallel with the navigation, never gates it, and a warm that
+     * fails is silent.
+     */
+    fun warmStreamHandle(handle: String) {
+        if (!shouldWarmHandle(handle, lastWarmedHandle)) return
+        warmJob?.cancel()
+        warmJob = viewModelScope.launch {
+            val warmed = runCatching {
+                withTimeout(30_000) { catalogRepository.resolveStream(handle) }
+            }.isSuccess
+            if (warmed) lastWarmedHandle = handle
+        }
     }
 
     /** The row said Play and nothing behind it is playable any more — say so instead of idling. */
