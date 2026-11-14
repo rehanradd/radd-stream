@@ -86,8 +86,10 @@ import com.raddstream.app.viewmodel.MembershipCardCopy
 import com.raddstream.app.viewmodel.SettingsViewModel
 
 /** The subtitle chips, in the order the row shows them. Readable by the region test, which
- * pins that a card can only ever seed a word this row can actually display. */
-internal val subtitleOptions = listOf("Off", "English", "Hindi", "Urdu", "Tamil", "Telugu")
+ * pins that a card can only ever seed a word this row can actually display.
+ * F23 (Batch B): Kannada joins the list, matching the audio list — the subtitle row had
+ * every other South Indian language but this one. */
+internal val subtitleOptions = listOf("Off", "English", "Hindi", "Urdu", "Tamil", "Telugu", "Kannada")
 
 /**
  * Robo run 5: the M3 default disabled button text (onSurface at 38%) reads
@@ -990,6 +992,10 @@ fun SettingsScreen(
  * Audit #50: Settings is four sections, not a junk drawer of ~15 cards.
  * One heading per section — Watching, Downloads, Account, About — plus
  * Advanced for the server switcher.
+ *
+ * F15 (Batch B): the heading's top padding is 16dp, not 8dp — the sections
+ * read as sections, with air above each heading, instead of the heading
+ * sitting on the card above it.
  */
 @Composable
 private fun SettingsSectionHeading(text: String) {
@@ -998,7 +1004,7 @@ private fun SettingsSectionHeading(text: String) {
         style = MaterialTheme.typography.titleMedium,
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onBackground,
-        modifier = Modifier.padding(top = 8.dp),
+        modifier = Modifier.padding(top = 16.dp),
     )
 }
 

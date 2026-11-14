@@ -44,6 +44,10 @@
          player_pause_centre ("Pause video"), which exists for the same reason. -->
     <string name="player_play_centre">Play video</string>
     <string name="player_buffering">Buffering…</string>
+    <string name="player_buffering_percent">Buffering… %1$d%%</string>
+    <!-- F29 (Batch B): the mark in place of the scrubber on a live stream — a
+         live picture has no time row, so the viewer still sees what it is. -->
+    <string name="player_live">Live</string>
     <string name="player_paused">Paused</string>
     <string name="player_leave_cinema">Leave cinema mode</string>
     <string name="player_lock">Lock controls</string>

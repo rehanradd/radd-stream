@@ -23,11 +23,13 @@ object CardGeometry {
      * Poster tiles: home rails, the browse and my-list grids, search results, the detail
      * header and every skeleton that stands in for one.
      *
-     * Shipped at the value the code already drew at all three call sites, so consolidating them
-     * changes no pixel. `design/DESIGN_SYSTEM.md` §8 still asks for 2:3 (0.667); that is an open
-     * owner question, and the answer is now a one-line edit here rather than three.
+     * The design spec (`design/DESIGN_SYSTEM.md` §8) asks for 2:3 (0.667), and
+     * Batch B adopts it: 0.68f cropped a sliver off the top and bottom of
+     * every 2:3 source poster (the round-2 "cropped/poorly framed" complaint).
+     * The value is still one line here — the answer to the old owner question
+     * is the spec, and a future change is a one-line edit, not three.
      */
-    const val POSTER_ASPECT: Float = 0.68f
+    const val POSTER_ASPECT: Float = 2f / 3f
 
     /** Rail tile width. A rail cell and its placeholder both draw from this one number. */
     const val RAIL_CARD_WIDTH_DP: Int = 132

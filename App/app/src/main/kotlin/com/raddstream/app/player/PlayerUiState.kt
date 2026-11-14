@@ -219,6 +219,16 @@ data class PlayerUiState(
     val positionMs: Long = 0,
     val bufferedMs: Long = 0,
     val durationMs: Long = 0,
+    /**
+     * F29 (Batch B): true when the current item is a live stream (Media3's
+     * `isCurrentMediaItemLive` — the manifest's live window), NOT when the
+     * duration happens to be unknown. A live HLS playlist can report a
+     * finite DVR-window duration (Discover Pakistan: 2:00:12), so the old
+     * `durationMs > 0` gate let a scrubber and a time row onto a stream
+     * that cannot be scrubbed. Every seek surface asks this flag, never
+     * the duration.
+     */
+    val isLive: Boolean = false,
     val speed: Float = 1f,
     val boosting: Boolean = false,
     /** User's own volume; the sleep fade multiplies it (see [SleepTimer.volumeFactorFor]). */
@@ -358,8 +368,8 @@ data class PlayerUiState(
     val keep: KeepUiState = KeepUiState.Unavailable,
     val keepRequested: Boolean = false,
 ) {
-    /** MX behaviour: the lock button also disables every seek path. */
-    val seekEnabled: Boolean get() = !locked
+    /** MX behaviour: the lock button also disables every seek path. A live stream has no seek path at all. */
+    val seekEnabled: Boolean get() = !locked && !isLive
 
     /**
      * Ghost mode. Every chrome decision in the screen asks this one question instead of

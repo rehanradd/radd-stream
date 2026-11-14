@@ -25,3 +25,16 @@ fun playerStatusWord(
     !isPlaying -> PlayerStatusWord.PAUSED
     else -> PlayerStatusWord.NONE
 }
+
+/**
+ * F4 (Batch B): how much of the file is buffered ahead, as a whole percent —
+ * the buffering notice's number. Null when there is no duration to measure
+ * against (still starting, or a live stream: a live window's "percent" is a
+ * DVR-window fraction, not progress, so it never shows one). A buffered
+ * position past the end clamps to 100; a negative reading clamps to 0 —
+ * neither is a number a viewer should ever see.
+ */
+fun bufferingPercent(bufferedMs: Long, durationMs: Long, isLive: Boolean = false): Int? {
+    if (isLive || durationMs <= 0L || bufferedMs < 0L) return null
+    return ((bufferedMs.toFloat() / durationMs).coerceIn(0f, 1f) * 100).toInt()
+}

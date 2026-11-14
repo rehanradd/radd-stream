@@ -8,8 +8,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -17,6 +19,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.performClick
@@ -25,10 +29,12 @@ import com.raddstream.app.network.models.Post
 import com.raddstream.app.network.models.ReleaseDetail
 import com.raddstream.app.ui.components.AudioBadge
 import com.raddstream.app.ui.components.HdrBadge
+import com.raddstream.app.ui.components.HeroCarousel
 import com.raddstream.app.ui.components.PosterCard
 import com.raddstream.app.ui.components.PrintQualityBadge
 import com.raddstream.app.ui.components.PrintSourceBadge
 import com.raddstream.app.ui.components.SubtitleBadge
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.ui.screens.MaintenanceScreen
 import com.raddstream.app.ui.screens.MethodSection
 import com.raddstream.app.ui.screens.PaymentSection
@@ -340,5 +346,86 @@ class ScreenSnapshotTest {
             }
         }
         capture("06_vip_payment_unconfigured")
+    }
+
+    // ── F25 (Batch B): chip states + hero pills ──────────────────────────────
+    //
+    // CI does not catch visual regressions — the chip colour, the placeholder
+    // tile and the "Unknown" pill all regressed silently. These two captures
+    // pin the states a screenshot review can actually see: a selected chip
+    // beside an unselected one, and a hero slide whose language pills hide
+    // the server's "Unknown" (F2). The placeholder tile itself is already
+    // captured by posterCards above (the noArtwork tile, posterUrl = null).
+
+    @Test
+    fun filterChipStates() {
+        shot {
+            Column(
+                Modifier.fillMaxWidth().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Filter chips", style = MaterialTheme.typography.titleLarge)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = true,
+                        onClick = {},
+                        label = { Text("Hindi") },
+                        colors = raddFilterChipColors(),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                    FilterChip(
+                        selected = false,
+                        onClick = {},
+                        label = { Text("English") },
+                        colors = raddFilterChipColors(),
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                }
+            }
+        }
+        // The selected chip carries the selected state and the unselected one
+        // does not — the colour difference alone would not fail a test, and
+        // a chip that looks selected but is not (or the reverse) is the
+        // regression these pixels exist to catch.
+        compose.onNode(hasText("Hindi")).assertIsSelected()
+        compose.onNode(hasText("English")).assertIsNotSelected()
+        capture("07_filter_chip_states")
+    }
+
+    @Test
+    fun heroPills() {
+        val post = Post(
+            id = 104,
+            title = "Jawan",
+            cleanTitle = "Jawan",
+            year = 2023,
+            contentType = "movie",
+            posterUrl = null,
+            language = "Hindi + English + Unknown",
+        )
+        shot {
+            Box(Modifier.fillMaxWidth()) {
+                HeroCarousel(
+                    posts = listOf(post),
+                    onPostClick = {},
+                    autoplay = false,
+                )
+            }
+        }
+        // F2: the server's "Unknown" is a missing value, not a language — it
+        // must never reach a pill, while the real languages do.
+        assertTrue(
+            "the hero still paints an \"Unknown\" pill",
+            compose.onAllNodes(hasText("Unknown")).fetchSemanticsNodes().isEmpty(),
+        )
+        assertTrue(
+            "the hero lost the Hindi pill",
+            compose.onAllNodes(hasText("Hindi")).fetchSemanticsNodes().isNotEmpty(),
+        )
+        assertTrue(
+            "the hero lost the English pill",
+            compose.onAllNodes(hasText("English")).fetchSemanticsNodes().isNotEmpty(),
+        )
+        capture("08_hero_pills")
     }
 }

@@ -67,7 +67,12 @@ enum class IndustryFilter(val label: String, val wireValue: String?) {
     HOLLYWOOD("Hollywood", "hollywood"),
     PAKISTANI("Pakistani", "pakistani"),
     SOUTH_INDIAN("South Indian", "south_indian"),
-    ANIME("Anime", "anime"),
+    // F10 (Batch B): NO Anime here. The server answers `type=anime` and
+    // `industry=anime` with the identical fragment — `(is_animated = 1 OR
+    // industry LIKE '%anime%')` (Fast_Fetch/viewer.py
+    // `_facet_filter_clauses`) — so the two doors selected the same rows
+    // and the sheet showed the same choice twice. Anime lives under Type,
+    // where it belongs: it is a format, not an industry.
 }
 
 enum class GenreFilter(val label: String, val wireValue: String?) {
@@ -228,6 +233,13 @@ data class SearchUiState(
     /** Type-ahead titles for the current query; empty when the route is blocked or the server is old. */
     val suggestions: List<SuggestItem> = emptyList(),
     /**
+     * F14 (Batch B): the trending row for the empty state — the server's own
+     * "Most versions" order, loaded once per screen. Empty when the route is
+     * blocked or the server is old; the empty state simply shows no row
+     * then, never an error for a suggestion that failed to load.
+     */
+    val trending: List<Post> = emptyList(),
+    /**
      * True when the suggest call itself failed (blocked route, old server,
      * dead socket) — distinct from "the server answered and has no matches".
      * The screen says so instead of silently showing no chips.
@@ -275,6 +287,9 @@ class SearchViewModel @Inject constructor(
     private var suggestJob: Job? = null
     private var rawResults: List<Post> = emptyList()
 
+    /** F14 (Batch B): the trending load runs once per ViewModel, not per recomposition. */
+    private var trendingRequested = false
+
     init {
         // The rail is a history, not a session scratch pad: hydrate from the persisted list
         // and keep following it, so a second device state (e.g. a reset) cannot leave the
@@ -292,6 +307,15 @@ class SearchViewModel @Inject constructor(
             syncAccountRepository.entitlement.collect { entitlement ->
                 _uiState.update { it.copy(isVip = entitlement?.vip == true) }
             }
+        }
+        // F14 (Batch B): the empty state's trending row, loaded once. A
+        // failure leaves the row empty — a suggestion that failed to load
+        // is not a search that failed, and the screen must not say so.
+        viewModelScope.launch {
+            if (trendingRequested) return@launch
+            trendingRequested = true
+            runCatching { catalogRepository.getTrending(limit = 10) }
+                .onSuccess { page -> _uiState.update { it.copy(trending = page.results) } }
         }
     }
 

@@ -38,7 +38,6 @@ import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
@@ -67,6 +66,9 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
@@ -186,11 +188,11 @@ fun HomeScreen(
             TopAppBar(
                 title = { Text(Brand.copy("home_title", Brand.name), fontWeight = FontWeight.Bold) },
                 actions = {
-                    if (searchEnabled) {
-                        IconButton(onClick = onSearchClick) {
-                            Icon(Icons.Default.Search, contentDescription = "Search catalog")
-                        }
-                    }
+                    // F8 (Batch B): the search icon is gone — the search bar
+                    // below is the typed-query door and the Search tab is the
+                    // empty-query door, so the icon was a third door to the
+                    // same place (round-2 "duplicate search icons"). Refresh
+                    // stays: it is the only top-bar action left.
                     IconButton(onClick = viewModel::refresh) {
                         Icon(Icons.Default.Refresh, contentDescription = "Refresh catalog")
                     }
@@ -572,6 +574,9 @@ private fun PickThreeCard(
                 text = "Pick 3 you like",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
+                // F30 (Batch B): a heading, so the card has a screen-reader
+                // label — Robo flagged this row as unlabeled.
+                modifier = Modifier.semantics { heading() },
             )
             Text(
                 text = "Tap the heart on three titles to start your My List.",
@@ -936,7 +941,15 @@ private fun LibraryTile(
         shape = RoundedCornerShape(16.dp),
         color = MaterialTheme.colorScheme.surfaceVariant,
         contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier,
+        // F30 (Batch B): the tile is a tap target with no spoken name of its
+        // own — its icon is decorative and its label is a child Text, so
+        // Robo flagged the "Your library" row as unlabeled. The merged node
+        // speaks the label. (Surface's onClick overload takes no onClickLabel
+        // in this M3 version — that parameter lives on Modifier.clickable —
+        // so the name rides on semantics instead.)
+        modifier = modifier.semantics(mergeDescendants = true) {
+            contentDescription = label
+        },
     ) {
         Column(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),

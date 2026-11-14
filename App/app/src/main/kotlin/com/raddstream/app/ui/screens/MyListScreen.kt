@@ -169,7 +169,12 @@ fun MyListScreen(
                 }
                 LazyVerticalGrid(
                     columns = CatalogGridColumns,
-                    modifier = Modifier.fillMaxSize(),
+                    // F12 (Batch B): the grid takes only the height its rows
+                    // need (weight 1f, fill false) instead of the whole
+                    // column — with one favorite the single card used to sit
+                    // alone on a full screen of nothing, and the PopularRow
+                    // below it had no height left to show in.
+                    modifier = Modifier.weight(1f, fill = false),
                     contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp, start = 16.dp, end = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp),
@@ -181,6 +186,14 @@ fun MyListScreen(
                             onRemove = { viewModel.remove(post.id) },
                         )
                     }
+                }
+                // F12 (Batch B): one favorite is a list that has barely
+                // started — the "Most versions" row sits under the grid so
+                // the next save is one tap away instead of a trip back to
+                // Home. Two or more favorites already fill the screen; the
+                // row would only push the list down.
+                if (state.favorites.size == 1 && state.popular.isNotEmpty()) {
+                    PopularRow(popular = state.popular, onPostClick = onPostClick)
                 }
             }
         }

@@ -191,6 +191,12 @@ fun HeroCarousel(
 
         HorizontalPager(
             state = pagerState,
+            // F28 (Batch B): the pager composes only the current page by
+            // default, so every auto-advance started a fresh image load and
+            // the hero read as empty mid-load (the Batch 0/1 empty-hero
+            // shots). One page of lookahead keeps the next slide's art
+            // warm, so an advance lands on a painted slide.
+            beyondBoundsPageCount = 1,
             modifier = Modifier.fillMaxSize().padding(heroInset),
         ) { page ->
             val post = posts.getOrNull(page) ?: return@HorizontalPager
@@ -384,22 +390,30 @@ private fun HeroSlide(
                 ),
         )
 
-        // 3 — the words.
+        // 3 — the words. With art they sit at the bottom, over the scrim.
+        // Without art (F8c, Batch B) the slide is a branded fallback card
+        // that already names the title in its centre — repeating the headline
+        // at the bottom left an enormous empty area with the buttons sitting
+        // very low, reading as a missing background. So the art-less slide
+        // centres its badges + buttons instead, and drops the repeated title.
+        val hasArt = !backdropUrl.isNullOrBlank()
         Column(
             modifier = Modifier
-                .align(Alignment.BottomStart)
+                .align(if (hasArt) Alignment.BottomStart else Alignment.CenterStart)
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp)
-                .padding(bottom = HERO_ACTION_BOTTOM_DP.dp),
+                .padding(bottom = if (hasArt) HERO_ACTION_BOTTOM_DP.dp else 0.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Text(
-                text = title,
-                style = RaddEmphasized.displaySmall,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            if (hasArt) {
+                Text(
+                    text = title,
+                    style = RaddEmphasized.displaySmall,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
 
             Row(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -502,15 +516,17 @@ private fun HeroBadge(text: String, subdued: Boolean = false) {
  * Page dots that are also buttons: the active one stretches into a short bar, so the state
  * reads at a glance, and each dot jumps the pager to its slide.
  *
- * The painted dot is 7dp tall and used to be the only thing a finger could aim at. Each one now
+ * The painted dot is 5dp tall and used to be the only thing a finger could aim at. Each one now
  * sits inside the [DOT_TOUCH_WIDTH] by [DOT_TOUCH_HEIGHT] box — 48dp square, the WCAG 2.2 AA
  * minimum in both directions (the 24dp width it used to have failed Robo's 48dp touch-target
  * floor). The row rides at the TOP end of the hero, in a contrast pill: at the bottom end
  * its hit boxes shared the buttons' strip and, on a 6-dot hero, covered the Watch Now
  * button's centre — a centred tap selected a dot instead of starting the title. Up here
  * the row can be as wide as the dot count needs without covering any control, and the
- * pill (the same 0.55f surface as the badges and the My List button) keeps the dots
- * readable over bright artwork, where the top scrim is clear. Each dot also says what
+ * pill (0.72f surface, up from 0.55f — the round-2 re-review found the dots blending
+ * into bright artwork) keeps the dots readable over bright artwork, where the top scrim
+ * is clear. The dots themselves shrank in Batch B (active 18dp → 12dp, 7dp → 5dp tall):
+ * the old capsule read oversized next to the badges. Each dot also says what
  * it is in words and carries a `selected` state, because the visual stretch was the only thing
  * that used to show which slide is up.
  */
@@ -527,7 +543,7 @@ private fun HeroIndicator(
             // Session 154 (N-1): the indicator pill is fully round — 24dp is
             // not on the M3 shape scale (20 → 28).
             .clip(RaddTokens.Shape.Pill)
-            .background(scheme.surface.copy(alpha = 0.55f))
+            .background(scheme.surface.copy(alpha = 0.72f))
             .padding(horizontal = 8.dp),
         horizontalArrangement = Arrangement.spacedBy(2.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -546,7 +562,7 @@ private fun HeroIndicator(
             ) {
                 Box(
                     Modifier
-                        .size(width = if (active) 18.dp else 7.dp, height = 7.dp)
+                        .size(width = if (active) 12.dp else 5.dp, height = 5.dp)
                         .clip(RoundedCornerShape(4.dp))
                         .background(scheme.onBackground.copy(alpha = if (active) 0.95f else 0.45f)),
                 )

@@ -1,5 +1,6 @@
 package com.raddstream.app.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -27,11 +28,22 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CardMembership
+import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DateRange
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.HighQuality
+import androidx.compose.material.icons.filled.Language
+import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Sort
+import androidx.compose.material.icons.filled.Theaters
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Button
@@ -57,6 +69,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.stringResource
@@ -67,6 +80,7 @@ import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -77,9 +91,12 @@ import com.raddstream.app.player.classifyPastedText
 import com.raddstream.app.ui.components.EmptyState
 import com.raddstream.app.ui.components.InlineLoadFailure
 import com.raddstream.app.ui.components.ErrorState
-import com.raddstream.app.ui.components.PosterRailSkeleton
-import com.raddstream.app.ui.components.Pill
+import com.raddstream.app.ui.components.MediaRail
 import com.raddstream.app.ui.components.PosterCard
+import com.raddstream.app.ui.components.PosterGridSkeleton
+import com.raddstream.app.ui.components.Pill
+import com.raddstream.app.ui.components.SectionHeader
+import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.ui.components.SectionHeader
 import com.raddstream.app.ui.components.raddFilterChipColors
 import com.raddstream.app.viewmodel.GenreFilter
@@ -89,6 +106,7 @@ import com.raddstream.app.viewmodel.QualityFilter
 import com.raddstream.app.viewmodel.SearchSort
 import com.raddstream.app.viewmodel.SearchUiState
 import com.raddstream.app.viewmodel.SearchViewModel
+import com.raddstream.app.viewmodel.displayLanguageName
 import com.raddstream.app.viewmodel.filteredPillLabel
 import com.raddstream.app.viewmodel.resultsSummary
 
@@ -305,6 +323,24 @@ fun SearchScreen(
                 onDismissRequest = { showSheet = false },
                 sheetState = sheetState,
                 containerColor = MaterialTheme.colorScheme.surface,
+                // F10 (Batch B): the sheet's grab handle, drawn instead of
+                // assumed — the re-review called the sheet hard to dismiss
+                // because nothing on screen said where to grab it.
+                dragHandle = {
+                    Box(
+                        Modifier.fillMaxWidth().padding(top = 12.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(
+                            Modifier
+                                .size(width = 32.dp, height = 4.dp)
+                                .background(
+                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                                    RoundedCornerShape(2.dp),
+                                ),
+                        )
+                    }
+                },
             ) {
                 FilterSheetContent(
                     state = state,
@@ -490,6 +526,7 @@ private fun RecentsSection(state: SearchUiState, viewModel: SearchViewModel) {
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SearchBody(
     state: SearchUiState,
@@ -512,15 +549,81 @@ private fun SearchBody(
             if (state.recents.isNotEmpty()) {
                 RecentsSection(state = state, viewModel = viewModel)
             } else {
-                EmptyState(
-                    title = "Search your catalog",
-                    message = "Type a title or an actor's name, or pick a filter to begin. Recent searches will show up here.",
-                    icon = { Icon(Icons.Default.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(40.dp)) },
-                )
+                // F14 (Batch B): an empty search is not a dead end. The
+                // screen keeps the "Search your catalog" headline, then
+                // shows what is trending and the genre doors, so the first
+                // tap is one away instead of a typed query away. When the
+                // trending load failed, the row is simply absent — a
+                // suggestion that failed is not a search that failed, and
+                // the screen must not say so.
+                Column(
+                    Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+                ) {
+                    Spacer(Modifier.height(32.dp))
+                    Icon(
+                        Icons.Default.Search,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(40.dp).align(Alignment.CenterHorizontally),
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = "Search your catalog",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onBackground,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = "Type a title or an actor's name, or pick a filter to begin. Recent searches will show up here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 32.dp),
+                    )
+                    if (state.trending.isNotEmpty()) {
+                        SectionHeader(
+                            title = "Trending now",
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 28.dp),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        MediaRail(items = state.trending, key = { it.id }) { post ->
+                            PosterCard(post = post, onClick = { onPostClick(post) })
+                        }
+                    }
+                    SectionHeader(
+                        title = "Browse by genre",
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 24.dp),
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    FlowRow(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        GenreFilter.entries.filter { it != GenreFilter.ALL }.forEach { genre ->
+                            FilterChip(
+                                selected = false,
+                                onClick = { viewModel.selectGenre(genre) },
+                                label = { Text(genre.label) },
+                                modifier = Modifier.heightIn(min = 48.dp),
+                                colors = raddFilterChipColors(),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(24.dp))
+                }
             }
         }
-        state.isLoading && state.groups.isEmpty() -> PosterRailSkeleton(
-            Modifier.fillMaxWidth().padding(top = 16.dp),
+        state.isLoading && state.groups.isEmpty() -> PosterGridSkeleton(
+            // F21 (Batch B): the loading state is a grid skeleton — the
+            // results arrive as a grid, so the wait looks like the answer
+            // instead of a rail that never comes. The columns are the shared
+            // CatalogGridColumns rule (the skeleton's default): a literal
+            // count here would be a second column rule, and the skeleton
+            // would disagree with the grid again the moment the rule moves.
+            contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp),
         )
         state.error != null && state.groups.isEmpty() -> ErrorState(title = "Couldn't search", message = state.error ?: "Search failed.", onRetry = viewModel::submitCurrentQuery)
         // Audit #36: "No matches" only after a completed search returns zero
@@ -664,105 +767,174 @@ private fun FilterSheetContent(
     viewModel: SearchViewModel,
     onDone: () -> Unit,
 ) {
+    // F10 (Batch B): the sheet is two parts — a scrolling list of sections
+    // and a footer that never scrolls away. The old sheet scrolled the
+    // Apply button off the bottom on a small phone, so the only way to
+    // leave was the swipe-down the re-review called out as hard to find.
+    // The footer sits under a hairline, always in reach.
+    // The Language list is the long one (11 languages); it starts folded
+    // so the sheet opens on Type, not on a wall of language chips.
+    var languageExpanded by remember { mutableStateOf(false) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-            .padding(bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+            .padding(horizontal = 20.dp),
     ) {
-        // Type moved here from the rail: the rail now carries only the Type
-        // chips and the Filters button, so the sheet is the one place where
-        // every facet lives together.
-        FacetChips(
-            title = "Type",
-            options = typeChips,
-            label = { it.first },
-            isSelected = { state.filters.type == it.second },
-            onSelect = { viewModel.selectType(it.second) },
-            allDescription = "All types",
-        )
-        FacetChips(
-            title = "Industry",
-            options = IndustryFilter.entries,
-            label = { it.label },
-            isSelected = { state.filters.industry == it },
-            onSelect = viewModel::selectIndustry,
-            allDescription = "All industries",
-        )
-        FacetChips(
-            title = "Genre",
-            options = GenreFilter.entries,
-            label = { it.label },
-            isSelected = { state.filters.genre == it },
-            onSelect = viewModel::selectGenre,
-            allDescription = "All genres",
-        )
-        FacetChips(
-            title = "Language",
-            options = LanguageFilter.entries,
-            label = { it.label },
-            isSelected = { state.filters.language == it },
-            onSelect = viewModel::selectLanguage,
-            allDescription = "All languages",
-        )
-        FacetChips(
-            title = "Quality",
-            options = QualityFilter.entries,
-            label = { it.label },
-            isSelected = { state.filters.quality == it },
-            onSelect = viewModel::selectQuality,
-            allDescription = "All qualities",
-        )
-        if (!state.isVip) {
-            Text("Plan", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(
-                    colors = raddFilterChipColors(),
-                    selected = state.filters.includedOnly,
-                    onClick = { viewModel.setIncludedOnly(!state.filters.includedOnly) },
-                    label = { Text("Included in my plan") },
-                    // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
-                    modifier = Modifier.heightIn(min = 48.dp),
+        Column(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .verticalScroll(rememberScrollState())
+                .padding(top = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            // Type moved here from the rail: the rail now carries only the Type
+            // chips and the Filters button, so the sheet is the one place where
+            // every facet lives together.
+            FacetChips(
+                title = "Type",
+                options = typeChips,
+                label = { it.first },
+                isSelected = { state.filters.type == it.second },
+                onSelect = { viewModel.selectType(it.second) },
+                allDescription = "All types",
+                icon = Icons.Default.Category,
+            )
+            FacetChips(
+                title = "Industry",
+                options = IndustryFilter.entries,
+                label = { it.label },
+                isSelected = { state.filters.industry == it },
+                onSelect = viewModel::selectIndustry,
+                allDescription = "All industries",
+                icon = Icons.Default.Movie,
+            )
+            FacetChips(
+                title = "Genre",
+                options = GenreFilter.entries,
+                label = { it.label },
+                isSelected = { state.filters.genre == it },
+                onSelect = viewModel::selectGenre,
+                allDescription = "All genres",
+                icon = Icons.Default.Theaters,
+            )
+            // Language, folded by default: eleven chips is the longest group
+            // in the sheet, and the header always shows what is picked, so
+            // a folded section still says what it holds.
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 48.dp)
+                        .clickable { languageExpanded = !languageExpanded }
+                        .semantics(mergeDescendants = true) {
+                            contentDescription = "Language: ${state.filters.language.label}"
+                        },
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        Icons.Default.Language,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(20.dp),
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Language", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        displayLanguageName(state.filters.language.label),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        if (languageExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (languageExpanded) {
+                    Spacer(Modifier.height(8.dp))
+                    FacetChips(
+                        title = "Language",
+                        options = LanguageFilter.entries,
+                        // F23 (Batch B): the chip paints both scripts —
+                        // "Hindi · हिन्दी" — so the language is findable by
+                        // a reader of either. The stored value stays the
+                        // English name; only the paint carries both.
+                        label = { displayLanguageName(it.label) },
+                        isSelected = { state.filters.language == it },
+                        onSelect = viewModel::selectLanguage,
+                        allDescription = "All languages",
+                        showHeader = false,
+                    )
+                } else {
+                    HorizontalDivider(Modifier.padding(top = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                }
+            }
+            FacetChips(
+                title = "Quality",
+                options = QualityFilter.entries,
+                label = { it.label },
+                isSelected = { state.filters.quality == it },
+                onSelect = viewModel::selectQuality,
+                allDescription = "All qualities",
+                icon = Icons.Default.HighQuality,
+            )
+            if (!state.isVip) {
+                FacetHeader(title = "Plan", icon = Icons.Default.CardMembership)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    FilterChip(
+                        colors = raddFilterChipColors(),
+                        selected = state.filters.includedOnly,
+                        onClick = { viewModel.setIncludedOnly(!state.filters.includedOnly) },
+                        label = { Text("Included in my plan") },
+                        // Audit #54: a FilterChip is 32 dp tall — the touch-target floor is 48 dp, so the chip itself carries it.
+                        modifier = Modifier.heightIn(min = 48.dp),
+                    )
+                }
+                HorizontalDivider(Modifier.padding(top = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            }
+
+            FacetHeader(title = "Sort results", icon = Icons.Default.Sort)
+            // F1 (Batch A): the old copy explained the paging model in implementation
+            // words ("facets", "run on the server before paging"). One plain sentence.
+            Text(
+                stringResource(R.string.search_filters_help),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SearchSort.entries.forEach { sort ->
+                SortOptionRow(
+                    sort = sort,
+                    selected = state.sort == sort,
+                    onSelect = viewModel::setSort,
                 )
             }
-        }
+            HorizontalDivider(Modifier.padding(top = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
 
-        Text("Sort results", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-        // F1 (Batch A): the old copy explained the paging model in implementation
-        // words ("facets", "run on the server before paging"). One plain sentence.
-        Text(
-            stringResource(R.string.search_filters_help),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        SearchSort.entries.forEach { sort ->
-            SortOptionRow(
-                sort = sort,
-                selected = state.sort == sort,
-                onSelect = viewModel::setSort,
-            )
+            FacetHeader(title = "Year range", icon = Icons.Default.DateRange)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                YearField(
+                    label = "From",
+                    value = state.filters.yearFrom?.toString() ?: "",
+                    onSet = { it?.let { n -> viewModel.setYearRange(n, state.filters.yearTo) } ?: viewModel.setYearRange(null, state.filters.yearTo) },
+                )
+                YearField(
+                    label = "To",
+                    value = state.filters.yearTo?.toString() ?: "",
+                    onSet = { it?.let { n -> viewModel.setYearRange(state.filters.yearFrom, n) } ?: viewModel.setYearRange(state.filters.yearFrom, null) },
+                )
+            }
+            Spacer(Modifier.height(8.dp))
         }
-
-        Spacer(Modifier.height(8.dp))
-        Text("Year range", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            YearField(
-                label = "From",
-                value = state.filters.yearFrom?.toString() ?: "",
-                onSet = { it?.let { n -> viewModel.setYearRange(n, state.filters.yearTo) } ?: viewModel.setYearRange(null, state.filters.yearTo) },
-            )
-            YearField(
-                label = "To",
-                value = state.filters.yearTo?.toString() ?: "",
-                onSet = { it?.let { n -> viewModel.setYearRange(state.filters.yearFrom, n) } ?: viewModel.setYearRange(state.filters.yearFrom, null) },
-            )
-        }
-
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Row(
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
         ) {
             TextButton(onClick = viewModel::resetFilters) { Text("Reset") }
             Button(onClick = onDone) { Text("Apply") }
@@ -828,9 +1000,22 @@ private fun <T> FacetChips(
     // Type and under Industry announced identically — so every chip carries
     // its group in its spoken name ("Type: Anime" vs "Industry: Anime").
     allDescription: String,
+    // F10 (Batch B): the section's icon, painted beside the title so the
+    // groups read apart at a glance instead of five bare headings in a
+    // row. The Language accordion passes its own header and hides this one.
+    icon: ImageVector? = null,
+    showHeader: Boolean = true,
 ) {
-    Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
-    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    if (showHeader) {
+        FacetHeader(title = title, icon = icon)
+    }
+    // F10 (Batch B): 8dp gaps read as five separate rows of buttons; 6dp
+    // reads as one group. The 48dp touch floor stays — density is the
+    // gaps, never the targets.
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
         options.forEach { option ->
             FilterChip(
                 colors = raddFilterChipColors(),
@@ -845,6 +1030,30 @@ private fun <T> FacetChips(
                 },
             )
         }
+    }
+    // F10 (Batch B): a hairline under each group, so the sheet reads as
+    // sections instead of one long run of chips.
+    HorizontalDivider(Modifier.padding(top = 4.dp), color = MaterialTheme.colorScheme.outlineVariant)
+}
+
+/**
+ * F10 (Batch B): one section heading for the filter sheet — an icon and a
+ * title on one row, shared by the chip groups and by the Plan, Sort and
+ * Year blocks so every section opens the same way.
+ */
+@Composable
+private fun FacetHeader(title: String, icon: ImageVector?) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (icon != null) {
+            Icon(
+                icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(8.dp))
+        }
+        Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurface)
     }
 }
 

@@ -4,23 +4,15 @@
     android:viewportWidth="24"
     android:viewportHeight="24"
 >
+    <!-- F27 (Batch B): the My List tab wears a heart, not a bookmark. Every
+         save action in the app — detail, hero, Home — is a heart, and the
+         tab was the one place that said bookmark; a viewer who saves with a
+         heart and finds a bookmark in the bar is looking at two marks for
+         one thing. Same stroke style as the other tab icons (the bar's tint
+         recolours it); only the shape changed, to the Material heart path. -->
     <path
         android:fillColor="@android:color/transparent"
-        android:pathData="M7,3.5 H17 V20.5 C15.4,18.9 13.6,18.1 12,18.1 C10.4,18.1 8.6,18.9 7,20.5 Z"
-        android:strokeWidth="2"
-        android:strokeColor="#FF000000"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"/>
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M10,7.5 H14"
-        android:strokeWidth="2"
-        android:strokeColor="#FF000000"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round"/>
-    <path
-        android:fillColor="@android:color/transparent"
-        android:pathData="M10,11 H14"
+        android:pathData="M12,21.35l-1.45,-1.32C5.4,15.36 2,12.28 2,8.5 2,5.42 4.42,3 7.5,3c1.74,0 3.41,0.81 4.5,2.09C13.09,3.81 14.76,3 16.5,3 19.58,3 22,5.42 22,8.5c0,3.78 -3.4,6.86 -8.55,11.54L12,21.35z"
         android:strokeWidth="2"
         android:strokeColor="#FF000000"
         android:strokeLineCap="round"

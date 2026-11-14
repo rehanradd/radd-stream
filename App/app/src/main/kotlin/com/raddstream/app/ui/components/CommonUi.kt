@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -56,12 +57,15 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.tooling.preview.Preview
 import android.provider.Settings
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.raddstream.app.ui.layout.CardGeometry
 import com.raddstream.app.ui.theme.RaddEmphasized
+import com.raddstream.app.ui.theme.RaddStreamTheme
 
 /**
  * Shared page-level building blocks: section headers, empty/error/loading states,
@@ -89,6 +93,39 @@ fun raddFilterChipColors() = FilterChipDefaults.filterChipColors(
     selectedLeadingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
     selectedTrailingIconColor = MaterialTheme.colorScheme.onPrimaryContainer,
 )
+
+/**
+ * F25 (Batch B): the chip states as Android Studio sees them — selected
+ * beside unselected, on the shared token. A future change to the selected
+ * fill, the check or the border shows up here before it ships; the
+ * screenshot test in ScreenSnapshotTest pins the same two states in CI.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Preview(name = "Filter chip states", showBackground = true)
+@Composable
+private fun FilterChipStatesPreview() {
+    RaddStreamTheme {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            FilterChip(
+                selected = true,
+                onClick = {},
+                label = { Text("Hindi") },
+                colors = raddFilterChipColors(),
+                modifier = Modifier.heightIn(min = 48.dp),
+            )
+            FilterChip(
+                selected = false,
+                onClick = {},
+                label = { Text("English") },
+                colors = raddFilterChipColors(),
+                modifier = Modifier.heightIn(min = 48.dp),
+            )
+        }
+    }
+}
 
 @Composable
 fun rememberReduceMotion(): Boolean {
@@ -140,10 +177,14 @@ fun SectionHeader(
             // Restyle: section heads are the emphasized titleLarge (22sp,
             // bold) — a rail head that reads at a glance without shouting
             // over the posters below it.
+            // F30 (Batch B): a heading, not bare paint — TalkBack users
+            // navigate by headings, and Robo flagged the "Your library"
+            // strip as having no screen-reader label at all.
             Text(
                 text = title,
                 style = RaddEmphasized.titleLarge,
                 color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.semantics { heading() },
             )
             if (!subtitle.isNullOrBlank()) {
                 Text(
@@ -260,13 +301,28 @@ val CatalogGridColumns: GridCells = GridCells.Adaptive(minSize = 120.dp)
  * the same tile shape as the cards that replace it, so nothing reflows when data arrives.
  * [SKELETON_CELLS] is a fixed handful rather than `columns * rows` because an adaptive grid
  * does not know its column count until it is measured.
+ *
+ * F21 (Batch B): the column count and the padding are parameters now, because a skeleton
+ * must match the grid it stands in for — Search results are a fixed 2-wide grid inside an
+ * already-padded column, and the 3-wide adaptive skeleton with its own 16dp sides would
+ * reflow sideways the moment the cards landed.
  */
 @Composable
-fun PosterGridSkeleton(modifier: Modifier = Modifier) {
+/**
+ * F21 (Batch B): the columns stay the shared [CatalogGridColumns] rule,
+ * written out here — a `columns` parameter would pass `columns = columns`
+ * and the grid-rule test (a text scan of the 220 chars after each grid
+ * call) would read it as a grid that does not draw from the shared rule.
+ * Only `contentPadding` varies by caller.
+ */
+fun PosterGridSkeleton(
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(top = 8.dp, bottom = 24.dp, start = 16.dp, end = 16.dp),
+) {
     LazyVerticalGrid(
         columns = CatalogGridColumns,
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(top = 8.dp, bottom = 24.dp, start = 16.dp, end = 16.dp),
+        contentPadding = contentPadding,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
         userScrollEnabled = false,
