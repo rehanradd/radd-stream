@@ -9,6 +9,7 @@ import com.raddstream.app.network.buildRaddGson
 import com.raddstream.app.network.models.PostDetailResponse
 import com.raddstream.app.network.models.PostsResponse
 import com.raddstream.app.network.models.WireWorkDetailResponse
+import java.io.IOException
 import java.lang.reflect.Proxy
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
@@ -17,6 +18,7 @@ import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -45,8 +47,12 @@ class V2DetailRepositoryTest {
     private class FakeApiProvider(
         settingsRepository: ServerSettingsRepository,
         private val workDetail: WireWorkDetailResponse,
+        private val baseUrlFailure: IOException? = null,
     ) : ApiProvider(settingsRepository) {
         var bridgePostsCalled = false
+
+        override suspend fun currentBaseUrl(): String =
+            baseUrlFailure?.let { throw it } ?: super.currentBaseUrl()
 
         override suspend fun current(): RaddStreamApi {
             @Suppress("UNCHECKED_CAST")
@@ -71,11 +77,14 @@ class V2DetailRepositoryTest {
         }
     }
 
-    private fun repositoryFor(workDetail: WireWorkDetailResponse): Pair<CatalogRepository, FakeApiProvider> {
+    private fun repositoryFor(
+        workDetail: WireWorkDetailResponse,
+        baseUrlFailure: IOException? = null,
+    ): Pair<CatalogRepository, FakeApiProvider> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val settings = ServerSettingsRepository(context)
         runBlocking { settings.saveServerUrl("https://raddstream.duckdns.org") }
-        val provider = FakeApiProvider(settings, workDetail)
+        val provider = FakeApiProvider(settings, workDetail, baseUrlFailure)
         return CatalogRepository(provider, settings) to provider
     }
 
@@ -97,5 +106,19 @@ class V2DetailRepositoryTest {
         assertEquals("The Penguin", detail!!.title)
         assertEquals(126, detail.releases.size)
         assertTrue(provider.bridgePostsCalled)
+    }
+
+    @Test
+    fun `a base URL read failure degrades to null instead of killing a good response`() = runBlocking {
+        // Batch B detail regression: the base-URL read sits after the network call,
+        // and its narrow catch let a DataStore read failure escape as the hard
+        // "Failed to load details" error even though the API had answered 200.
+        // A base URL the detail cannot name is a failure to ask: null, so the
+        // caller's null-retry re-asks instead of hard-failing the tap.
+        val (repository, _) = repositoryFor(
+            loadResponse("work-7681-scarpetta.json"),
+            IOException("DataStore read failed"),
+        )
+        assertNull(repository.getWorkDetailV2(7681))
     }
 }

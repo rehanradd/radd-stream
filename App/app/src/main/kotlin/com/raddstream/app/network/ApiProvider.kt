@@ -124,8 +124,21 @@ open class ApiProvider @Inject constructor(
      * The normalized origin of the server the user connected to. Two jobs: build our own
      * redirector address with [streamRedirectUrl], and be the reference origin every hand-off
      * is checked against with [isSameOriginAsServer].
+     *
+     * Batch B detail regression (2026-11-14): this used to re-read DataStore and
+     * re-normalize on every call, so a failure of that read AFTER a successful detail
+     * response killed the whole load — the base-URL read sits after the network call in
+     * `CatalogRepository.getWorkDetailV2`, and its narrow catch let the throw escape to
+     * the detail error screen ("Failed to load details. Check connection.") even though
+     * the API had answered 200. The Retrofit client is already built from this same URL
+     * and cached, so a populated cache is the answer: return it without touching
+     * storage. Only a cold start (no call yet) reads DataStore.
+     *
+     * Open for tests: a fake provider answers `current()` with a stub API and
+     * `currentBaseUrl()` with a failing read, to pin the repository's fallback.
      */
-    suspend fun currentBaseUrl(): String {
+    open suspend fun currentBaseUrl(): String {
+        cachedBaseUrl?.let { return it }
         val savedUrl = settingsRepository.serverUrl.first()
             ?: throw IllegalStateException("Connect to a catalog server first.")
         return normalizeServerUrl(savedUrl)

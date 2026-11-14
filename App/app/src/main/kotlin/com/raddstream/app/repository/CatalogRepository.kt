@@ -395,7 +395,21 @@ class CatalogRepository @Inject constructor(
         if (!response.ok) return null
         val baseUrl = try {
             apiProvider.currentBaseUrl()
-        } catch (_: IllegalStateException) {
+        } catch (ex: CancellationException) {
+            throw ex
+        } catch (ex: java.util.concurrent.CancellationException) {
+            throw ex
+        } catch (_: Exception) {
+            // Batch B detail regression (2026-11-14): this used to catch only
+            // IllegalStateException, so a DataStore read failure (IOException)
+            // or a malformed stored URL (IllegalArgumentException from
+            // normalizeServerUrl) escaped AFTER a successful detail response
+            // and painted the hard "Failed to load details" error over a load
+            // that had worked — the API answered 200 and the work_ref bridge
+            // never even ran, because it sits after this read. A base URL the
+            // detail cannot name is a failure to ask, like the catches above:
+            // null so the caller's null-retry re-asks instead of hard-failing
+            // the tap. (Cancellation is rethrown, never swallowed into null.)
             return null
         }
         var v1PostId = 0
@@ -511,7 +525,14 @@ class CatalogRepository @Inject constructor(
         if (!response.playable || response.streamCandidates.isEmpty()) return null
         val baseUrl = try {
             apiProvider.currentBaseUrl()
-        } catch (_: IllegalStateException) {
+        } catch (ex: CancellationException) {
+            throw ex
+        } catch (ex: java.util.concurrent.CancellationException) {
+            throw ex
+        } catch (_: Exception) {
+            // Same Batch B detail-regression hole as getWorkDetailV2 above: a
+            // DataStore read failure or malformed stored URL here must degrade
+            // to null, never escape past a response that already succeeded.
             return null
         }
         val coverage = response.coverage?.toPlayerCoverage() ?: Coverage()
