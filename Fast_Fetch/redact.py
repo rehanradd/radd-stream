@@ -1445,6 +1445,17 @@ def link_is_adult(source_id: int, db_path) -> bool:
 
 BUCKET_LIMITS = {
     "play": (30, 60.0),      # /stream, /art, /m3u — the expensive ones
+    # Warm presses (`redirect=0`) pay here, never into `play`. A warm press
+    # resolves and describes a link without redirecting to the file, so it is
+    # a background check — pre-resolve, preview, failover metadata — and a
+    # fast scroll used to spend the play budget before Play was ever tapped
+    # (Robo 501, 2026-11-14: 132 stream presses in 5 min, 50 in the worst
+    # minute, then the 429 wall on links that were alive). 120/min is 4x the
+    # play budget: it absorbs a crawl with headroom while still bounding
+    # resolver work per IP, because a warm press does live resolution on
+    # this one-vCPU box and unbounded would be a CPU buy. See
+    # viewer._warm_press for which presses count as warm.
+    "warm": (120, 60.0),    # redirect=0 descriptor presses on stream/download/resolve
     # Verified 2026-11-12 (baseline): browse is 60/min, NOT 10/min —
     # the 10 only ever applied to /stats. 60 stays: a CGNAT IPv4
     # carries ~75 users, but no starvation has been measured, and the

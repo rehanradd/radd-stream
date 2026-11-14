@@ -681,6 +681,63 @@ class RateLimiterTests(unittest.TestCase):
         self.assertFalse(limiter.check("browse", "203.0.113.7")["allowed"])
 
 
+class WarmBucketTests(unittest.TestCase):
+    """Warm presses (`redirect=0`) pay the warm bucket, never play.
+
+    Robo 501 (2026-11-14): 132 stream presses in 5 min drained the 30/min
+    play bucket before Play was tapped, so the player 429'd on a link that
+    was alive. The split: a press that asks for metadata instead of the
+    file pays `warm` (120/min); a real press still pays `play` (30/min).
+    """
+
+    def test_warm_is_declared_and_larger_than_play(self):
+        self.assertIn("warm", redact.BUCKET_LIMITS)
+        warm_limit, warm_window = redact.BUCKET_LIMITS["warm"]
+        self.assertGreater(warm_limit, redact.BUCKET_LIMITS["play"][0])
+        self.assertEqual(warm_window, 60.0)
+
+    def test_redirect_zero_is_warm_on_every_redirector(self):
+        for target in ("/api/v1/stream?id=x&redirect=0",
+                       "/api/v1/download?id=x&redirect=0",
+                       "/api/v2/resolve/x?redirect=0",
+                       "/api/v1/stream?id=x&redirect=false",
+                       "/api/v1/stream?id=x&redirect=no",
+                       "/api/v2/resolve/x?redirect=false"):
+            path = target.split("?")[0]
+            self.assertTrue(viewer._warm_press(path, target), target)
+
+    def test_a_real_press_is_never_warm(self):
+        for target in ("/api/v1/stream?id=x&redirect=1",
+                       "/api/v1/stream?id=x&redirect=true",
+                       "/api/v1/stream?id=x&redirect=yes",
+                       "/api/v1/stream?id=x",
+                       "/api/v1/download?id=x&redirect=1",
+                       "/api/v2/resolve/x?redirect=1",
+                       "/api/v2/resolve/x",
+                       "/api/v1/posts?redirect=0",
+                       "/api/v1/art?id=x&redirect=0"):
+            path = target.split("?")[0]
+            self.assertFalse(viewer._warm_press(path, target), target)
+
+    def test_bucket_for_routes_warm_presses_to_warm(self):
+        bucket_for = viewer.DashboardHandler._bucket_for
+        for path in ("/api/v1/stream", "/api/v1/download"):
+            self.assertEqual(bucket_for(None, path, warm=True), "warm", path)
+            self.assertEqual(bucket_for(None, path, warm=False), "play", path)
+        # No warm form exists here: art and m3u always pay play.
+        for path in ("/api/v1/art", "/api/m3u"):
+            self.assertEqual(bucket_for(None, path, warm=True), "play", path)
+        # The v2 resolve route warms through the same flag.
+        self.assertEqual(bucket_for(None, "/api/v2/resolve/9", warm=True),
+                         "warm")
+        self.assertEqual(bucket_for(None, "/api/v2/resolve/9", warm=False),
+                         "play")
+        # Everything else is untouched by the flag.
+        self.assertEqual(bucket_for(None, "/api/v1/posts", warm=True), "browse")
+        self.assertEqual(bucket_for(None, "/api/v2/works/1", warm=True),
+                         "browse")
+
+
 class NeedleVocabularyTests(FixtureMixin):
     def setUp(self):
         self.make_ledger()
@@ -1295,6 +1352,40 @@ class PublicEdgeHttpTests(FixtureMixin):
         self.assertEqual(status, 429, body)
         self.assertGreaterEqual(int(headers3["Retry-After"]), 1)
         self.assertEqual(json.loads(body)["error"], "rate_limited")
+
+    def test_warm_presses_do_not_spend_the_play_budget(self):
+        """Robo 501 (2026-11-14): 132 stream presses in 5 min drained the
+        30/min play bucket before Play was tapped, so the player 429'd on a
+        link that was alive. Warm presses (`redirect=0`) now pay the warm
+        bucket: dozens of them leave the play budget untouched, and a drained
+        play bucket still lets a warm press through while a real press 429s."""
+        bogus = "bogus-handle"
+        play_limit = viewer._play_limit_per_min()
+        warm_targets = (f"/api/v1/stream?id={bogus}&redirect=0",
+                        f"/api/v1/download?id={bogus}&redirect=0",
+                        f"/api/v2/resolve/{bogus}?redirect=0")
+        # 30 warm presses on each of the three warm shapes: none may 429,
+        # and each must report the warm limit in its triple — 90 presses,
+        # three times the play budget, without spending one play token.
+        for _ in range(30):
+            for target in warm_targets:
+                status, headers, _ = self.get(target, self.public_port)
+                self.assertNotEqual(status, 429, f"warm press {target} → 429")
+                self.assertEqual(headers.get("RateLimit-Limit"),
+                                 str(redact.BUCKET_LIMITS["warm"][0]),
+                                 f"{target} reports the play limit, not warm's")
+        # A real press still has its full play budget after all that warming.
+        status, _, _ = self.get(f"/api/v1/stream?id={bogus}", self.public_port)
+        self.assertNotEqual(status, 429, "a real press 429s after warm presses")
+        # Drain play with real presses: the next real press 429s...
+        for _ in range(play_limit - 1):
+            self.get(f"/api/v1/stream?id={bogus}", self.public_port)
+        status, _, body = self.get(f"/api/v1/stream?id={bogus}", self.public_port)
+        self.assertEqual(status, 429, body)
+        # ...while a warm press still goes through on the drained play bucket.
+        status, _, _ = self.get(f"/api/v1/stream?id={bogus}&redirect=0",
+                                self.public_port)
+        self.assertNotEqual(status, 429, "warm press 429s on a drained play bucket")
 
     def test_the_operator_port_still_sees_everything(self):
         """The audit trail survives: same data, full provenance, loopback only."""

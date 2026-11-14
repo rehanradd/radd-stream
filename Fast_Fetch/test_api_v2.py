@@ -2409,9 +2409,15 @@ class V2RateBucketTests(V2WireFixture):
         self.assertEqual(api_v2.bucket_for("/api/v2/nope"), api_v2.ROUTE_BUCKETS["browse"])
         self.assertEqual(api_v2.bucket_for("/api/v2/whatever", "POST"),
                          api_v2.ROUTE_BUCKETS["browse"])
-        # One route, one bucket: `resolve` shares `/play`'s budget, not two.
+        # One route, one bucket: a redirecting `resolve` shares `/play`'s
+        # budget, not two — but its `redirect=0` (warm) form pays `warm`,
+        # like the v1 redirector's (Robo 501: warm presses drained play).
         self.assertEqual(api_v2.bucket_for("/api/v2/resolve/9"),
                          api_v2.bucket_for("/api/v2/play", "POST"))
+        self.assertEqual(api_v2.bucket_for("/api/v2/resolve/9", warm=True),
+                         "warm")
+        self.assertEqual(api_v2.bucket_for("/api/v2/resolve/9", warm=False),
+                         "play")
         self.assertEqual(len({api_v2.bucket_for("/api/v2/browse"),
                               api_v2.bucket_for("/api/v2/browse")}), 1)
         limit, window = redact.BUCKET_LIMITS["play"]

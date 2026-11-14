@@ -464,7 +464,8 @@ def not_modified(handler, *, cache: str, etag: str, rid: str = "",
         pass
 
 
-def attach_rate_headers(handler, path: str, method: str = "GET") -> None:
+def attach_rate_headers(handler, path: str, method: str = "GET",
+                        warm: bool = False) -> None:
     """Guarantee this reply carries the §16.5 triple, whoever mounted us.
 
     The HTTP host's gate spends one token per request and attaches its own copy;
@@ -475,7 +476,8 @@ def attach_rate_headers(handler, path: str, method: str = "GET") -> None:
     """
     if getattr(handler, "rate_headers", None):
         return
-    verdict = redact.limiter.peek(bucket_for(path, method), redact.client_ip(handler))
+    verdict = redact.limiter.peek(bucket_for(path, method, warm=warm),
+                                  redact.client_ip(handler))
     handler.rate_headers = redact.limiter.headers(verdict)
 
 
@@ -1516,8 +1518,12 @@ def shape_allowed(method: str, segments: list[str]) -> bool:
     return wanted is None or len(segments) in wanted
 
 
-def bucket_for(path: str, method: str = "GET") -> str:
-    """Which shared `redact.limiter` bucket this request pays into."""
+def bucket_for(path: str, method: str = "GET", warm: bool = False) -> str:
+    """Which shared `redact.limiter` bucket this request pays into.
+
+    `warm` is True for a `redirect=0` press: the descriptor-only form that
+    never 302s. Only `resolve` has one, and it pays the `warm` bucket like
+    the v1 redirector's — a background check must never spend a Play."""
     segments = _tail(path)
     head = segments[0] if segments else ""
     if method == "POST":
@@ -1529,7 +1535,7 @@ def bucket_for(path: str, method: str = "GET") -> str:
             return ROUTE_BUCKETS["offset"]
         return ROUTE_BUCKETS["browse"]
     if head == "resolve":
-        return ROUTE_BUCKETS["resolve"]
+        return "warm" if warm else ROUTE_BUCKETS["resolve"]
     return ROUTE_BUCKETS.get(head, "browse")
 
 
@@ -1628,7 +1634,11 @@ def route_get(handler, path: str, query: dict, *, db_path, operator: bool,
     segments = _tail(path)
     rid = request_id()
     handler.v2_method = "GET"
-    attach_rate_headers(handler, path, "GET")
+    # A `redirect=0` resolve answers metadata, never the file: on a bare
+    # mount the peeked triple must name the warm bucket, not play.
+    warm = (path.startswith("/api/v2/resolve/")
+            and query.get("redirect", ["1"])[0] in ("0", "false", "no"))
+    attach_rate_headers(handler, path, "GET", warm=warm)
     if not shape_allowed("GET", segments):
         problem(handler, code="not_found", rid=rid, instance=path,
                 detail="No such v2 route.")
