@@ -29,6 +29,7 @@ import sqlite3
 import sys
 import tempfile
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -258,6 +259,70 @@ class TrendingTests(Fixture):
             self.assertEqual(self.ids(second), [
                 self.squid_id, self.seed_id, self.wonka_id])
             self.assertEqual(second["total"], 6)
+        self.addCleanup(viewer._TRENDING_ORDER_CACHE.clear)
+
+    def test_expired_cache_serves_stale_then_rebuilds(self):
+        # The 503 flake: on TTL expiry the miss rebuilt synchronously
+        # (~10 s cold) and tripped the 10 s timeout. Now the expired
+        # order is served at once and the rebuild runs in the
+        # background — the hit that lands on the expiry still answers
+        # the old order, and a later hit answers the new one.
+        with mock.patch.object(viewer, "_trending_db_fingerprint",
+                               return_value=(str(self.db_path),)):
+            first = viewer.api_v1_get_trending(limit=20)
+            new_id = self.ingest(
+                title="Zulu", year=2024, content_type="movie",
+                genres=["Action"], cast=["Zulu Cast"],
+                industry="Hollywood", language="English",
+                n_releases=5, n_sources=5)
+            # Expire every cached entry in place: the fingerprint is
+            # frozen, so this is the TTL path, not the merge path.
+            for key in list(viewer._TRENDING_ORDER_CACHE):
+                expires, value = viewer._TRENDING_ORDER_CACHE[key]
+                viewer._TRENDING_ORDER_CACHE[key] = (
+                    time.monotonic() - 1, value)
+            stale = viewer.api_v1_get_trending(limit=20)
+            self.assertEqual(self.ids(stale), self.ids(first))
+            self.assertNotIn(new_id, self.ids(stale))
+            # Poll the public route: while the rebuild runs it keeps
+            # serving stale; once the put lands the new top row leads.
+            deadline = time.monotonic() + 5
+            refreshed = stale
+            while time.monotonic() < deadline:
+                refreshed = viewer.api_v1_get_trending(limit=20)
+                if self.ids(refreshed) and self.ids(refreshed)[0] == new_id:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(self.ids(refreshed)[0], new_id)
+            self.assertEqual(refreshed["total"], 7)
+        self.addCleanup(viewer._TRENDING_ORDER_CACHE.clear)
+
+    def test_fingerprint_change_serves_stale_then_rebuilds(self):
+        # A merge bumps the DB fingerprint, so the next hit missed
+        # under a new key and paid the same ~10 s synchronous build.
+        # The newest order under the old fingerprint is the stale
+        # fallback here too.
+        with mock.patch.object(viewer, "_trending_db_fingerprint",
+                               return_value=(str(self.db_path), 1)):
+            first = viewer.api_v1_get_trending(limit=20)
+        new_id = self.ingest(
+            title="Zulu", year=2024, content_type="movie",
+            genres=["Action"], cast=["Zulu Cast"],
+            industry="Hollywood", language="English",
+            n_releases=5, n_sources=5)
+        with mock.patch.object(viewer, "_trending_db_fingerprint",
+                               return_value=(str(self.db_path), 2)):
+            stale = viewer.api_v1_get_trending(limit=20)
+            self.assertEqual(self.ids(stale), self.ids(first))
+            self.assertNotIn(new_id, self.ids(stale))
+            deadline = time.monotonic() + 5
+            refreshed = stale
+            while time.monotonic() < deadline:
+                refreshed = viewer.api_v1_get_trending(limit=20)
+                if self.ids(refreshed) and self.ids(refreshed)[0] == new_id:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(self.ids(refreshed)[0], new_id)
         self.addCleanup(viewer._TRENDING_ORDER_CACHE.clear)
 
 

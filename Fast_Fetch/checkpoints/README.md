@@ -5,6 +5,13 @@ Newest first. Each file is a session block moved verbatim out of `Fast_Fetch/CON
 Entries written to `CONTINUITY.md` by another lane *after* the rotation are not lost: the rebase onto
 trunk `4fe6f65` moved them here the same way, verbatim, with the trunk line range in the header.
 
+- 2026-11-14 — self-check `[TRENDING-STALE-REBUILD]`: the trending 503
+  flake (synchronous ~10 s cold rebuild tripping the 10 s timeout) gets
+  stale-while-revalidate — expired / superseded-fingerprint orders are
+  served at once and rebuilt in a daemon thread, single-flight per key,
+  scoped to the catalog path. Two new tests; 47 + 236 + 8 + 135 + 96
+  green locally. NOT live — gate deploy is the supervisor's call. Full
+  note: `20261114-selfcheck-trending-stale-rebuild.md`.
 - 2026-11-12 — Player Fix v2 server [PLAYERFIX-V2-SERVER]: serve-time
   verification (cached-first; a band serves only a live-verified link or
   hides), warm-all-bands, 2-hard/3-flaky strike quarantine-then-delete,

@@ -3647,6 +3647,21 @@ def _poor_match_correction(conn, query: str, result_titles) -> str | None:
 #: same window — it is a number, never a listing. The catalog changes
 #: only on batched merges, so a 120 s stale window on a browse list is
 #: the same trade the works list already makes (`_WORKS_CACHE_*`).
+#:
+#: Stale-while-revalidate (2026-11-14, the trending 503 flake): a
+#: cache miss used to rebuild synchronously on the request thread —
+#: one GROUP BY over the whole catalog, ~10 s cold — and the 10 s
+#: nginx read timeout turned that hit into a 503, exactly once per
+#: TTL (or once per merge, which bumps the fingerprint). Now an
+#: expired entry — or the newest entry under a superseded fingerprint
+#: — is served as-is and the rebuild runs in a daemon thread on its
+#: own connection, single-flight per key, so no hit ever pays the
+#: grouping. The staleness is the same 120 s window the cache already
+#: traded, plus at most one rebuild behind on a merge; the per-request
+#: adult/hide re-check below still applies to the stale order, so a
+#: flag flip hides the work on the very next hit either way. Only a
+#: true cold start (no entry for the content type at all) still builds
+#: synchronously — that hit is once per process start.
 _TRENDING_CACHE_TTL_SECONDS = 120.0
 _TRENDING_CACHE_MAX_ENTRIES = 16
 #: Page 1 of a rail is the hot path, but the route allows any page whose
@@ -3676,12 +3691,17 @@ def _trending_db_fingerprint():
 
 
 def _trending_cache_get(key):
+    """The fresh order for `key`, or None when there is none or it
+    expired. An expired entry is deliberately left in place: it is
+    the stale fallback `_trending_cache_stale_for` serves while the
+    rebuild runs, and `_trending_cache_put`'s eviction drops the
+    oldest expiry first, so expired entries are the first to go when
+    the cache is full."""
     entry = _TRENDING_ORDER_CACHE.get(key)
     if entry is None:
         return None
     expires, value = entry
     if time.monotonic() > expires:
-        del _TRENDING_ORDER_CACHE[key]
         return None
     return value
 
@@ -3692,6 +3712,84 @@ def _trending_cache_put(key, value):
                      key=lambda k: _TRENDING_ORDER_CACHE[k][0])
         del _TRENDING_ORDER_CACHE[oldest]
     _TRENDING_ORDER_CACHE[key] = (time.monotonic() + _TRENDING_CACHE_TTL_SECONDS, value)
+
+
+#: Single-flight guard for background trending rebuilds: one rebuild
+#: per cache key at a time, so a burst of hits on an expired entry
+#: starts one thread, not one per request.
+_TRENDING_REBUILD_LOCK = threading.Lock()
+_TRENDING_REBUILDING: set = set()
+
+
+def _trending_cache_stale_for(content_type):
+    """The newest cached order for `content_type` under any
+    fingerprint — fresh or expired — or None when the content type
+    has never been built. A merge bumps the fingerprint, so the entry
+    under the old fingerprint is the stale order the new key's miss
+    serves while its rebuild runs; the newest by expiry is the most
+    recently built, so it wins. Scoped to this database file: the
+    fingerprint's first element is the catalog path, and an entry
+    built for another file (a test's throwaway DB, a swapped
+    catalog) is never served as this file's order."""
+    db_path = str(DB_PATH)
+    best = None
+    for key, entry in _TRENDING_ORDER_CACHE.items():
+        if key[0] != content_type:
+            continue
+        fingerprint = key[1]
+        if not fingerprint or fingerprint[0] != db_path:
+            continue
+        if best is None or entry[0] > best[0]:
+            best = entry
+    return best[1] if best is not None else None
+
+
+def _trending_rebuild(key, where_sql, params, content_type):
+    """Rebuild one trending order off the request path, on its own
+    connection — the request's connection carries the 10 s progress
+    deadline, and this build is the query that deadline exists to
+    kill, so it must never run on it. A failure here is not an
+    error for any client: the stale order stays served and the next
+    hit re-triggers a rebuild."""
+    try:
+        with get_db() as conn:
+            rows = conn.execute(
+                "SELECT p.id FROM posts p"
+                " LEFT JOIN releases r ON r.post_id = p.id"
+                " LEFT JOIN download_sources s ON s.release_id = r.id"
+                f" WHERE {where_sql}"
+                " GROUP BY p.id"
+                " ORDER BY (COUNT(DISTINCT r.id) + COUNT(DISTINCT s.id)) DESC,"
+                " p.id DESC"
+                f" LIMIT {_TRENDING_ORDER_TOP_N}",
+                params).fetchall()
+            ids = [int(r["id"]) for r in rows]
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
+                params).fetchone()[0]
+            _trending_cache_put(key, (ids, total))
+    except Exception as exc:  # noqa: BLE001 — the stale order covers it
+        sys.stderr.write("trending rebuild failed for %r: %s\n"
+                         % (content_type, exc))
+    finally:
+        with _TRENDING_REBUILD_LOCK:
+            _TRENDING_REBUILDING.discard(key)
+
+
+def _trending_rebuild_async(key, where_sql, params, content_type):
+    """Start a background rebuild for `key` unless one is already
+    running for it. Returns True when a thread was started. The
+    caller serves the stale order either way."""
+    with _TRENDING_REBUILD_LOCK:
+        if key in _TRENDING_REBUILDING:
+            return False
+        _TRENDING_REBUILDING.add(key)
+    thread = threading.Thread(
+        target=_trending_rebuild,
+        args=(key, where_sql, tuple(params), content_type),
+        daemon=True)
+    thread.start()
+    return True
 
 
 def _trending_cached_page(conn, where_sql, params, content_type,
@@ -3705,30 +3803,49 @@ def _trending_cached_page(conn, where_sql, params, content_type,
 
     On a cache miss the build is the same one-query shape the paged
     read uses, id-only with the same ORDER BY, plus the COUNT(*) the
-    caller would otherwise run — paid once per TTL, not per hit. The
-    same `where_sql` (adult clause, type facet, hides at build time)
-    builds it, so a cached page and an uncached page answer the same
-    rows in the same order. `full` never reaches here: the caller
-    only offers the fast path to the public shape."""
+    caller would otherwise run — paid once per TTL, not per hit — but
+    only on a true cold start. On a later miss (TTL expired, or the
+    fingerprint moved under a merge) the newest stale order is served
+    at once and the build runs in a background thread
+    (`_trending_rebuild_async`), so the miss never pays the grouping
+    on the request thread. The same `where_sql` (adult clause, type
+    facet, hides at build time) builds it, so a cached page and an
+    uncached page answer the same rows in the same order. `full` never
+    reaches here: the caller only offers the fast path to the public shape."""
     key = (content_type, _trending_db_fingerprint())
     cached = _trending_cache_get(key)
     if cached is None:
-        rows = conn.execute(
-            "SELECT p.id FROM posts p"
-            " LEFT JOIN releases r ON r.post_id = p.id"
-            " LEFT JOIN download_sources s ON s.release_id = r.id"
-            f" WHERE {where_sql}"
-            " GROUP BY p.id"
-            " ORDER BY (COUNT(DISTINCT r.id) + COUNT(DISTINCT s.id)) DESC,"
-            " p.id DESC"
-            f" LIMIT {_TRENDING_ORDER_TOP_N}",
-            params).fetchall()
-        ids = [int(r["id"]) for r in rows]
-        total = conn.execute(
-            f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
-            params).fetchone()[0]
-        _trending_cache_put(key, (ids, total))
-        cached = (ids, total)
+        stale = _trending_cache_stale_for(content_type)
+        if stale is not None:
+            # Stale-while-revalidate: serve the order we have and
+            # rebuild off the request path — this hit never pays the
+            # ~10 s grouping, so it can never trip the 10 s timeout
+            # into a 503. A rebuild already running for this key
+            # still serves the same stale order; the put lands when
+            # it finishes.
+            _trending_rebuild_async(key, where_sql, params, content_type)
+            cached = stale
+        else:
+            # True cold start: no order for this content type exists
+            # yet, so there is nothing stale to serve. This is once
+            # per process start (and once per content type), not per
+            # TTL — the rebuild above covers every later miss.
+            rows = conn.execute(
+                "SELECT p.id FROM posts p"
+                " LEFT JOIN releases r ON r.post_id = p.id"
+                " LEFT JOIN download_sources s ON s.release_id = r.id"
+                f" WHERE {where_sql}"
+                " GROUP BY p.id"
+                " ORDER BY (COUNT(DISTINCT r.id) + COUNT(DISTINCT s.id)) DESC,"
+                " p.id DESC"
+                f" LIMIT {_TRENDING_ORDER_TOP_N}",
+                params).fetchall()
+            ids = [int(r["id"]) for r in rows]
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM posts p WHERE {where_sql}",
+                params).fetchone()[0]
+            _trending_cache_put(key, (ids, total))
+            cached = (ids, total)
     ids, total = cached
     truncated = len(ids) >= _TRENDING_ORDER_TOP_N
     hidden_ids = set(hidden or ())
