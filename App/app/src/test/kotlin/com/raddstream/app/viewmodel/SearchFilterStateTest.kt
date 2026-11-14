@@ -116,6 +116,27 @@ class SearchFilterStateTest {
     }
 
     @Test
+    fun `a cancelled search never strands the grid on its skeleton`() {
+        val body = functionBody("private fun scheduleSearch(", "private fun scheduleSuggest()")
+        // Batch C: the search job sets isLoading = true after the
+        // debounce, and the catch rethrows CancellationException without
+        // touching it — a search cancelled mid-flight (a newer filter tap
+        // or keystroke while the network call is out) left the skeleton
+        // on screen forever, with no error and no results. The finally
+        // must clear the flag, and only for the latest generation, so a
+        // stale job cannot clear a newer job's loading flag.
+        assertTrue(
+            "scheduleSearch must clear isLoading in a finally, so a " +
+                "cancelled search cannot strand the skeleton",
+            body.contains("finally {"),
+        )
+        assertTrue(
+            "the search finally must be generation-guarded, like the writes",
+            body.contains("if (generation == searchGeneration)"),
+        )
+    }
+
+    @Test
     fun `a superseded page load never appends its rows`() {
         val body = functionBody("fun loadMore()", "private fun scheduleSearch(")
         assertTrue(
