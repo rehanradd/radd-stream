@@ -280,12 +280,14 @@ class SilentFailoverTest {
     fun `isRateLimitedError recognizes a 429 through the cause chain`() {
         // Media3 1.3.1 carries the status in the cause chain too: the
         // message here deliberately says nothing about 429, so only the
-        // chain can recognise it. DataSpec takes a null Uri without touching
-        // the Android framework (its constructor stores the Uri, never
-        // parses one), so this stays a plain JVM test.
+        // chain can recognise it. The exception takes a null DataSpec
+        // (its constructor only stores it, never reads it), so this stays
+        // a plain JVM test with no Android framework — a DataSpec itself
+        // cannot be built that way, because its Uri parameter is @NonNull
+        // and `DataSpec(null)` does not compile (CI 43555494034).
         val cause = androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException(
             429, null, null, emptyMap(),
-            androidx.media3.datasource.DataSpec(null),
+            null,
             ByteArray(0),
         )
         val error = androidx.media3.common.PlaybackException(
