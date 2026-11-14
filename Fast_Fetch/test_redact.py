@@ -637,6 +637,11 @@ class RateLimiterTests(unittest.TestCase):
 
     def test_documented_budgets(self):
         self.assertEqual(redact.BUCKET_LIMITS["play"][0], 30)
+        # Art left play for its own bucket (Robo 501 re-test, 2026-11-14):
+        # a grid paints dozens of posters a minute, and sharing play's
+        # 30/min 429'd the next real Play. 120/min, like warm.
+        self.assertEqual(redact.BUCKET_LIMITS["art"][0], 120)
+        self.assertEqual(redact.BUCKET_LIMITS["art"][1], 60.0)
         # Verified 2026-11-12 (baseline): browse is 60/min, NOT 10/min
         # — the 10 only ever applied to /stats. 60 stays; see the
         # BUCKET_LIMITS comment for the CGNAT reasoning.
@@ -724,9 +729,13 @@ class WarmBucketTests(unittest.TestCase):
         for path in ("/api/v1/stream", "/api/v1/download"):
             self.assertEqual(bucket_for(None, path, warm=True), "warm", path)
             self.assertEqual(bucket_for(None, path, warm=False), "play", path)
-        # No warm form exists here: art and m3u always pay play.
-        for path in ("/api/v1/art", "/api/m3u"):
-            self.assertEqual(bucket_for(None, path, warm=True), "play", path)
+        # Art has no warm form, but it no longer pays play either: a grid
+        # paints dozens of posters a minute, and sharing play's 30/min
+        # 429'd the next real Play (Robo 501 re-test, 2026-11-14). m3u
+        # still pays play.
+        self.assertEqual(bucket_for(None, "/api/v1/art", warm=True), "art")
+        self.assertEqual(bucket_for(None, "/api/v1/art", warm=False), "art")
+        self.assertEqual(bucket_for(None, "/api/m3u", warm=True), "play")
         # The v2 resolve route warms through the same flag.
         self.assertEqual(bucket_for(None, "/api/v2/resolve/9", warm=True),
                          "warm")
@@ -736,6 +745,35 @@ class WarmBucketTests(unittest.TestCase):
         self.assertEqual(bucket_for(None, "/api/v1/posts", warm=True), "browse")
         self.assertEqual(bucket_for(None, "/api/v2/works/1", warm=True),
                          "browse")
+
+
+class ArtBucketTests(unittest.TestCase):
+    """`/api/v1/art` pays its own bucket, never play.
+
+    Robo 501 re-test (2026-11-14): 4x 429 on art beside 9x 429 on stream
+    in the same window — a grid painting dozens of posters shared play's
+    30/min budget, so a poster burst 429'd the next real Play. Art has no
+    warm form (there is no `redirect=0` descriptor for a poster), so it
+    gets a bucket of its own: 120/min, the same headroom as warm.
+    """
+
+    def test_art_is_declared_and_larger_than_play(self):
+        self.assertIn("art", redact.BUCKET_LIMITS)
+        art_limit, art_window = redact.BUCKET_LIMITS["art"]
+        self.assertGreater(art_limit, redact.BUCKET_LIMITS["play"][0])
+        self.assertEqual(art_limit, 120)
+        self.assertEqual(art_window, 60.0)
+
+    def test_art_routes_to_art_whatever_the_warm_flag_says(self):
+        bucket_for = viewer.DashboardHandler._bucket_for
+        self.assertEqual(bucket_for(None, "/api/v1/art", warm=True), "art")
+        self.assertEqual(bucket_for(None, "/api/v1/art", warm=False), "art")
+        # The neighbours are untouched: a real press still pays play.
+        self.assertEqual(bucket_for(None, "/api/v1/stream", warm=False),
+                         "play")
+        self.assertEqual(bucket_for(None, "/api/v1/download", warm=False),
+                         "play")
+        self.assertEqual(bucket_for(None, "/api/m3u", warm=False), "play")
 
 
 class NeedleVocabularyTests(FixtureMixin):
@@ -1386,6 +1424,48 @@ class PublicEdgeHttpTests(FixtureMixin):
         status, _, _ = self.get(f"/api/v1/stream?id={bogus}&redirect=0",
                                 self.public_port)
         self.assertNotEqual(status, 429, "warm press 429s on a drained play bucket")
+
+    def test_art_presses_do_not_spend_the_play_budget(self):
+        """Robo 501 re-test (2026-11-14): 4x 429 on art beside 9x 429 on
+        stream in the same window — a grid painting dozens of posters
+        shared play's 30/min budget, so a poster burst 429'd the next real
+        Play. Art now pays its own 120/min bucket: dozens of posters leave
+        the play budget untouched, and a drained art bucket still lets a
+        warm press and a real press through while only art itself 429s."""
+        art_handle = redact.mint_token(self.post_id, viewer.signing_secret())
+        art_target = f"/api/v1/art?id={art_handle}&k=poster"
+        art_limit = redact.BUCKET_LIMITS["art"][0]
+        # 40 poster presses: none may 429, and each must report the art
+        # limit in its triple — a grid's worth of posters, without spending
+        # one play token.
+        for _ in range(40):
+            status, headers, _ = self.get(art_target, self.public_port)
+            self.assertNotEqual(status, 429, f"art press {art_target} → 429")
+            self.assertEqual(headers.get("RateLimit-Limit"), str(art_limit),
+                             "art reports the play limit, not art's")
+        # A real press still has its full play budget after all those posters.
+        bogus = "bogus-handle"
+        status, _, _ = self.get(f"/api/v1/stream?id={bogus}", self.public_port)
+        self.assertNotEqual(status, 429, "a real press 429s after art presses")
+        # A warm press is unaffected too — it never shared either bucket.
+        status, _, _ = self.get(f"/api/v1/stream?id={bogus}&redirect=0",
+                                self.public_port)
+        self.assertNotEqual(status, 429, "a warm press 429s after art presses")
+        # Drain art: the next poster press 429s...
+        for _ in range(art_limit - 40):
+            self.get(art_target, self.public_port)
+        status, headers, body = self.get(art_target, self.public_port)
+        self.assertEqual(status, 429, body)
+        self.assertEqual(headers.get("RateLimit-Limit"), str(art_limit))
+        # ...while a warm press and a real press still go through on the
+        # drained art bucket.
+        status, _, _ = self.get(f"/api/v1/stream?id={bogus}&redirect=0",
+                                self.public_port)
+        self.assertNotEqual(status, 429,
+                            "warm press 429s on a drained art bucket")
+        status, _, _ = self.get(f"/api/v1/stream?id={bogus}", self.public_port)
+        self.assertNotEqual(status, 429,
+                            "real press 429s on a drained art bucket")
 
     def test_the_operator_port_still_sees_everything(self):
         """The audit trail survives: same data, full provenance, loopback only."""

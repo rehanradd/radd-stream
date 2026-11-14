@@ -1444,7 +1444,16 @@ def link_is_adult(source_id: int, db_path) -> bool:
 # public anyway.
 
 BUCKET_LIMITS = {
-    "play": (30, 60.0),      # /stream, /art, /m3u — the expensive ones
+    "play": (30, 60.0),      # /stream, /download, /m3u — the expensive ones
+    # Art (`/api/v1/art`) has no warm form — there is no `redirect=0`
+    # descriptor for a poster — but it is a background load, not a Play:
+    # a grid paints dozens of posters a minute, and sharing play's 30/min
+    # meant a poster burst 429'd the next real Play (Robo 501 re-test,
+    # 2026-11-14: 4x 429 on art beside 9x 429 on stream in the same
+    # window, 36 stream presses in the worst minute). Its own 120/min
+    # bucket — 4x play, the same headroom as warm — bounds it without
+    # starving play. See viewer._bucket_for for the routing.
+    "art": (120, 60.0),     # /api/v1/art — poster redirects, never a Play
     # Warm presses (`redirect=0`) pay here, never into `play`. A warm press
     # resolves and describes a link without redirecting to the file, so it is
     # a background check — pre-resolve, preview, failover metadata — and a
