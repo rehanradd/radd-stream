@@ -264,4 +264,55 @@ class SilentFailoverTest {
         )
         assertFalse(isDeadHandleError(timeout))
     }
+
+    // ── the rate-limit detector (Batch C, 2026-11-14, 429-storm audit) ───────
+
+    @Test
+    fun `isRateLimitedError recognizes a 429 bad-http-status error`() {
+        val error = androidx.media3.common.PlaybackException(
+            "Response code: 429", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertTrue(isRateLimitedError(error))
+    }
+
+    @Test
+    fun `isRateLimitedError recognizes a 429 through the cause chain`() {
+        // Media3 1.3.1 carries the status in the cause chain too: the
+        // message here deliberately says nothing about 429, so only the
+        // chain can recognise it. DataSpec takes a null Uri without touching
+        // the Android framework (its constructor stores the Uri, never
+        // parses one), so this stays a plain JVM test.
+        val cause = androidx.media3.datasource.HttpDataSource.InvalidResponseCodeException(
+            429, null, null, emptyMap(),
+            androidx.media3.datasource.DataSpec(null),
+            ByteArray(0),
+        )
+        val error = androidx.media3.common.PlaybackException(
+            "source error", cause,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertTrue(isRateLimitedError(error))
+    }
+
+    @Test
+    fun `isRateLimitedError rejects a 402, a 404 and a timeout`() {
+        // The three detectors must stay disjoint: a 402 steps the ladder
+        // down, a 404 hops, a timeout retries — none of them is a pause.
+        val refused = androidx.media3.common.PlaybackException(
+            "Response code: 402", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertFalse(isRateLimitedError(refused))
+        val notFound = androidx.media3.common.PlaybackException(
+            "Response code: 404", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertFalse(isRateLimitedError(notFound))
+        val timeout = androidx.media3.common.PlaybackException(
+            "timeout", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        )
+        assertFalse(isRateLimitedError(timeout))
+    }
 }

@@ -231,4 +231,61 @@ class RenditionFailoverStartTest {
                 is FailoverDecision.RetrySame,
         )
     }
+
+    // ── Batch C (2026-11-14, 429-storm audit): a rate limit is a pause, not a hop ─
+    //
+    // The server's per-IP play bucket (30/min) is full: every hop or rank step
+    // re-presses the same refused bucket — the Robo run showed 85×429 in 215
+    // presses, the machine walking the whole ladder into 429s. So a 429 hands
+    // off at once as RATE_LIMITED, before the first frame and after it, with
+    // the retry budget untouched. The viewer waits a moment and retries by
+    // hand from the give-up card; nothing re-presses on its own.
+
+    @Test
+    fun `a rate limit before the first frame hands off at once, never hops or advances`() {
+        val subject = machine(
+            rung(1, "h-a", backups = listOf("b-a1", "b-a2")),
+            rung(2, "h-b"),
+        )
+        assertEquals(0, subject.selectInitial())
+
+        val decision = subject.onFailure(
+            "Response code: 429",
+            beforeFirstFrame = true,
+            isRateLimited = true,
+        )
+        decision as FailoverDecision.Handoff
+        assertEquals(HandoffWhy.RATE_LIMITED, decision.why)
+        // One record, the pause itself: no backup was burned, no rank stepped.
+        assertEquals(1, subject.log.size)
+        assertTrue(subject.log.last().action.contains("rate limited"))
+    }
+
+    @Test
+    fun `a rate limit after the first frame does not retry the same rendition`() {
+        val subject = machine(rung(1, "h-a", backups = listOf("b-a1")), rung(2, "h-b"))
+        assertEquals(0, subject.selectInitial())
+
+        val decision = subject.onFailure(
+            "Response code: 429",
+            beforeFirstFrame = false,
+            isRateLimited = true,
+        )
+        decision as FailoverDecision.Handoff
+        assertEquals(HandoffWhy.RATE_LIMITED, decision.why)
+    }
+
+    @Test
+    fun `a rate limit leaves the retry budget untouched for the next failure`() {
+        val subject = machine(rung(1, "h-a"))
+        assertEquals(0, subject.selectInitial())
+
+        val limited = subject.onFailure("Response code: 429", isRateLimited = true)
+        assertTrue(limited is FailoverDecision.Handoff)
+
+        // The 429 consumed no attempt: the next ordinary failure still gets
+        // its same-rendition retry, exactly as if the 429 never happened.
+        val retry = subject.onFailure("HTTP 403", beforeFirstFrame = false)
+        assertTrue(retry is FailoverDecision.RetrySame)
+    }
 }
