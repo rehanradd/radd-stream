@@ -145,7 +145,13 @@ fun DownloadsScreen(
                                 clicks.launch {
                                     when (val route = viewModel.playRoute(row.item)) {
                                         is KeepRoute.Local -> onPlayLocal(route.uri, row.item.title)
-                                        is KeepRoute.Stream -> onPlay(row.item)
+                                        is KeepRoute.Stream -> {
+                                            // Batch C: warm the handle in parallel
+                                            // with the navigation, so the player
+                                            // 302s from the banked answer.
+                                            viewModel.warmStreamHandle(route.handle)
+                                            onPlay(row.item)
+                                        }
                                         KeepRoute.NothingPlayable -> viewModel.reportUnplayable()
                                     }
                                 }

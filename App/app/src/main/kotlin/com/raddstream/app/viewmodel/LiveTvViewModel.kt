@@ -9,10 +9,12 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 
 /**
  * The Live TV tab's state: one server fetch, then client-side filtering.
@@ -138,5 +140,36 @@ class LiveTvViewModel @Inject constructor(
 
     fun onQueryChanged(query: String) {
         _uiState.update { it.copy(query = query) }
+    }
+
+    private var warmJob: Job? = null
+    private var lastWarmedHandle: String? = null
+
+    /**
+     * Batch C — warm one channel's link in the background, on tap.
+     *
+     * The tap navigates straight to the player with a cold handle, so the
+     * player pays the server's live resolve (~1.6 s for a live channel,
+     * measured 2026-11-14) inside "Finding your video". This ask is
+     * metadata only (`GET /api/v1/stream?redirect=0`): on a cache miss the
+     * server live-resolves the link and banks the answer, so the player's
+     * redirector 302s from cache instead. It runs in parallel with the
+     * navigation — it never gates it — and a warm that fails is silent:
+     * Play still works, it just waits on the first bytes again. Same shape
+     * as DetailViewModel.warmScopeLink, and the same guard
+     * ([shouldWarmHandle]). No byte seed here — HLS is a live playlist,
+     * not a file — and no warm store: the player never calls
+     * `resolveStream` at start (it follows the redirector's 302), so the
+     * banked server answer is the whole mechanism.
+     */
+    fun warmChannel(streamId: String) {
+        if (!shouldWarmHandle(streamId, lastWarmedHandle)) return
+        warmJob?.cancel()
+        warmJob = viewModelScope.launch {
+            val warmed = runCatching {
+                withTimeout(30_000) { repository.resolveStream(streamId) }
+            }.isSuccess
+            if (warmed) lastWarmedHandle = streamId
+        }
     }
 }

@@ -301,6 +301,18 @@ internal fun scopeWarmHandle(ladder: LadderForScope): String? =
     scopeWarmHandle(ladder, premiumAccess = true, freeQualityCap = "720p")
 
 /**
+ * Batch C — the warm's own guard: a blank handle warms nothing, and a
+ * handle warmed successfully once is not warmed again (the banked answer
+ * lives for hours; re-asking on every tap would spend the server's
+ * resolve budget for nothing). A warm that FAILED marks nothing, so the
+ * caller retries the link it still needs. Pure so a test can pin it
+ * without a ViewModel; the same rule [DetailViewModel.warmScopeLink]
+ * applies inline.
+ */
+internal fun shouldWarmHandle(handle: String, lastWarmedHandle: String?): Boolean =
+    handle.isNotBlank() && handle != lastWarmedHandle
+
+/**
  * Gap A2 follow-up — the fallback's runner-ups: the other playable copies
  * of the same print, for the play path that never got a server bundle.
  * The v2 bundle stages its own runner-ups and the ladder stages its rung's,

@@ -284,9 +284,9 @@ interface RaddStreamApi {
      * movie. `category` narrows server-side; null lists everything the
      * operator enabled.
      *
-     * NOTE (deploy): the nginx public allow-list does not yet include
-     * the `/api/v1/live-tv/` prefix — until the gate adds it this answers 403 and the
-     * tab shows its honest unavailable state, never a fake list.
+     * Proven live 2026-11-14: the endpoint answers 200 publicly (759
+     * channels), so the old "nginx allow-list does not yet include the
+     * `/api/v1/live-tv/` prefix" note was stale and is gone.
      */
     @GET("api/v1/live-tv/channels")
     suspend fun getLiveTvChannels(
