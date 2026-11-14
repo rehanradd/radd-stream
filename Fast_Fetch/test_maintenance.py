@@ -110,23 +110,30 @@ class TickTests(unittest.TestCase):
 
 
 class FirstTickWarmTests(unittest.TestCase):
-    def test_first_tick_warms_the_eager_set_not_the_top_up_slice(self):
+    def test_first_tick_warms_the_same_slice_as_every_later_tick(self):
+        # The first tick used to warm the whole 200-link eager set; the
+        # Robo 501 re-test (2026-11-14) ran inside that first tick
+        # (12:14:41-12:31:19, ~46% sustained CPU on the one-vCPU box) and
+        # the player's live resolve waited 35 s with zero bytes. The eager
+        # set now warms 20 at a time, starting with the first tick.
         self.assertEqual(
-            maintenance._first_tick_kwargs(200), {"warm_limit": 200})
+            maintenance._first_tick_kwargs(20), {"warm_limit": 20})
+        self.assertEqual(maintenance.FIRST_TICK_WARM_LIMIT,
+                         maintenance.WARM_LIMIT_PER_TICK)
 
     def test_first_tick_keeps_the_other_slices(self):
         self.assertEqual(
-            maintenance._first_tick_kwargs(200, propagate_batches=1,
+            maintenance._first_tick_kwargs(20, propagate_batches=1,
                                            heal_limit=5),
-            {"warm_limit": 200, "propagate_batches": 1, "heal_limit": 5})
+            {"warm_limit": 20, "propagate_batches": 1, "heal_limit": 5})
 
     def test_first_tick_overrides_an_explicit_warm_limit(self):
         self.assertEqual(
-            maintenance._first_tick_kwargs(200, warm_limit=7)["warm_limit"],
-            200)
+            maintenance._first_tick_kwargs(20, warm_limit=7)["warm_limit"],
+            20)
 
-    def test_the_eager_set_is_the_scale_plans_two_hundred(self):
-        self.assertEqual(maintenance.FIRST_TICK_WARM_LIMIT, 200)
+    def test_the_first_tick_limit_is_the_top_up_slice(self):
+        self.assertEqual(maintenance.FIRST_TICK_WARM_LIMIT, 20)
 
 
 class StartThreadTests(unittest.TestCase):

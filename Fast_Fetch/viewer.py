@@ -6454,7 +6454,15 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # The v2 budget is the same token bucket, under the route map in
             # `api_v2.ROUTE_BUCKETS`; there is no second limiter.
             return api_v2.bucket_for(path, method, warm=warm)
-        if path in ("/api/v1/stream", "/api/v1/download", "/api/v1/art", "/api/m3u"):
+        if path == "/api/v1/art":
+            # Art has no warm form (there is no `redirect=0` descriptor
+            # for a poster), but it is a background load, not a Play: a grid
+            # paints dozens of posters a minute, and sharing play's 30/min
+            # meant a poster burst 429'd the next real Play (Robo 501
+            # re-test, 2026-11-14). Its own 120/min bucket bounds it
+            # without starving play.
+            return "art"
+        if path in ("/api/v1/stream", "/api/v1/download", "/api/m3u"):
             if warm and path in ("/api/v1/stream", "/api/v1/download"):
                 # A warm press (redirect=0) describes the link without
                 # redirecting to the file; it pays the warm bucket, never play,
@@ -6764,6 +6772,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         for name, value in cors_headers_for(self.headers.get("Origin", "")):
             self.send_header(name, value)
         self.send_header("Cache-Control", "public, max-age=86400")
+        # The gate already charged this press; the triple is the answer's
+        # receipt (§16.5 — on whatever we answer). The 302 used to omit
+        # it, so a client could not see art's budget at all.
+        for name, value in getattr(self, "rate_headers", []):
+            self.send_header(name, value)
         self.send_header("Connection", "close")
         self.end_headers()
 

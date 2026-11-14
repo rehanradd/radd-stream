@@ -61,12 +61,20 @@ PROPAGATE_BATCHES_PER_TICK = 2
 WARM_LIMIT_PER_TICK = 20
 HEAL_LIMIT_PER_TICK = 50
 
-#: The first tick after `serve` starts warms the whole eager set (the scale
-#: plan's top-200), so the links `/play` picks first are resolved before the
-#: first press of the day; later ticks top up 20 at a time. A 200-link warm
-#: is minutes of network work in the daemon thread — it delays only the
-#: tick's own heal job, never a request.
-FIRST_TICK_WARM_LIMIT = 200
+#: The first tick after `serve` starts warms the same 20-link slice every
+#: later tick warms. It used to warm the whole eager set (the scale plan's
+#: top-200), so the links `/play` picks first were resolved before the
+#: first press of the day — but that 200-link warm is ~17 minutes of live
+#: resolution in the daemon thread on this one-vCPU box, and the box has
+#: one CPU for requests and background work alike: the Robo 501 re-test
+#: (2026-11-14) ran inside the first tick (12:14:41-12:31:19, ~46%
+#: sustained CPU) and the player's live resolve waited 35 s with zero
+#: bytes and no error. The old claim — that a 200-link warm "delays only
+#: the tick's own heal job, never a request" — was wrong on a box this
+#: small, and this is the correction. The eager set still warms, over the
+#: next several ticks, 20 at a time, instead of all at once in the first
+#: minutes after a restart, when a real Play is most likely to land.
+FIRST_TICK_WARM_LIMIT = 20
 
 #: The fleet guardrail's memory floor (AGENTS.md): stop heavy work at once
 #: below this much available memory.
@@ -167,9 +175,11 @@ def tick_once(*, propagate_batches: int = PROPAGATE_BATCHES_PER_TICK,
 
 
 def _first_tick_kwargs(first_tick_warm_limit: int, **tick_kwargs) -> dict:
-    """The first tick's kwargs: the warm job takes the eager-set limit, so
-    serve start fills the top-200 instead of the first 20. Later ticks use
-    the caller's kwargs unchanged."""
+    """The first tick's kwargs: the warm job takes the first-tick limit,
+    which is the same 20-link slice every later tick warms (it used to be
+    the whole 200-link eager set — see FIRST_TICK_WARM_LIMIT for why that
+    starved Play resolves after a restart). Later ticks use the caller's
+    kwargs unchanged."""
     return {**tick_kwargs, "warm_limit": int(first_tick_warm_limit)}
 
 
