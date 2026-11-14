@@ -2785,3 +2785,24 @@ No session note was written at the time. The work is recorded in commit `f9d69c3
 **Regression tests (both fail before, pass after):** new `ApiProviderBaseUrlTest` (3 tests — a cached base URL answers without re-reading storage even after the stored value turns malformed; cold start still reads; cold malformed still throws) and a new case in `V2DetailRepositoryTest` (a base-URL read failure degrades to null instead of killing a good response).
 
 **Checks:** duplicate top-level type scan — `ApiProviderBaseUrlTest` declared once. Full import diff — additions only, no dangling-removed-import issues. No local Gradle run by owner order — CI (`ci.yml` on push) is the verification path. **Not done:** CI verdict on this commit; merge to main (parent's call).
+
+## Session — Batch C item 1: grid verdict + search-cancellation fix (2026-11-14)
+
+**Verdict (verify-first, no rebuild):** the round-4 "blank results grid" is a mid-load F21
+skeleton capture. Nginx log from the Robo device (108.177.6.6): v2 search 200 (empty by
+design) 07:57:10, v1 posts genre=Action 200 with 100 rows 07:57:12, detail warm for a tapped
+card 07:57:22. results-grid.png and filters.png are the same file. Posters load elsewhere in
+the same build on the same CatalogImage path; Batch B's PosterCard diff was layout-only.
+"Complet" is a LazyRow mid-scroll clip, not a truncation bug. Full record:
+`hidden_files/batch-c-grid-verdict-20261114.md` (goal workspace).
+
+**Fix (this commit, 7d325f29):** `SearchViewModel.scheduleSearch` — the search job set
+`isLoading = true` after the debounce and its `catch (CancellationException)` rethrew without
+clearing it, so a search cancelled mid-flight stranded the skeleton forever with no error and
+no results. Added a generation-guarded `finally` clearing isLoading (a stale job cannot clear
+a newer job's flag); `loadMore` already had this pattern. Drift test added to
+`SearchFilterStateTest` (fails on old code: 0 finally / 0 gen==; passes on new).
+
+**Checks:** full import diff — no import changes, no dangling-removed-import issues. No local
+Gradle run by owner order — CI (`ci.yml` on push) is the verification path. **Not done:** CI
+verdict on this commit (run 43553350196 in_progress); merge to main (parent's call).

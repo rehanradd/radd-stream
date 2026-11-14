@@ -697,6 +697,19 @@ class SearchViewModel @Inject constructor(
                         resultCount = 0,
                     )
                 }
+            } finally {
+                // Batch C: a search cancelled mid-flight — a newer filter
+                // tap, keystroke or sort change while the network call is
+                // still out — must not strand isLoading = true: the grid
+                // skeleton would sit on screen forever, with no error and
+                // no results, and no retry path out of it. The generation
+                // guard keeps a stale job's finally from clearing a newer
+                // job's loading flag (the same guard the writes above
+                // carry). loadMore already clears its flag in a finally;
+                // the search job is the one that did not.
+                if (generation == searchGeneration) {
+                    _uiState.update { it.copy(isLoading = false) }
+                }
             }
         }
     }
