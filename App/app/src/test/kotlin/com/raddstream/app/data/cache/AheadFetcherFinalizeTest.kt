@@ -444,58 +444,62 @@ class AheadFetcherFinalizeTest {
     private class RedirectCounts(var redirector: Int = 0, var cdn: Int = 0)
 
     /**
-     * A client that behaves like our redirector in front of a file host:
-     * `redirector.test` answers every request with a 302 to `cdn.test/file`,
-     * which answers Range slices of a virtual file of [total] bytes. When
-     * [failCdnFrom] is set, the file host 403s every range starting at or
-     * past it — a rotted direct address. A network interceptor sees each
-     * redirect hop, so the counts prove how often the redirector itself
-     * was pressed.
+     * A client that behaves like our redirector in front of a file host.
+     * An application interceptor answers from memory — no socket, no
+     * MockWebServer — following the HlsAheadBufferTest pattern: a request
+     * to `redirector.test` is answered with the file host's bytes and the
+     * response carries the post-redirect request (`https://cdn.test/file`),
+     * exactly as OkHttp presents a followed 302. A real 302 returned by an
+     * interceptor is never followed (the first version of these tests
+     * proved it: all three outcomes came back wrong), and the redirect
+     * itself is OkHttp's job, proven in production every time the player
+     * follows the redirector — not something this suite can pin. What
+     * this suite pins is the fetcher's side: it must adopt the served
+     * address and press the redirector once per pass, not once per chunk.
+     * When [failCdnFrom] is set, the file host refuses every range starting
+     * at or past it with [failCdnStatus] — a rotted direct address.
      */
-    private fun redirectingClient(total: Long, counts: RedirectCounts, failCdnFrom: Long? = null): OkHttpClient =
+    private fun redirectingClient(
+        total: Long,
+        counts: RedirectCounts,
+        failCdnFrom: Long? = null,
+        failCdnStatus: Int = 403,
+    ): OkHttpClient =
         OkHttpClient.Builder()
-            .addNetworkInterceptor { chain ->
+            .addInterceptor { chain ->
                 val request = chain.request()
                 val url = request.url.toString()
-                if (url.startsWith("https://redirector.test/")) {
+                val finalRequest = if (url.startsWith("https://redirector.test/")) {
                     counts.redirector++
+                    request.newBuilder().url("https://cdn.test/file").build()
+                } else {
+                    counts.cdn++
+                    request
+                }
+                val range = finalRequest.header("Range") ?: "bytes=0-"
+                val bounds = range.removePrefix("bytes=").split("-")
+                val start = bounds[0].toLongOrNull()?.coerceIn(0L, total) ?: 0L
+                if (failCdnFrom != null && start >= failCdnFrom) {
                     Response.Builder()
-                        .request(request)
+                        .request(finalRequest)
                         .protocol(Protocol.HTTP_1_1)
-                        .code(302)
-                        .message("Found")
-                        .header("Location", "https://cdn.test/file")
+                        .code(failCdnStatus)
+                        .message(if (failCdnStatus == 402) "Payment Required" else "Forbidden")
                         .body("".toResponseBody("text/plain".toMediaType()))
                         .build()
-                } else if (url.startsWith("https://cdn.test/")) {
-                    counts.cdn++
-                    val range = request.header("Range") ?: "bytes=0-"
-                    val bounds = range.removePrefix("bytes=").split("-")
-                    val start = bounds[0].toLongOrNull()?.coerceIn(0L, total) ?: 0L
-                    if (failCdnFrom != null && start >= failCdnFrom) {
-                        Response.Builder()
-                            .request(request)
-                            .protocol(Protocol.HTTP_1_1)
-                            .code(403)
-                            .message("Forbidden")
-                            .body("".toResponseBody("text/plain".toMediaType()))
-                            .build()
-                    } else {
-                        val lastByte = bounds.getOrNull(1)?.takeIf { it.isNotBlank() }?.toLongOrNull()
-                            ?: (total - 1L)
-                        val end = lastByte.coerceIn(start, (total - 1L).coerceAtLeast(start))
-                        val slice = ByteArray((end - start + 1).toInt()) { ((start + it) % 251).toByte() }
-                        Response.Builder()
-                            .request(request)
-                            .protocol(Protocol.HTTP_1_1)
-                            .code(206)
-                            .message("Partial Content")
-                            .header("Content-Range", "bytes $start-$end/$total")
-                            .body(slice.toResponseBody("application/octet-stream".toMediaType()))
-                            .build()
-                    }
                 } else {
-                    chain.proceed(request)
+                    val lastByte = bounds.getOrNull(1)?.takeIf { it.isNotBlank() }?.toLongOrNull()
+                        ?: (total - 1L)
+                    val end = lastByte.coerceIn(start, (total - 1L).coerceAtLeast(start))
+                    val slice = ByteArray((end - start + 1).toInt()) { ((start + it) % 251).toByte() }
+                    Response.Builder()
+                        .request(finalRequest)
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(206)
+                        .message("Partial Content")
+                        .header("Content-Range", "bytes $start-$end/$total")
+                        .body(slice.toResponseBody("application/octet-stream".toMediaType()))
+                        .build()
                 }
             }
             .build()
@@ -505,8 +509,9 @@ class AheadFetcherFinalizeTest {
         total: Long,
         counts: RedirectCounts,
         failCdnFrom: Long? = null,
+        failCdnStatus: Int = 403,
     ): AheadFetcher = AheadFetcher(
-        fetcher = RangeByteFetcher(redirectingClient(total, counts, failCdnFrom)),
+        fetcher = RangeByteFetcher(redirectingClient(total, counts, failCdnFrom, failCdnStatus)),
         taskDao = fx.taskDao,
         manifestDao = fx.manifestDao,
         fileDao = fx.fileDao,
@@ -539,7 +544,8 @@ class AheadFetcherFinalizeTest {
             AheadFetcher.DEFAULT_AHEAD_BYTES, after.downloadedBytes)
         assertEquals("one press learns the target; the rest must not re-press it",
             1, counts.redirector)
-        assertEquals("forty chunks, all served by the file host", 40, counts.cdn)
+        assertEquals("the other thirty-nine chunks go direct to the file host",
+            39, counts.cdn)
         assertEquals("the row keeps our redirector address — the direct url is never stored",
             "https://redirector.test/api/v1/stream?id=abc", after.currentUrl)
         val part = fx.tempFile.readBytes()
@@ -572,9 +578,37 @@ class AheadFetcherFinalizeTest {
         assertEquals("only the first chunk landed before the rot",
             1024L * 1024, after.downloadedBytes)
         assertEquals(1, counts.redirector)
-        assertEquals("chunk one served, chunk two refused", 2, counts.cdn)
+        assertEquals("chunk one served, chunk two refused", 1, counts.cdn)
         assertEquals("the row keeps our redirector address so re-resolve can rebuild it",
             "https://redirector.test/api/v1/stream?id=abc", after.currentUrl)
+    }
+
+    @Test
+    fun `a 402 from the file host is a retryable error, never our gate refusing the rung`() {
+        // Salaar (2026-11-12): our redirector's 402 is the quality gate
+        // refusing the rung — not retryable, and the preview is dropped
+        // silently. A 402 from the file host after the redirect is a
+        // different fact (upstream's gate), and must stay a plain retryable
+        // HttpError: without the gateUrl the fetcher compares against the
+        // adopted direct address and misclassifies it as our gate.
+        val total = 100L * 1024 * 1024
+        val fx = Fixture(chunkBytes = 1024 * 1024, maxBytesPerPass = 256L * 1024 * 1024)
+        val task = fx.taskDao.seed(
+            bigPreviewTask(total).copy(currentUrl = "https://redirector.test/api/v1/stream?id=abc"),
+        )
+        val counts = RedirectCounts()
+
+        val outcome = runBlocking {
+            redirectingFetcher(fx, total, counts, failCdnFrom = 1024L * 1024, failCdnStatus = 402)
+                .run(task, FetchMode.AUTO_PREVIEW_AHEAD) { 0L }
+        }
+
+        assertEquals(FetchOutcome.RETRY_LATER, outcome)
+        val after = fx.taskDao.rows[1L]!!
+        assertEquals("only the first chunk landed before the refusal",
+            1024L * 1024, after.downloadedBytes)
+        assertEquals(1, counts.redirector)
+        assertEquals(1, counts.cdn)
     }
 
     @Test
@@ -614,7 +648,7 @@ class AheadFetcherFinalizeTest {
         assertTrue(fx.committedFile.exists())
         fx.assertContentMatches()
         assertEquals(1, counts.redirector)
-        assertEquals("two 4 KiB chunks, both served by the file host", 2, counts.cdn)
+        assertEquals("chunk one via the 302, chunk two direct", 1, counts.cdn)
         assertEquals("https://redirector.test/api/v1/stream?id=abc",
             fx.taskDao.rows[1L]!!.currentUrl)
     }
