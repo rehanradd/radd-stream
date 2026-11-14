@@ -210,6 +210,11 @@ fun LiveTvScreen(
                                 // resolve inside "Finding your video".
                                 onClick = {
                                     viewModel.warmChannel(channel.streamId)
+                                    // A channel is always HLS: stage the manifest MIME
+                                    // so the player declares it before the first frame
+                                    // instead of opening the playlist with the
+                                    // progressive reader (Robo #4).
+                                    viewModel.stageLiveChannel(channel.streamId)
                                     onPlayChannel(channel.streamId, channel.name)
                                 },
                             )
