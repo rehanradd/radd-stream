@@ -310,11 +310,14 @@ val CatalogGridColumns: GridCells = GridCells.Adaptive(minSize = 120.dp)
 @Composable
 fun PosterGridSkeleton(
     modifier: Modifier = Modifier,
-    columns: GridCells = CatalogGridColumns,
     contentPadding: PaddingValues = PaddingValues(top = 8.dp, bottom = 24.dp, start = 16.dp, end = 16.dp),
 ) {
     LazyVerticalGrid(
-        columns = columns,
+        // F21 (Batch B): the columns stay the shared CatalogGridColumns rule,
+        // written out here — a `columns` parameter would pass `columns =
+        // columns` and the grid-rule test (a text scan) would read it as a
+        // grid that does not draw from the shared rule.
+        columns = CatalogGridColumns,
         modifier = modifier.fillMaxSize(),
         contentPadding = contentPadding,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
