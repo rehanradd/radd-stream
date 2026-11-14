@@ -264,4 +264,36 @@ class SilentFailoverTest {
         )
         assertFalse(isDeadHandleError(timeout))
     }
+
+    // ── the rate-limit detector (Batch C, 2026-11-14, 429-storm audit) ───────
+
+    @Test
+    fun `isRateLimitedError recognizes a 429 bad-http-status error`() {
+        val error = androidx.media3.common.PlaybackException(
+            "Response code: 429", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertTrue(isRateLimitedError(error))
+    }
+
+    @Test
+    fun `isRateLimitedError rejects a 402, a 404 and a timeout`() {
+        // The three detectors must stay disjoint: a 402 steps the ladder
+        // down, a 404 hops, a timeout retries — none of them is a pause.
+        val refused = androidx.media3.common.PlaybackException(
+            "Response code: 402", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertFalse(isRateLimitedError(refused))
+        val notFound = androidx.media3.common.PlaybackException(
+            "Response code: 404", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+        )
+        assertFalse(isRateLimitedError(notFound))
+        val timeout = androidx.media3.common.PlaybackException(
+            "timeout", null,
+            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT,
+        )
+        assertFalse(isRateLimitedError(timeout))
+    }
 }

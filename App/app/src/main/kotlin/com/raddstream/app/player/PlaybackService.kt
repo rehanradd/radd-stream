@@ -850,6 +850,10 @@ class PlaybackService : MediaSessionService() {
             // redirector) is not a blip — the failover machine must hop,
             // never retry the same address.
             val deadHandle = isDeadHandleError(error)
+            // Batch C (2026-11-14, 429-storm audit): a 429 from our own
+            // redirector means the per-IP play bucket is full — the machine
+            // must pause, never hop or retry into the same refused bucket.
+            val rateLimited = isRateLimitedError(error)
             if (gateRefusal) {
                 // Salaar (2026-11-12): the gate refused the rung now opening, and
                 // every copy of that rung shares the refusal. Before the first
@@ -881,6 +885,7 @@ class PlaybackService : MediaSessionService() {
                 isGateRefusal = gateRefusal,
                 beforeFirstFrame = beforeFirstFrame,
                 isDeadHandle = deadHandle,
+                isRateLimited = rateLimited,
                 isLocalCopyAttempt = lastLoadedWasLocalCopy,
             )
             applyDecision(bundle, decision, preservePositionMs = lastKnownPositionMs)

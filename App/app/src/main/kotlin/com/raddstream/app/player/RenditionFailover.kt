@@ -57,6 +57,35 @@ internal fun isDeadHandleError(error: PlaybackException): Boolean {
     return false
 }
 
+/** The HTTP status our own redirector answers when the per-IP play bucket is full. */
+const val RATE_LIMITED_HTTP_STATUS: Int = 429
+
+/**
+ * Batch C (2026-11-14, 429-storm audit): did this player error come from OUR
+ * redirector answering 429 — the per-IP play bucket (30/min) is full — rather
+ * than from a copy that merely failed? The same two signals Media3 1.3.1
+ * carries for the gate refusal (see [isGateRefusalError]): the message of
+ * [HttpDataSource.InvalidResponseCodeException] is exactly
+ * "Response code: 429", and the cause chain holds the exception itself. A
+ * 429 is NOT a dead handle and NOT a gate refusal: the bucket is per IP,
+ * not per rung, so hopping to a runner-up or stepping down a rank only
+ * re-presses the same refused bucket. The only honest move is to stop
+ * pressing and hand the viewer the choice.
+ */
+internal fun isRateLimitedError(error: PlaybackException): Boolean {
+    if (error.errorCode == PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS &&
+        error.message?.contains("Response code: $RATE_LIMITED_HTTP_STATUS") == true
+    ) return true
+    var cause: Throwable? = error.cause
+    while (cause != null) {
+        if (cause is HttpDataSource.InvalidResponseCodeException &&
+            cause.responseCode == RATE_LIMITED_HTTP_STATUS
+        ) return true
+        cause = cause.cause
+    }
+    return false
+}
+
 /**
  * Pure failover policy for a [PlayBundle], implementing API_V2.md §5:
  * "Try rank 1; on error, retry once, then move to rank 2, then rank 3 — never beyond
@@ -105,6 +134,16 @@ enum class HandoffWhy {
      * quality or VIP, not another retry of the same rung.
      */
     GATE_REFUSED,
+    /**
+     * Batch C (2026-11-14, 429-storm audit): the server's per-IP play bucket
+     * (30/min) is full and answered 429. The bucket is per IP, not per rung,
+     * so every hop or rank step re-presses the same refused bucket — the
+     * machine stops at once and hands off. The give-up card must say the
+     * server asked the app to wait, not the generic "nothing playable",
+     * because the fix is a moment's wait and a user-gated retry, never an
+     * automatic re-press (Media3's exception carries no Retry-After to honour).
+     */
+    RATE_LIMITED,
 }
 
 sealed class FailoverDecision {
@@ -151,6 +190,11 @@ internal fun humanizeErrorSummary(raw: String): String {
             "Could not reach the server. Check your connection and try again."
         raw.contains("ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE") ->
             "The server sent something that is not a video."
+        // Batch C (2026-11-14, 429-storm audit): a 429 is the server asking
+        // the app to wait, not a dead link — say so, in the card's own words.
+        // It must sit above the generic BAD_HTTP_STATUS branch below it.
+        raw.contains("Response code: 429") ->
+            "The server asked us to slow down. Wait a moment, then retry."
         raw.contains("ERROR_CODE_IO_BAD_HTTP_STATUS") ->
             "The server refused this link."
         raw.contains("ERROR_CODE_IO_FILE_NOT_FOUND") ->
@@ -270,6 +314,17 @@ class FailoverStateMachine(
      * server's per-minute bucket 429'd the session. A dead handle hops to a
      * backup / the next rank at once, whenever it fails.
      *
+     * [isRateLimited] marks a 429 from our own redirector (Batch C,
+     * 2026-11-14, 429-storm audit): the per-IP play bucket (30/min) is full.
+     * The bucket is per IP, not per rung, so a retry, a hop to a runner-up
+     * and a step down a rank all re-press the same refused bucket — the
+     * Robo run showed 85×429 in 215 presses, the machine walking the whole
+     * ladder into 429s. So a 429 hands off at once as [HandoffWhy.RATE_LIMITED],
+     * before the first frame and after it, with the retry budget untouched:
+     * the viewer waits a moment and retries by hand from the give-up card.
+     * Never an automatic re-press — Media3's exception carries no
+     * Retry-After header to honour.
+     *
      * [isLocalCopyAttempt] is the Session 159 (S5) exception to that rule: the
      * attempt that just failed was NOT the rendition's own address but the
      * loopback copy of it (`PlaybackService.handleLoad` prefers a kept/partial
@@ -291,6 +346,7 @@ class FailoverStateMachine(
         isGateRefusal: Boolean = false,
         beforeFirstFrame: Boolean = false,
         isDeadHandle: Boolean = false,
+        isRateLimited: Boolean = false,
         isLocalCopyAttempt: Boolean = false,
     ): FailoverDecision {
         // Session 121 (P-6): the summary may be a raw ExoPlayer code; the machine is the
@@ -314,6 +370,21 @@ class FailoverStateMachine(
                 displaySummary, "gate refused this rung",
             )
             return advanceToNextRank(index, displaySummary, record, HandoffWhy.GATE_REFUSED)
+        }
+        if (isRateLimited) {
+            // Batch C (2026-11-14, 429-storm audit): the per-IP play bucket is
+            // full. Hopping to a runner-up or stepping down a rank would only
+            // re-press the same refused bucket — the Robo run showed 85×429 in
+            // 215 presses, the machine walking the whole ladder into 429s. So
+            // the machine hands off at once, before the first frame and after
+            // it, with the retry budget untouched: the viewer waits a moment
+            // and retries by hand from the give-up card.
+            val record = FailoverRecord(
+                current.rank, current.releaseId, current.displayLabel(),
+                displaySummary, "rate limited — paused",
+            )
+            _log.add(record)
+            return FailoverDecision.Handoff(HandoffWhy.RATE_LIMITED, displaySummary, record)
         }
         // Read-modify-write instead of `HashMap.merge`: `merge` is a Java 8 default method and
         // lint correctly refuses it against minSdk 21 (it ships in API 24). The count below is

@@ -29,6 +29,13 @@ class FailoverHumanMessageTest {
             humanizeErrorSummary("ERROR_CODE_IO_INVALID_HTTP_CONTENT_TYPE text/html"),
         )
         assertEquals(
+            // Batch C (2026-11-14, 429-storm audit): a 429 is the server
+            // asking the app to wait, not a dead link — and it must win
+            // over the generic BAD_HTTP_STATUS branch below it.
+            "The server asked us to slow down. Wait a moment, then retry.",
+            humanizeErrorSummary("ERROR_CODE_IO_BAD_HTTP_STATUS Response code: 429"),
+        )
+        assertEquals(
             "This copy is no longer on the server.",
             humanizeErrorSummary("ERROR_CODE_IO_FILE_NOT_FOUND 404"),
         )

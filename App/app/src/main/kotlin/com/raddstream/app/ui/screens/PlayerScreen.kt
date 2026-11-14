@@ -2869,6 +2869,9 @@ private fun GiveUpCard(
                     // Salaar: a rung the server refused is VIP-only — say so,
                     // plainly, in the title.
                     HandoffWhy.GATE_REFUSED -> stringResource(R.string.player_giveup_gate_refused)
+                    // Batch C (2026-11-14, 429-storm audit): the per-IP play
+                    // bucket is full — the server asked the app to wait.
+                    HandoffWhy.RATE_LIMITED -> stringResource(R.string.player_giveup_rate_limited)
                 },
                 color = Color.White,
             )
@@ -2889,6 +2892,8 @@ private fun GiveUpCard(
                             stringResource(R.string.player_giveup_expired_body)
                         HandoffWhy.GATE_REFUSED ->
                             stringResource(R.string.player_giveup_gate_refused_body)
+                        HandoffWhy.RATE_LIMITED ->
+                            stringResource(R.string.player_giveup_rate_limited_body)
                     },
                     color = Color.White.copy(alpha = 0.6f),
                     fontSize = brandSp(12),
